@@ -33,6 +33,133 @@ import {
 } from "lucide-react";
 import { GRADE_ID_MAP, getGradeNameById } from "../services/api";
 
+function getSubscriptionCode(...values) {
+  for (const value of values) {
+    if (typeof value === "string" && value) return value;
+    if (typeof value === "number") return String(value);
+    if (value && typeof value === "object") {
+      const nestedCode = value.subscription_code || value.code;
+      if (typeof nestedCode === "string" && nestedCode) return nestedCode;
+      if (typeof nestedCode === "number") return String(nestedCode);
+    }
+  }
+  return "";
+}
+
+function getArabicGradeName(grade, gradeId) {
+  const gradeName =
+    typeof grade === "string"
+      ? grade
+      : typeof grade?.name === "string"
+        ? grade.name
+        : "";
+  if (!gradeName || !/^[a-z\s\d-]+$/i.test(gradeName.trim())) {
+    return gradeName || getGradeNameById(gradeId || grade?.id || 1);
+  }
+
+  const normalized = gradeName.toLowerCase().replace(/[_-]+/g, " ").trim();
+  const gradeIds = {
+    "first secondary": 1,
+    "1st secondary": 1,
+    "secondary first": 1,
+    "second secondary": 2,
+    "2nd secondary": 2,
+    "secondary second": 2,
+    "third secondary": 3,
+    "3rd secondary": 3,
+    "secondary third": 3,
+    "first preparatory": 6,
+    "1st preparatory": 6,
+    "first prep": 6,
+    "second preparatory": 5,
+    "2nd preparatory": 5,
+    "second prep": 5,
+    "third preparatory": 4,
+    "3rd preparatory": 4,
+    "third prep": 4,
+  };
+
+  return getGradeNameById(gradeIds[normalized] || gradeId || 1);
+}
+
+function hasActiveTrustedDevice(...records) {
+  let hasDeviceState = false;
+  for (const record of records) {
+    if (!record || typeof record !== "object") continue;
+    const hasDeviceField = [
+      "trusted_device",
+      "active_trusted_device",
+      "trustedDevice",
+      "trusted_device_id",
+      "device_identifier",
+    ].some((key) => Object.prototype.hasOwnProperty.call(record, key));
+    if (!hasDeviceField) continue;
+    hasDeviceState = true;
+    const device =
+      record.trusted_device ||
+      record.active_trusted_device ||
+      record.trustedDevice ||
+      record.subscription?.trusted_device ||
+      record.active_subscription?.trusted_device;
+    if (typeof device === "string" && device.trim()) return true;
+    if (typeof device === "number" && device) return true;
+    if (device && typeof device === "object" &&
+      device.is_active !== false &&
+      device.status !== "inactive" &&
+      device.status !== "revoked" &&
+      Boolean(device.device_identifier || device.identifier || device.id)
+    ) return true;
+    if (record.trusted_device_id || record.device_identifier) return true;
+  }
+  // List endpoints often omit device details. In that case let the API
+  // decide and show its specific 422 response if there is no active device.
+  return !hasDeviceState;
+}
+
+function getSubscriptionRecord(record) {
+  if (!record || typeof record !== "object") return null;
+  return (
+    record.subscription ||
+    record.active_subscription ||
+    record.subscriptions?.[0] ||
+    (typeof record.subscription_code === "object"
+      ? record.subscription_code
+      : record)
+  );
+}
+
+function getSubscriptionStatus(...records) {
+  const statuses = records.flatMap((record) => {
+    if (!record || typeof record !== "object") return [];
+    const subscription = getSubscriptionRecord(record);
+    return [
+      subscription?.status,
+      record.subscription_status,
+      record.subscriptionStatus,
+      record.status,
+      subscription?.approval_status,
+      record.approval_status,
+    ]
+      .filter((status) => status != null && status !== "")
+      .map((status) => String(status).toLowerCase());
+  });
+
+  const inactiveStatus = statuses.find((status) =>
+    ["inactive", "cancelled", "canceled", "deactivated", "disabled"].includes(
+      status,
+    ),
+  );
+  if (inactiveStatus) return inactiveStatus;
+
+  return statuses[0] || "";
+}
+
+function isDeactivatedStatus(status) {
+  return ["inactive", "cancelled", "canceled", "deactivated", "disabled"].includes(
+    String(status || "").toLowerCase(),
+  );
+}
+
 export default function TeacherDashboardPage() {
   const {
     studentsList,
@@ -48,7 +175,6 @@ export default function TeacherDashboardPage() {
     cancelActivationRequest,
     deactivateStudentSubscription,
     resetTrustedDevice,
-    reactivateStudentSubscription,
     createStudentByAdmin,
     updateStudentByAdmin,
     addLesson,
@@ -80,6 +206,7 @@ export default function TeacherDashboardPage() {
     studentsPagination,
     isLoadingStudents,
     fetchAdminStudents,
+    getStudentDetails,
   } = useStudent();
 
   // Active Main Tab: 'requests' | 'approved' | 'students' | 'lessons' | 'quizzes' | 'codes' | 'memos'
@@ -88,6 +215,9 @@ export default function TeacherDashboardPage() {
   const [gradeFilter, setGradeFilter] = useState("الكل");
   const [copiedCode, setCopiedCode] = useState(null);
   const [isProcessingAction, setIsProcessingAction] = useState(false);
+  const [deactivationTarget, setDeactivationTarget] = useState(null);
+  const [deleteConfirmationStudent, setDeleteConfirmationStudent] =
+    useState(null);
 
   // --- Subscription Codes State (GET /api/v1/admin/subscription-codes) ---
   const [selectedCodesGrade, setSelectedCodesGrade] = useState(1);
@@ -96,7 +226,7 @@ export default function TeacherDashboardPage() {
   // --- Admin Exams State (OpenAPI 3.0.0 Admin Exams) ---
   const [isAddExamOpen, setIsAddExamOpen] = useState(false);
   const [newExamData, setNewExamData] = useState({
-    lesson_id: 1,
+    lesson_id: "",
     title: "",
     description: "",
     duration_minutes: 20,
@@ -113,6 +243,11 @@ export default function TeacherDashboardPage() {
     questionId: null,
     question_text: "",
     points: 1,
+    opt1: "",
+    opt2: "",
+    opt3: "",
+    opt4: "",
+    correctOption: 1,
   });
 
   const [optionModal, setOptionModal] = useState({
@@ -133,7 +268,7 @@ export default function TeacherDashboardPage() {
     grade: GRADES[0].name,
     gradeId: GRADES[0].id,
     duration: "45 دقيقة",
-    videoUrl: "https://youtu.be/qJ-Op0x0yCM?si=HrcEYlkOUWW4X5m9",
+    videoUrl: "",
     pdfFile: "مذكرة_الشرح.pdf",
     description: "",
   });
@@ -188,6 +323,37 @@ export default function TeacherDashboardPage() {
     ...getStudentDates(),
   }));
 
+  const handleOpenStudentDetails = async (std) => {
+    setViewingStudent({ ...std, isLoadingDetails: true });
+    try {
+      if (typeof getStudentDetails === "function") {
+        const res = await getStudentDetails(std.id);
+        if (res?.success && res.data) {
+          const detail = res.data?.student || res.data;
+          setViewingStudent((prev) => ({
+            ...prev,
+            ...detail,
+            subscription:
+              res.data?.subscription ||
+              detail.subscription ||
+              prev?.subscription,
+            trusted_device:
+              res.data?.trusted_device ||
+              detail.trusted_device ||
+              prev?.trusted_device,
+            isLoadingDetails: false,
+          }));
+        } else {
+          setViewingStudent((prev) => ({ ...prev, isLoadingDetails: false }));
+        }
+      } else {
+        setViewingStudent((prev) => ({ ...prev, isLoadingDetails: false }));
+      }
+    } catch {
+      setViewingStudent((prev) => ({ ...prev, isLoadingDetails: false }));
+    }
+  };
+
   // --- Handlers ---
   const handleCopyCode = (code) => {
     navigator.clipboard?.writeText(code);
@@ -215,42 +381,11 @@ export default function TeacherDashboardPage() {
     return result;
   };
 
-  const handleReactivate = async (subscriptionId) => {
-    setIsProcessingAction(true);
-    const result = await reactivateStudentSubscription(subscriptionId);
-    setIsProcessingAction(false);
-    return result;
-  };
-
   const handleResetDevice = async (subscriptionId) => {
     setIsProcessingAction(true);
     const result = await resetTrustedDevice(subscriptionId);
     setIsProcessingAction(false);
     return result;
-  };
-
-  const handleReactivateStudent = async (std) => {
-    const subscription = approvedSubscriptions.find(
-      (item) => String(item.student?.id || item.student_id) === String(std.id),
-    );
-    const subscriptionId =
-      std.subscription_id ||
-      std.subscription?.id ||
-      subscription?.subscription_id ||
-      subscription?.id;
-
-    if (!subscriptionId) {
-      showToast("تعذر العثور على معرّف اشتراك الطالب", "error");
-      return;
-    }
-
-    setIsProcessingAction(true);
-    const result = await reactivateStudentSubscription(subscriptionId);
-    setIsProcessingAction(false);
-    if (result?.success) {
-      await fetchAdminStudents(studentsPagination.current_page || 1);
-      await fetchApprovedStudents();
-    }
   };
 
   const handleDeactivateStudentRow = async (std) => {
@@ -260,7 +395,10 @@ export default function TeacherDashboardPage() {
     const subscriptionId =
       std.subscription_id ||
       std.subscription?.id ||
+      std.active_subscription?.id ||
+      std.subscription_code?.id ||
       subscription?.subscription_id ||
+      subscription?.subscription_code?.id ||
       subscription?.id;
 
     if (!subscriptionId) {
@@ -271,9 +409,38 @@ export default function TeacherDashboardPage() {
     setIsProcessingAction(true);
     const result = await deactivateStudentSubscription(subscriptionId);
     setIsProcessingAction(false);
-    if (result?.success) {
-      await fetchAdminStudents(studentsPagination.current_page || 1);
-      await fetchApprovedStudents();
+    return result;
+  };
+
+  const openStudentDeactivationConfirmation = (student) => {
+    const studentName =
+      `${student?.first_name || ""} ${student?.last_name || ""}`.trim() ||
+      student?.name ||
+      "الطالب";
+    const subscriptionCode = getSubscriptionCode(
+      student?.subscription_code,
+      student?.subscription,
+      student?.active_subscription,
+      student?.code,
+    );
+    setDeactivationTarget({
+      type: "student",
+      student,
+      studentName,
+      subscriptionCode,
+    });
+  };
+
+  const confirmDeactivation = async () => {
+    if (!deactivationTarget || isProcessingAction) return;
+    try {
+      if (deactivationTarget.type === "student") {
+        await handleDeactivateStudentRow(deactivationTarget.student);
+      } else {
+        await handleDeactivate(deactivationTarget.subscriptionId);
+      }
+    } finally {
+      setDeactivationTarget(null);
     }
   };
 
@@ -284,7 +451,10 @@ export default function TeacherDashboardPage() {
     const subscriptionId =
       std.subscription_id ||
       std.subscription?.id ||
+      std.active_subscription?.id ||
+      std.subscription_code?.id ||
       subscription?.subscription_id ||
+      subscription?.subscription_code?.id ||
       subscription?.id;
 
     if (!subscriptionId) {
@@ -293,12 +463,21 @@ export default function TeacherDashboardPage() {
     }
 
     setIsProcessingAction(true);
-    await resetTrustedDevice(subscriptionId);
-    setIsProcessingAction(false);
+    try {
+      await resetTrustedDevice(subscriptionId);
+    } finally {
+      setIsProcessingAction(false);
+    }
   };
 
   const handleDeleteStudentRecord = (std) => {
-    deleteStudentByTeacher(std.id);
+    setDeleteConfirmationStudent(std);
+  };
+
+  const confirmDeleteStudentRecord = () => {
+    if (!deleteConfirmationStudent) return;
+    deleteStudentByTeacher(deleteConfirmationStudent.id);
+    setDeleteConfirmationStudent(null);
   };
 
   const handleSaveLesson = async (e) => {
@@ -320,7 +499,7 @@ export default function TeacherDashboardPage() {
         grade: GRADES[0].name,
         gradeId: GRADES[0].id,
         duration: "45 دقيقة",
-        videoUrl: "https://youtu.be/qJ-Op0x0yCM?si=HrcEYlkOUWW4X5m9",
+        videoUrl: "",
         pdfFile: "مذكرة_الشرح.pdf",
         description: "",
       });
@@ -382,20 +561,76 @@ export default function TeacherDashboardPage() {
 
   const handleSaveExamQuestion = async (e) => {
     e.preventDefault();
-    setIsProcessingAction(true);
-    const result = questionModal.isEdit
-      ? await updateAdminQuestion(questionModal.questionId, {
-          question_text: questionModal.question_text,
-          points: Number(questionModal.points),
-        })
-      : await createAdminQuestion(questionModal.examId, {
-          question_text: questionModal.question_text,
-          points: Number(questionModal.points),
-        });
-    setIsProcessingAction(false);
+    if (!questionModal.question_text.trim()) return;
 
-    if (result?.success) {
-      setQuestionModal((prev) => ({ ...prev, isOpen: false }));
+    setIsProcessingAction(true);
+    try {
+      if (questionModal.isEdit) {
+        await updateAdminQuestion(questionModal.questionId, {
+          question_text: questionModal.question_text,
+          points: Number(questionModal.points) || 1,
+        });
+      } else {
+        const qRes = await createAdminQuestion(questionModal.examId, {
+          question_text: questionModal.question_text,
+          points: Number(questionModal.points) || 1,
+        });
+
+        const createdQ =
+          qRes?.data?.question || qRes?.data || qRes?.question || qRes;
+        const newQuestionId = createdQ?.id || createdQ?.data?.id;
+
+        // If options were provided in the form, create them immediately!
+        if (newQuestionId) {
+          const rawOptions = [
+            {
+              text: questionModal.opt1,
+              is_correct: questionModal.correctOption === 1,
+            },
+            {
+              text: questionModal.opt2,
+              is_correct: questionModal.correctOption === 2,
+            },
+            {
+              text: questionModal.opt3,
+              is_correct: questionModal.correctOption === 3,
+            },
+            {
+              text: questionModal.opt4,
+              is_correct: questionModal.correctOption === 4,
+            },
+          ];
+
+          for (const opt of rawOptions) {
+            if (opt.text && opt.text.trim()) {
+              await createAdminOption(newQuestionId, {
+                option_text: opt.text.trim(),
+                is_correct: Boolean(opt.is_correct),
+              });
+            }
+          }
+        }
+      }
+
+      setQuestionModal({
+        isOpen: false,
+        isEdit: false,
+        examId: null,
+        questionId: null,
+        question_text: "",
+        points: 1,
+        opt1: "",
+        opt2: "",
+        opt3: "",
+        opt4: "",
+        correctOption: 1,
+      });
+
+      await fetchAdminExams();
+    } catch (err) {
+      console.error("Error saving question:", err);
+    } finally {
+      setIsProcessingAction(false);
     }
   };
 
@@ -440,17 +675,19 @@ export default function TeacherDashboardPage() {
     if (!newStudentData.first_name.trim() || !newStudentData.last_name.trim())
       return;
     setIsProcessingAction(true);
-    await createStudentByAdmin(newStudentData);
+    const result = await createStudentByAdmin(newStudentData);
     setIsProcessingAction(false);
-    setIsAddStudentOpen(false);
-    setNewStudentData({
-      first_name: "",
-      last_name: "",
-      phone: "",
-      parent_phone: "",
-      grade_id: 1,
-      ...getStudentDates(),
-    });
+    if (result?.success) {
+      setIsAddStudentOpen(false);
+      setNewStudentData({
+        first_name: "",
+        last_name: "",
+        phone: "",
+        parent_phone: "",
+        grade_id: 1,
+        ...getStudentDates(),
+      });
+    }
   };
 
   const handleSaveStudentEdit = async (e) => {
@@ -476,15 +713,20 @@ export default function TeacherDashboardPage() {
     setEditingStudent(null);
   };
 
-  // Filtered lists for Students Roster
-  // Use paginatedStudents (from API) when available, fallback to local studentsList
-  const baseStudentsList =
-    paginatedStudents?.length > 0 ? paginatedStudents : studentsList;
+  // Filtered lists for Students Roster (Directly from live API)
+  const baseStudentsList = paginatedStudents || [];
   const filteredStudents = useMemo(() => {
     return baseStudentsList.filter((std) => {
+      const studentObj = std.student || std.user || std;
       const stdName =
-        std.name || `${std.first_name || ""} ${std.last_name || ""}`.trim();
-      const stdGrade = std.grade || getGradeNameById(std.grade_id);
+        `${std.first_name || studentObj.first_name || ""} ${std.last_name || studentObj.last_name || ""}`.trim() ||
+        std.name ||
+        studentObj.name ||
+        "";
+      const stdGrade = getArabicGradeName(
+        std.grade || studentObj.grade,
+        std.grade_id || studentObj.grade_id,
+      );
       const matchesGrade = gradeFilter === "الكل" || stdGrade === gradeFilter;
       const matchesSearch =
         !searchQuery ||
@@ -492,10 +734,13 @@ export default function TeacherDashboardPage() {
         std.phone?.includes(searchQuery) ||
         std.parent_phone?.includes(searchQuery) ||
         std.parentPhone?.includes(searchQuery) ||
-        std.subscription_code
-          ?.toLowerCase()
+        studentObj.phone?.includes(searchQuery) ||
+        getSubscriptionCode(std.subscription_code)
+          .toLowerCase()
           .includes(searchQuery.toLowerCase()) ||
-        std.code?.toLowerCase().includes(searchQuery.toLowerCase());
+        getSubscriptionCode(std.code)
+          .toLowerCase()
+          .includes(searchQuery.toLowerCase());
       return matchesGrade && matchesSearch;
     });
   }, [baseStudentsList, gradeFilter, searchQuery]);
@@ -503,15 +748,26 @@ export default function TeacherDashboardPage() {
   // Filtered Approved Subscriptions
   const filteredApproved = useMemo(() => {
     return approvedSubscriptions.filter((sub) => {
+      const studentObj = sub.student || sub.user || sub;
       const studentName =
-        `${sub.student?.first_name || ""} ${sub.student?.last_name || ""}`.trim();
+        `${sub.first_name || studentObj.first_name || ""} ${sub.last_name || studentObj.last_name || ""}`.trim() ||
+        sub.name ||
+        studentObj.name ||
+        "";
+      const subCode = getSubscriptionCode(
+        sub.subscription_code,
+        studentObj.subscription_code,
+        sub.code,
+        studentObj.code,
+        sub.subscription,
+      );
+      const phone = sub.phone || studentObj.phone || "";
+
       const matchesSearch =
         !searchQuery ||
         studentName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        sub.subscription_code
-          ?.toLowerCase()
-          .includes(searchQuery.toLowerCase()) ||
-        sub.student?.phone?.includes(searchQuery);
+        subCode.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        phone.includes(searchQuery);
       return matchesSearch;
     });
   }, [approvedSubscriptions, searchQuery]);
@@ -522,13 +778,295 @@ export default function TeacherDashboardPage() {
   const totalQuizzes = lessonsList.filter(
     (lesson) => lesson.quiz?.questions?.length > 0,
   ).length;
-  const averageScore = viewingStudent?.averageScore ?? "—";
+  const averageScore =
+    typeof viewingStudent?.averageScore === "string" ||
+    typeof viewingStudent?.averageScore === "number"
+      ? viewingStudent.averageScore
+      : "—";
+  const viewingStudentName =
+    (typeof viewingStudent?.name === "string" && viewingStudent.name) ||
+    `${viewingStudent?.first_name || ""} ${viewingStudent?.last_name || ""}`.trim() ||
+    "\u0627\u0644\u0637\u0627\u0644\u0628";
 
   return (
     <div
       className="container"
       style={{ paddingTop: "1.5rem", paddingBottom: "3rem" }}
     >
+      {deactivationTarget && (
+        <>
+        <style>{`
+          @keyframes deactivateBackdropIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+          }
+          @keyframes deactivateDialogIn {
+            from { opacity: 0; transform: translateY(10px) scale(0.98); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+          }
+          .deactivation-backdrop { animation: deactivateBackdropIn 180ms ease-out both; }
+          .deactivation-dialog { animation: deactivateDialogIn 220ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+          .deactivation-dialog button { transition: transform 160ms ease, filter 160ms ease, border-color 160ms ease, box-shadow 160ms ease; }
+          .deactivation-dialog button:not(:disabled):hover { transform: translateY(-2px); filter: brightness(1.12); box-shadow: 0 6px 18px rgba(0,0,0,0.2); }
+          .deactivation-dialog button:not(:disabled):active { transform: translateY(0) scale(0.98); }
+          @media (prefers-reduced-motion: reduce) {
+            .deactivation-backdrop, .deactivation-dialog { animation: none; }
+            .deactivation-dialog button { transition: none; }
+          }
+        `}</style>
+        <div
+          className="deactivation-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (
+              event.target === event.currentTarget &&
+              !isProcessingAction
+            ) {
+              setDeactivationTarget(null);
+            }
+          }}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 3000,
+            display: "grid",
+            placeItems: "center",
+            padding: "1rem",
+            background: "rgba(3, 7, 18, 0.78)",
+            backdropFilter: "blur(6px)",
+          }}
+        >
+          <section
+            className="deactivation-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="deactivation-dialog-title"
+            style={{
+              width: "min(100%, 440px)",
+              padding: "1.5rem",
+              borderRadius: "18px",
+              border: "1px solid rgba(244, 63, 94, 0.3)",
+              background: "linear-gradient(145deg, #111827, #080d18)",
+              boxShadow: "0 24px 80px rgba(0,0,0,0.5)",
+              direction: "rtl",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: "14px",
+                marginBottom: "1.25rem",
+              }}
+            >
+              <span
+                aria-hidden="true"
+                style={{
+                  width: 44,
+                  height: 44,
+                  flexShrink: 0,
+                  display: "grid",
+                  placeItems: "center",
+                  borderRadius: "14px",
+                  color: "#fb7185",
+                  background: "rgba(244, 63, 94, 0.12)",
+                }}
+              >
+                <AlertTriangle size={22} />
+              </span>
+              <div style={{ flex: 1 }}>
+                <h2
+                  id="deactivation-dialog-title"
+                  style={{ margin: "2px 0 8px", color: "#fff", fontSize: "1.15rem" }}
+                >
+                  تأكيد تعطيل الاشتراك
+                </h2>
+                <p
+                  style={{
+                    margin: 0,
+                    color: "var(--text-muted)",
+                    lineHeight: 1.8,
+                    fontSize: "0.9rem",
+                  }}
+                >
+                  هل تريد تعطيل اشتراك {deactivationTarget.studentName}؟ سيؤدي
+                  ذلك إلى منع استخدام الاشتراك.
+                </p>
+              </div>
+              <button
+                type="button"
+                aria-label="إغلاق"
+                disabled={isProcessingAction}
+                onClick={() => setDeactivationTarget(null)}
+                className="btn-secondary"
+                style={{ padding: "6px", minWidth: 32 }}
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {deactivationTarget.subscriptionCode && (
+              <div
+                style={{
+                  marginBottom: "1.25rem",
+                  padding: "10px 12px",
+                  borderRadius: "10px",
+                  border: "1px solid rgba(255,255,255,0.08)",
+                  background: "rgba(255,255,255,0.03)",
+                  color: "var(--text-muted)",
+                  fontSize: "0.82rem",
+                }}
+              >
+                كود الاشتراك: <strong style={{ color: "#fff" }}>{deactivationTarget.subscriptionCode}</strong>
+              </div>
+            )}
+
+            <div style={{ display: "flex", gap: "10px" }}>
+              <button
+                type="button"
+                disabled={isProcessingAction}
+                onClick={() => setDeactivationTarget(null)}
+                className="btn-secondary"
+                style={{ flex: 1, justifyContent: "center", padding: "10px" }}
+              >
+                إلغاء
+              </button>
+              <button
+                type="button"
+                disabled={isProcessingAction}
+                onClick={confirmDeactivation}
+                className="btn-secondary"
+                style={{
+                  flex: 1,
+                  justifyContent: "center",
+                  padding: "10px",
+                  color: "#fff",
+                  background: "linear-gradient(135deg, #e11d48, #be123c)",
+                  borderColor: "rgba(251, 113, 133, 0.45)",
+                  opacity: isProcessingAction ? 0.7 : 1,
+                }}
+              >
+                {isProcessingAction ? "جارٍ التعطيل..." : "تأكيد التعطيل"}
+              </button>
+            </div>
+          </section>
+        </div>
+        </>
+      )}
+      {deleteConfirmationStudent && (
+        <>
+          <style>{`
+            @keyframes deactivateBackdropIn { from { opacity: 0; } to { opacity: 1; } }
+            @keyframes deactivateDialogIn { from { opacity: 0; transform: translateY(10px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+            .student-delete-dialog { animation: deactivateDialogIn 220ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+            .student-delete-dialog button { transition: transform 160ms ease, filter 160ms ease, box-shadow 160ms ease; }
+            .student-delete-dialog button:not(:disabled):hover { transform: translateY(-2px); filter: brightness(1.12); box-shadow: 0 6px 18px rgba(0,0,0,0.2); }
+            .student-delete-dialog button:not(:disabled):active { transform: translateY(0) scale(0.98); }
+            @media (prefers-reduced-motion: reduce) { .student-delete-dialog, .student-delete-dialog button { animation: none; transition: none; } }
+          `}</style>
+          <div
+            role="presentation"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) {
+                setDeleteConfirmationStudent(null);
+              }
+            }}
+            style={{
+              position: "fixed",
+              inset: 0,
+              zIndex: 3001,
+              display: "grid",
+              placeItems: "center",
+              padding: "1rem",
+              background: "rgba(3, 7, 18, 0.78)",
+              backdropFilter: "blur(6px)",
+              animation: "deactivateBackdropIn 180ms ease-out both",
+            }}
+          >
+            <section
+              className="student-delete-dialog"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="student-delete-dialog-title"
+              style={{
+                width: "min(100%, 440px)",
+                padding: "1.5rem",
+                borderRadius: "18px",
+                border: "1px solid rgba(244, 63, 94, 0.3)",
+                background: "linear-gradient(145deg, #111827, #080d18)",
+                boxShadow: "0 24px 80px rgba(0,0,0,0.5)",
+                direction: "rtl",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <span
+                  aria-hidden="true"
+                  style={{
+                    width: 44,
+                    height: 44,
+                    flexShrink: 0,
+                    display: "grid",
+                    placeItems: "center",
+                    borderRadius: 14,
+                    color: "#fb7185",
+                    background: "rgba(244, 63, 94, 0.12)",
+                  }}
+                >
+                  <Trash2 size={21} />
+                </span>
+                <div>
+                  <h2
+                    id="student-delete-dialog-title"
+                    style={{ margin: "0 0 6px", color: "#fff", fontSize: "1.1rem" }}
+                  >
+                    تأكيد إزالة الطالب
+                  </h2>
+                  <strong style={{ color: "#e2e8f0", fontSize: "0.9rem" }}>
+                    {`${deleteConfirmationStudent.first_name || ""} ${deleteConfirmationStudent.last_name || ""}`.trim() || deleteConfirmationStudent.name || "الطالب"}
+                  </strong>
+                </div>
+              </div>
+              <p
+                style={{
+                  margin: "1rem 0 1.25rem",
+                  color: "var(--text-muted)",
+                  lineHeight: 1.8,
+                  fontSize: "0.88rem",
+                }}
+              >
+                سيتم إزالة الطالب من قائمة السجل المحلي فقط. لن يُحذف من قاعدة
+                البيانات لأن endpoint الحذف غير متاح حاليًا.
+              </p>
+              <div style={{ display: "flex", gap: 10 }}>
+                <button
+                  type="button"
+                  onClick={() => setDeleteConfirmationStudent(null)}
+                  className="btn-secondary"
+                  style={{ flex: 1, justifyContent: "center", padding: 10 }}
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmDeleteStudentRecord}
+                  className="btn-secondary"
+                  style={{
+                    flex: 1,
+                    justifyContent: "center",
+                    padding: 10,
+                    color: "#fff",
+                    background: "linear-gradient(135deg, #e11d48, #be123c)",
+                    borderColor: "rgba(251, 113, 133, 0.45)",
+                  }}
+                >
+                  إزالة من السجل
+                </button>
+              </div>
+            </section>
+          </div>
+        </>
+      )}
+
       {/* Top Header */}
       <div className="section-header" style={{ marginBottom: "1.5rem" }}>
         <div>
@@ -583,31 +1121,31 @@ export default function TeacherDashboardPage() {
               style={{ fontSize: "0.85rem" }}
             >
               <Plus size={16} />
-              <span>إضافة محاضرة جديدة</span>
+              <span>{"\u0625\u0636\u0627\u0641\u0629 \u0645\u062d\u0627\u0636\u0631\u0629 \u062c\u062f\u064a\u062f\u0629"}</span>
             </button>
           )}
           {activeTab === "quizzes" && (
             <button
               onClick={() => {
-                const exam = adminExamsList[0];
-                if (!exam) {
-                  showToast("أنشئي اختبارًا أولًا قبل إضافة الأسئلة", "error");
+                if (lessonsList.length === 0) {
+                  showToast("يُرجى إضافة محاضرة أولًا لربط الامتحان بها.", "error");
                   return;
                 }
-                setQuestionModal({
-                  isOpen: true,
-                  isEdit: false,
-                  examId: exam.id,
-                  questionId: null,
-                  question_text: "",
-                  points: 1,
+                setEditingExam(null);
+                setNewExamData({
+                  lesson_id: lessonsList[0].id,
+                  title: "",
+                  description: "",
+                  duration_minutes: 20,
+                  passing_percentage: 60,
                 });
+                setIsAddExamOpen(true);
               }}
               className="btn-primary"
               style={{ fontSize: "0.85rem" }}
             >
               <Plus size={16} />
-              <span>إضافة سؤال للاختبار الأول</span>
+              <span>إنشاء امتحان وربطه بمحاضرة</span>
             </button>
           )}
           {activeTab === "memos" && (
@@ -638,8 +1176,9 @@ export default function TeacherDashboardPage() {
         style={{
           display: "flex",
           gap: "0.6rem",
-          overflowX: "auto",
-          paddingBottom: "0.5rem",
+          flexWrap: "wrap",
+          overflowX: "visible",
+          paddingBottom: 0,
           marginBottom: "1.5rem",
         }}
       >
@@ -709,7 +1248,7 @@ export default function TeacherDashboardPage() {
         >
           <Users size={16} />
           <span>
-            سجل الطلاب ({studentsPagination?.total || studentsList.length})
+            سجل الطلاب ({studentsPagination?.total || baseStudentsList.length})
           </span>
         </button>
 
@@ -812,19 +1351,7 @@ export default function TeacherDashboardPage() {
                   alignItems: "center",
                   gap: "8px",
                 }}
-              >
-                <span>طلبات الطلاب الجديدة بانتظار الموافقة والتفعيل</span>
-                <span
-                  className="badge-tag"
-                  style={{
-                    background: "rgba(245, 158, 11, 0.15)",
-                    color: "#f59e0b",
-                    borderColor: "rgba(245, 158, 11, 0.3)",
-                  }}
-                >
-                  {pendingRequests.length} طلب معلق
-                </span>
-              </h3>
+              >{"\u0637\u0644\u0628\u0627\u062a \u0627\u0644\u0637\u0644\u0627\u0628 \u0627\u0644\u062c\u062f\u064a\u062f\u0629 \u0628\u0627\u0646\u062a\u0638\u0627\u0631 \u0627\u0644\u0645\u0648\u0627\u0641\u0642\u0629 \u0648\u0627\u0644\u062a\u0641\u0639\u064a\u0644"}</h3>
               <p
                 style={{
                   fontSize: "0.8rem",
@@ -904,6 +1431,7 @@ export default function TeacherDashboardPage() {
                   fontSize: "0.85rem",
                 }}
               >
+
                 <thead>
                   <tr
                     style={{
@@ -924,12 +1452,40 @@ export default function TeacherDashboardPage() {
                 </thead>
                 <tbody>
                   {pendingRequests.map((req) => {
+                    const studentObj = req.student || req.user || req;
+                    const firstName =
+                      req.first_name || studentObj.first_name || "";
+                    const lastName =
+                      req.last_name || studentObj.last_name || "";
                     const studentFullName =
-                      `${req.first_name || ""} ${req.last_name || ""}`.trim() ||
+                      `${firstName} ${lastName}`.trim() ||
                       req.name ||
+                      studentObj.name ||
                       "طالب جديد";
+
+                    const gradeId =
+                      req.grade_id ||
+                      studentObj.grade_id ||
+                      req.grade?.id ||
+                      studentObj.grade?.id ||
+                      1;
+
                     const gradeTitle =
-                      req.grade_name || getGradeNameById(req.grade_id);
+                      req.grade?.name ||
+                      studentObj.grade?.name ||
+                      req.grade_name ||
+                      studentObj.grade_name ||
+                      getGradeNameById(gradeId);
+
+                    const studentPhone =
+                      req.phone || studentObj.phone || "—";
+                    const parentPhone =
+                      req.parent_phone ||
+                      req.parentPhone ||
+                      studentObj.parent_phone ||
+                      studentObj.parentPhone ||
+                      "—";
+
                     return (
                       <tr
                         key={req.id}
@@ -984,10 +1540,12 @@ export default function TeacherDashboardPage() {
                             padding: "14px 16px",
                             direction: "ltr",
                             textAlign: "right",
-                            color: "var(--text-muted)",
+                            color: "var(--text-main)",
+                            fontFamily: "monospace",
+                            fontSize: "0.85rem",
                           }}
                         >
-                          {req.phone}
+                          {studentPhone}
                         </td>
                         <td
                           style={{
@@ -995,9 +1553,11 @@ export default function TeacherDashboardPage() {
                             direction: "ltr",
                             textAlign: "right",
                             color: "var(--text-muted)",
+                            fontFamily: "monospace",
+                            fontSize: "0.85rem",
                           }}
                         >
-                          {req.parent_phone || req.parentPhone}
+                          {parentPhone}
                         </td>
                         <td
                           style={{
@@ -1173,11 +1733,22 @@ export default function TeacherDashboardPage() {
               <table
                 style={{
                   width: "100%",
+                  minWidth: "1000px",
+                  tableLayout: "fixed",
                   borderCollapse: "collapse",
                   textAlign: "right",
                   fontSize: "0.85rem",
                 }}
               >
+                <colgroup>
+                  <col style={{ width: "13%" }} />
+                  <col style={{ width: "12%" }} />
+                  <col style={{ width: "17%" }} />
+                  <col style={{ width: "14%" }} />
+                  <col style={{ width: "15%" }} />
+                  <col style={{ width: "11%" }} />
+                  <col style={{ width: "18%" }} />
+                </colgroup>
                 <thead>
                   <tr
                     style={{
@@ -1186,45 +1757,104 @@ export default function TeacherDashboardPage() {
                       color: "var(--text-muted)",
                     }}
                   >
-                    <th style={{ padding: "14px 16px" }}>اسم الطالب</th>
-                    <th style={{ padding: "14px 16px" }}>الصف</th>
-                    <th style={{ padding: "14px 16px" }}>
-                      كود الاشتراك (Subscription Code)
-                    </th>
-                    <th style={{ padding: "14px 16px" }}>حالة الاشتراك</th>
-                    <th style={{ padding: "14px 16px" }}>تاريخ الانتهاء</th>
-                    <th style={{ padding: "14px 16px" }}>الهاتف</th>
-                    <th style={{ padding: "14px 16px", textAlign: "center" }}>
-                      الإجراءات
-                    </th>
+                    <th style={{ padding: "14px 12px", whiteSpace: "nowrap" }}>{"\u0627\u0633\u0645 \u0627\u0644\u0637\u0627\u0644\u0628"}</th>
+                    <th style={{ padding: "14px 12px", whiteSpace: "nowrap" }}>{"\u0627\u0644\u0635\u0641"}</th>
+                    <th style={{ padding: "14px 12px", whiteSpace: "nowrap" }}>{"\u0643\u0648\u062f \u0627\u0644\u0627\u0634\u062a\u0631\u0627\u0643"}</th>
+                    <th style={{ padding: "14px 12px", whiteSpace: "nowrap" }}>{"\u062d\u0627\u0644\u0629 \u0627\u0644\u0627\u0634\u062a\u0631\u0627\u0643"}</th>
+                    <th style={{ padding: "14px 12px", whiteSpace: "nowrap" }}>{"\u062a\u0627\u0631\u064a\u062e \u0627\u0644\u0627\u0646\u062a\u0647\u0627\u0621"}</th>
+                    <th style={{ padding: "14px 12px", whiteSpace: "nowrap" }}>{"\u0627\u0644\u0647\u0627\u062a\u0641"}</th>
+                    <th style={{ padding: "14px 10px", textAlign: "center", whiteSpace: "nowrap" }}>{"\u0627\u0644\u0625\u062c\u0631\u0627\u0621\u0627\u062a"}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredApproved.map((item) => {
+                    const studentObj = item.student || item.user || item;
+                    const subObj =
+                      item.subscription ||
+                      item.active_subscription ||
+                      item.subscriptions?.[0] ||
+                      item;
+
+                    const firstName =
+                      item.first_name || studentObj.first_name || "";
+                    const lastName =
+                      item.last_name || studentObj.last_name || "";
                     const studentName =
-                      `${item.student?.first_name || ""} ${item.student?.last_name || ""}`.trim() ||
+                      `${firstName} ${lastName}`.trim() ||
                       item.name ||
-                      "طالب";
-                    const gradeName = getGradeNameById(
-                      item.student?.grade_id || item.grade_id,
+                      studentObj.name ||
+                      "طالب معتمد";
+
+                    const gradeId =
+                      item.grade_id ||
+                      studentObj.grade_id ||
+                      item.grade?.id ||
+                      studentObj.grade?.id ||
+                      1;
+                    const gradeName = getArabicGradeName(
+                      item.grade || studentObj.grade,
+                      gradeId,
                     );
-                    const isActive = item.status === "active";
+
+                    const subscriptionCode =
+                      getSubscriptionCode(
+                        subObj.subscription_code,
+                        item.subscription_code,
+                        studentObj.subscription_code,
+                        subObj,
+                        item.code,
+                        studentObj.code,
+                      ) ||
+                      "—";
+
+                    // Any student returned by approved-students is approved/active unless explicitly inactive
+                    const statusVal =
+                      getSubscriptionStatus(subObj, item, studentObj) ||
+                      "active";
+                    const isDeactivated =
+                      isDeactivatedStatus(statusVal) ||
+                      subObj.is_active === false ||
+                      item.is_active === false;
+                    const isActive = !isDeactivated;
+
+                    const expiryDate =
+                      subObj.code_expires_at ||
+                      subObj.end_date ||
+                      subObj.expires_at ||
+                      item.code_expires_at ||
+                      item.end_date ||
+                      "مستمر حتى نهاية العام";
+
+                    const phone =
+                      studentObj.phone || item.phone || "—";
+
                     return (
                       <tr
                         key={item.id}
                         style={{
                           borderBottom: "1px solid rgba(255,255,255,0.05)",
+                          verticalAlign: "middle",
                         }}
                       >
-                        <td style={{ padding: "14px 16px" }}>
-                          <div style={{ fontWeight: 800, color: "#fff" }}>
+                        <td style={{ padding: "16px 12px" }}>
+                          <div
+                            title={studentName}
+                            style={{
+                              fontWeight: 800,
+                              color: "#fff",
+                              lineHeight: 1.5,
+                              whiteSpace: "nowrap",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                            }}
+                          >
                             {studentName}
                           </div>
                         </td>
-                        <td style={{ padding: "14px 16px" }}>
-                          <span className="badge-tag">{gradeName}</span>
+                        <td style={{ padding: "16px 12px", textAlign: "center" }}>
+                          <span className="badge-tag" style={{ whiteSpace: "nowrap" }}>{gradeName}</span>
                         </td>
-                        <td style={{ padding: "14px 16px" }}>
+                        <td style={{ padding: "16px 12px", textAlign: "center" }}>
                           <div
                             style={{
                               display: "inline-flex",
@@ -1234,6 +1864,7 @@ export default function TeacherDashboardPage() {
                               border: "1px solid rgba(6, 182, 212, 0.3)",
                               padding: "4px 10px",
                               borderRadius: "8px",
+                              whiteSpace: "nowrap",
                             }}
                           >
                             <span
@@ -1245,34 +1876,36 @@ export default function TeacherDashboardPage() {
                                 letterSpacing: "1px",
                               }}
                             >
-                              {item.subscription_code}
+                              {subscriptionCode}
                             </span>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                handleCopyCode(item.subscription_code)
-                              }
-                              style={{
-                                background: "none",
-                                border: "none",
-                                color:
-                                  copiedCode === item.subscription_code
-                                    ? "var(--emerald)"
-                                    : "var(--text-muted)",
-                                cursor: "pointer",
-                                padding: "2px",
-                              }}
-                              title="نسخ الكود"
-                            >
-                              {copiedCode === item.subscription_code ? (
-                                <Check size={14} />
-                              ) : (
-                                <Copy size={14} />
-                              )}
-                            </button>
+                            {subscriptionCode !== "—" && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleCopyCode(subscriptionCode)
+                                }
+                                style={{
+                                  background: "none",
+                                  border: "none",
+                                  color:
+                                    copiedCode === subscriptionCode
+                                      ? "var(--emerald)"
+                                      : "var(--text-muted)",
+                                  cursor: "pointer",
+                                  padding: "2px",
+                                }}
+                                title="نسخ الكود"
+                              >
+                                {copiedCode === subscriptionCode ? (
+                                  <Check size={14} />
+                                ) : (
+                                  <Copy size={14} />
+                                )}
+                              </button>
+                            )}
                           </div>
                         </td>
-                        <td style={{ padding: "14px 16px" }}>
+                        <td style={{ padding: "16px 12px", textAlign: "center" }}>
                           <span
                             style={{
                               fontSize: "0.72rem",
@@ -1284,6 +1917,7 @@ export default function TeacherDashboardPage() {
                                 : "rgba(244, 63, 94, 0.15)",
                               color: isActive ? "var(--emerald)" : "#fda4af",
                               border: `1px solid ${isActive ? "rgba(16, 185, 129, 0.3)" : "rgba(244, 63, 94, 0.3)"}`,
+                              whiteSpace: "nowrap",
                             }}
                           >
                             {isActive ? "نشط ومعتمد" : "معطل / ملغي"}
@@ -1291,44 +1925,61 @@ export default function TeacherDashboardPage() {
                         </td>
                         <td
                           style={{
-                            padding: "14px 16px",
+                            padding: "16px 12px",
                             color: "var(--text-muted)",
                             fontSize: "0.8rem",
+                            textAlign: "center",
+                            whiteSpace: "nowrap",
                           }}
                         >
-                          {item.code_expires_at ||
-                            item.end_date ||
-                            "2027-09-18"}
+                          {expiryDate}
                         </td>
                         <td
                           style={{
-                            padding: "14px 16px",
+                            padding: "16px 12px",
                             direction: "ltr",
                             textAlign: "right",
                             color: "var(--text-muted)",
+                            fontFamily: "monospace",
+                            fontSize: "0.85rem",
+                            whiteSpace: "nowrap",
                           }}
                         >
-                          {item.student?.phone || "غير مسجل"}
+                          {phone}
                         </td>
                         <td
-                          style={{ padding: "14px 16px", textAlign: "center" }}
+                          style={{ padding: "14px 10px", textAlign: "center" }}
                         >
                           <div
                             style={{
                               display: "inline-flex",
                               alignItems: "center",
-                              gap: "6px",
+                              gap: "8px",
                               justifyContent: "center",
-                              flexWrap: "wrap",
+                              flexWrap: "nowrap",
+                              whiteSpace: "nowrap",
                             }}
                           >
                             {isActive ? (
                               <>
                                 <button
                                   onClick={() =>
-                                    handleDeactivate(
-                                      item.subscription_id || item.id,
-                                    )
+                                    setDeactivationTarget({
+                                      type: "subscription",
+                                      subscriptionId:
+                                        item.subscription_id ||
+                                        subObj.subscription_id ||
+                                        (subObj !== item ? subObj.id : null) ||
+                                        item.subscription_code?.id ||
+                                        item.active_subscription?.id ||
+                                        item.subscriptions?.[0]?.id ||
+                                        item.id,
+                                      studentName,
+                                      subscriptionCode:
+                                        subscriptionCode === "—"
+                                          ? ""
+                                          : subscriptionCode,
+                                    })
                                   }
                                   disabled={isProcessingAction}
                                   className="btn-secondary"
@@ -1342,12 +1993,19 @@ export default function TeacherDashboardPage() {
                                   <PowerOff size={13} />
                                   <span>تعطيل</span>
                                 </button>
-                                <button
-                                  onClick={() =>
-                                    handleResetDevice(
-                                      item.subscription_id || item.id,
-                                    )
-                                  }
+                                {hasActiveTrustedDevice(item, studentObj, subObj) && (
+                                  <button
+                                    onClick={() =>
+                                      handleResetDevice(
+                                        item.subscription_id ||
+                                          subObj.subscription_id ||
+                                          (subObj !== item ? subObj.id : null) ||
+                                          item.subscription_code?.id ||
+                                          item.active_subscription?.id ||
+                                          item.subscriptions?.[0]?.id ||
+                                          item.id,
+                                      )
+                                    }
                                   disabled={isProcessingAction}
                                   className="btn-secondary"
                                   style={{
@@ -1360,29 +2018,11 @@ export default function TeacherDashboardPage() {
                                 >
                                   <RotateCcw size={13} />
                                   <span>ضبط الجهاز</span>
-                                </button>
+                                  </button>
+                                )}
                               </>
                             ) : (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  handleReactivate(
-                                    item.subscription_id || item.id,
-                                  )
-                                }
-                                disabled={isProcessingAction}
-                                className="btn-secondary"
-                                style={{
-                                  padding: "5px 10px",
-                                  fontSize: "0.75rem",
-                                  color: "var(--emerald)",
-                                  borderColor: "rgba(16, 185, 129, 0.3)",
-                                }}
-                                title="إعادة تفعيل اشتراك الطالب وتمكينه من الدخول"
-                              >
-                                <CheckCircle2 size={13} />
-                                <span>إعادة تفعيل</span>
-                              </button>
+                              <span className="badge-tag">غير نشط</span>
                             )}
                           </div>
                         </td>
@@ -1556,15 +2196,40 @@ export default function TeacherDashboardPage() {
                   ) : (
                     filteredStudents.map((std, index) => {
                       const studentSubscription = approvedSubscriptions.find(
-                        (item) =>
-                          String(item.student?.id || item.student_id) ===
-                          String(std.id),
+                        (item) => {
+                          const itemStudentId =
+                            item.student?.id ||
+                            item.user?.id ||
+                            item.student_id ||
+                            item.user_id;
+                          return (
+                            (itemStudentId != null &&
+                              String(itemStudentId) ===
+                                String(std.student_id || std.id)) ||
+                            String(
+                              item.subscription_id ||
+                                item.subscription?.id ||
+                                item.active_subscription?.id ||
+                                item.subscriptions?.[0]?.id ||
+                                          item.subscription_code?.id ||
+                                "",
+                            ) ===
+                              String(
+                                std.subscription_id ||
+                                  std.subscription?.id ||
+                                  std.active_subscription?.id ||
+                                            std.subscription_code?.id ||
+                                  "__no_subscription_id__",
+                              )
+                          );
+                        },
                       );
-                      const subscriptionStatus =
-                        studentSubscription?.status || std.status;
+                      const subscriptionStatus = getSubscriptionStatus(
+                        studentSubscription,
+                        std,
+                      );
                       const isStudentActive = subscriptionStatus
-                        ? subscriptionStatus !== "inactive" &&
-                          subscriptionStatus !== "cancelled"
+                        ? !isDeactivatedStatus(subscriptionStatus)
                         : std.isActive !== false;
                       return (
                         <tr
@@ -1620,7 +2285,13 @@ export default function TeacherDashboardPage() {
                                   flexShrink: 0,
                                 }}
                               >
-                                {std.name?.trim().charAt(0) || "ط"}
+                                {(
+                                  std.first_name ||
+                                  std.name ||
+                                  "ط"
+                                )
+                                  .trim()
+                                  .charAt(0)}
                               </div>
                               <div>
                                 <div
@@ -1630,7 +2301,9 @@ export default function TeacherDashboardPage() {
                                     fontSize: "0.88rem",
                                   }}
                                 >
-                                  {std.name}
+                                  {`${std.first_name || ""} ${std.last_name || ""}`.trim() ||
+                                    std.name ||
+                                    "طالب"}
                                 </div>
                                 {std.governorate && (
                                   <div
@@ -1647,13 +2320,13 @@ export default function TeacherDashboardPage() {
                             </div>
                           </td>
 
-                          {/* Grade */}
+                          {/* Grade (Safely rendered as string) */}
                           <td style={{ padding: "14px 16px" }}>
                             <span
                               className="badge-tag"
                               style={{ whiteSpace: "nowrap" }}
                             >
-                              {std.grade}
+                              {getArabicGradeName(std.grade, std.grade_id)}
                             </span>
                           </td>
 
@@ -1725,13 +2398,31 @@ export default function TeacherDashboardPage() {
                                   letterSpacing: "0.5px",
                                 }}
                               >
-                                {std.code || "قيد الاعتماد"}
+                                {getSubscriptionCode(
+                                  std.subscription_code,
+                                  std.code,
+                                  std.subscriptions?.[0],
+                                  std.active_subscription,
+                                ) ||
+                                  "قيد الاعتماد"}
                               </span>
-                              {std.code && (
+                              {getSubscriptionCode(
+                                std.subscription_code,
+                                std.code,
+                                std.subscriptions?.[0],
+                                std.active_subscription,
+                              ) && (
                                 <button
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    handleCopyCode(std.code);
+                                    handleCopyCode(
+                                      getSubscriptionCode(
+                                        std.subscription_code,
+                                        std.code,
+                                        std.subscriptions?.[0],
+                                        std.active_subscription,
+                                      ),
+                                    );
                                   }}
                                   style={{
                                     background: "none",
@@ -1810,79 +2501,19 @@ export default function TeacherDashboardPage() {
                                 justifyContent: "center",
                               }}
                             >
-                              {/* Activation / Deactivation Button */}
-                              {isStudentActive ? (
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleDeactivateStudentRow(std);
-                                  }}
-                                  disabled={isProcessingAction}
-                                  className="btn-secondary"
-                                  style={{
-                                    padding: "5px 10px",
-                                    fontSize: "0.75rem",
-                                    color: "var(--rose)",
-                                    borderColor: "rgba(244, 63, 94, 0.3)",
-                                  }}
-                                  title="تعطيل حساب الطالب ومنعه من الدخول"
-                                >
-                                  <PowerOff size={13} />
-                                  <span>تعطيل</span>
-                                </button>
-                              ) : (
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleReactivateStudent(std);
-                                  }}
-                                  disabled={isProcessingAction}
-                                  className="btn-secondary"
-                                  style={{
-                                    padding: "5px 10px",
-                                    fontSize: "0.75rem",
-                                    color: "var(--emerald)",
-                                    borderColor: "rgba(16, 185, 129, 0.3)",
-                                  }}
-                                  title="إعادة تفعيل حساب الطالب"
-                                >
-                                  <CheckCircle2 size={13} />
-                                  <span>إعادة تفعيل</span>
-                                </button>
-                              )}
-
-                              {/* Reset Device Button */}
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleResetDeviceForStudent(std);
-                                }}
-                                disabled={isProcessingAction}
-                                className="btn-secondary"
-                                style={{
-                                  padding: "5px 9px",
-                                  fontSize: "0.75rem",
-                                  color: "var(--amber)",
-                                  borderColor: "rgba(245, 158, 11, 0.3)",
-                                }}
-                                title="إعادة ضبط الجهاز الموثوق للطالب"
-                              >
-                                <RotateCcw size={13} />
-                                <span>ضبط الجهاز</span>
-                              </button>
-
                               {/* View Details */}
                               <button
+                                type="button"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  setViewingStudent(std);
+                                  handleOpenStudentDetails(std);
                                 }}
                                 className="btn-secondary"
                                 style={{
                                   padding: "5px 10px",
                                   fontSize: "0.75rem",
                                 }}
-                                title="عرض التفاصيل"
+                                title="عرض التفاصيل الكاملة من السيرفر"
                               >
                                 <Eye
                                   size={13}
@@ -1995,20 +2626,11 @@ export default function TeacherDashboardPage() {
               marginBottom: "1.25rem",
             }}
           >
-            <h3 style={{ fontSize: "1.1rem", fontWeight: 800, color: "#fff" }}>
-              محاضرات وشروحات الفيديو المنشورة:
-            </h3>
-            <button
-              onClick={() => setIsAddLessonOpen(true)}
-              className="btn-primary"
-              style={{ fontSize: "0.85rem" }}
-            >
-              <Plus size={16} />
-              <span>إضافة / رفع فيديو جديد</span>
-            </button>
+            <h3 style={{ fontSize: "1.1rem", fontWeight: 800, color: "#fff" }}>{"\u0645\u0643\u062a\u0628\u0629 \u0627\u0644\u0645\u062d\u0627\u0636\u0631\u0627\u062a"}</h3>
+
           </div>
 
-          {isLoadingLessons && (
+{isLoadingLessons && (
             <div
               role="status"
               style={{ color: "var(--text-muted)", marginBottom: "1rem" }}
@@ -2020,8 +2642,10 @@ export default function TeacherDashboardPage() {
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
-              gap: "1.25rem",
+              gridTemplateColumns:
+                "repeat(auto-fit, minmax(min(100%, 340px), 1fr))",
+              gap: "1rem",
+              alignItems: "stretch",
             }}
           >
             {lessonsList.map((lesson) => (
@@ -2029,10 +2653,28 @@ export default function TeacherDashboardPage() {
                 key={lesson.id}
                 className="feature-card"
                 style={{
+                  width: "100%",
+                  maxWidth: "560px",
                   padding: "1.25rem",
+                  border: "1px solid rgba(148, 163, 184, 0.14)",
+                  transition:
+                    "transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease",
                   display: "flex",
                   flexDirection: "column",
                   justifyContent: "space-between",
+                }}
+                onMouseEnter={(event) => {
+                  event.currentTarget.style.transform = "translateY(-3px)";
+                  event.currentTarget.style.borderColor =
+                    "rgba(6, 182, 212, 0.4)";
+                  event.currentTarget.style.boxShadow =
+                    "0 14px 32px rgba(0, 0, 0, 0.22)";
+                }}
+                onMouseLeave={(event) => {
+                  event.currentTarget.style.transform = "translateY(0)";
+                  event.currentTarget.style.borderColor =
+                    "rgba(148, 163, 184, 0.14)";
+                  event.currentTarget.style.boxShadow = "none";
                 }}
               >
                 <div>
@@ -2040,8 +2682,10 @@ export default function TeacherDashboardPage() {
                     style={{
                       display: "flex",
                       justifyContent: "space-between",
-                      alignItems: "flex-start",
-                      marginBottom: "10px",
+                      alignItems: "center",
+                      flexWrap: "wrap",
+                      gap: "8px",
+                      marginBottom: "12px",
                     }}
                   >
                     <span className="badge-tag">{lesson.grade}</span>
@@ -2050,6 +2694,8 @@ export default function TeacherDashboardPage() {
                         fontSize: "0.75rem",
                         color: "var(--cyan)",
                         fontWeight: 700,
+                        maxWidth: "65%",
+                        textAlign: "left",
                       }}
                     >
                       {lesson.branch}
@@ -2057,7 +2703,7 @@ export default function TeacherDashboardPage() {
                   </div>
                   <h4
                     style={{
-                      fontSize: "1rem",
+                      fontSize: "1.05rem",
                       fontWeight: 800,
                       color: "#fff",
                       marginBottom: "8px",
@@ -2069,8 +2715,9 @@ export default function TeacherDashboardPage() {
                     style={{
                       fontSize: "0.78rem",
                       color: "var(--text-muted)",
-                      marginBottom: "12px",
-                      lineHeight: "1.5",
+                      marginBottom: "16px",
+                      lineHeight: 1.8,
+                      minHeight: "2.8em",
                     }}
                   >
                     {lesson.description || "شرح متكامل وتمارين بنك الأسئلة"}
@@ -2081,14 +2728,21 @@ export default function TeacherDashboardPage() {
                   style={{
                     display: "flex",
                     alignItems: "center",
-                    justifyContent: "space-between",
+                    justifyContent: "flex-start",
                     paddingTop: "10px",
                     borderTop: "1px solid rgba(255,255,255,0.06)",
                     flexWrap: "wrap",
-                    gap: "6px",
+                    gap: "8px",
                   }}
                 >
-                  <div style={{ display: "flex", gap: "6px" }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: "8px",
+                      flex: 1,
+                      flexWrap: "wrap",
+                    }}
+                  >
                     <a
                       href={`/watch/${lesson.id}`}
                       className="btn-secondary"
@@ -2185,9 +2839,13 @@ export default function TeacherDashboardPage() {
               </button>
               <button
                 onClick={() => {
+                  if (lessonsList.length === 0) {
+                    showToast("يُرجى إضافة محاضرة أولًا لربط الامتحان بها.", "error");
+                    return;
+                  }
                   setEditingExam(null);
                   setNewExamData({
-                    lesson_id: lessonsList[0]?.id || 1,
+                    lesson_id: lessonsList[0].id,
                     title: "",
                     description: "",
                     duration_minutes: 20,
@@ -2254,6 +2912,9 @@ export default function TeacherDashboardPage() {
               {adminExamsList.map((exam) => {
                 const isExpanded = expandedExamId === exam.id;
                 const questions = exam.questions || [];
+                const linkedLesson = lessonsList.find(
+                  (lesson) => String(lesson.id) === String(exam.lesson_id),
+                );
 
                 return (
                   <div
@@ -2313,7 +2974,7 @@ export default function TeacherDashboardPage() {
                             className="badge-tag"
                             style={{ color: "var(--cyan)" }}
                           >
-                            الدرس #{exam.lesson_id}
+                            {linkedLesson?.title || `الدرس #${exam.lesson_id}`}
                           </span>
                           <span
                             style={{
@@ -2929,7 +3590,11 @@ export default function TeacherDashboardPage() {
                 if (!codesSearchQuery.trim()) return true;
                 const q = codesSearchQuery.toLowerCase();
                 const name = (item.student_name || "").toLowerCase();
-                const code = (item.subscription_code || "").toLowerCase();
+                const code = getSubscriptionCode(
+                  item.subscription_code,
+                  item.subscription,
+                  item,
+                ).toLowerCase();
                 return name.includes(q) || code.includes(q);
               });
 
@@ -2987,9 +3652,110 @@ export default function TeacherDashboardPage() {
                     </thead>
                     <tbody>
                       {filtered.map((item, idx) => {
-                        const isCopied = copiedCode === item.subscription_code;
+                        const subscriptionCode = getSubscriptionCode(
+                          item.subscription_code,
+                          item.subscription,
+                          item,
+                        );
+                        const linkedApprovedRecord = approvedSubscriptions.find(
+                          (record) => {
+                            const recordCode = getSubscriptionCode(
+                              record.subscription_code,
+                              record.subscription,
+                              record.active_subscription,
+                              record.subscriptions?.[0],
+                              record,
+                            );
+                            const recordStudentId =
+                              record.student?.id ||
+                              record.user?.id ||
+                              record.student_id ||
+                              record.user_id;
+                            const codeStudentId =
+                              item.student?.id ||
+                              item.user?.id ||
+                              item.student_id ||
+                              item.user_id;
+                            const recordStudent = record.student || record.user || record;
+                            const recordStudentName =
+                              `${record.first_name || recordStudent.first_name || ""} ${record.last_name || recordStudent.last_name || ""}`.trim() ||
+                              record.student_name ||
+                              record.name ||
+                              recordStudent.name ||
+                              "";
+                            const codeStudentName =
+                              item.student_name ||
+                              item.student?.name ||
+                              item.user?.name ||
+                              item.name ||
+                              "";
+                            const namesMatch =
+                              recordStudentName.trim().replace(/\s+/g, " ").toLowerCase() ===
+                              codeStudentName.trim().replace(/\s+/g, " ").toLowerCase();
+                            return (
+                              (recordCode && recordCode === subscriptionCode) ||
+                              (recordStudentId != null &&
+                                codeStudentId != null &&
+                                String(recordStudentId) === String(codeStudentId)) ||
+                              (recordStudentName && codeStudentName && namesMatch)
+                            );
+                          },
+                        );
+                        const linkedSubscription = getSubscriptionRecord(
+                          linkedApprovedRecord,
+                        );
+                        const codeSubscription = getSubscriptionRecord(item);
+                        const inactiveStatuses = [
+                          "inactive",
+                          "cancelled",
+                          "canceled",
+                          "deactivated",
+                          "disabled",
+                          "expired",
+                        ];
+                        const activeStatuses = ["active", "approved", "enabled"];
+                        const statusCandidates = [
+                          getSubscriptionStatus(
+                            linkedApprovedRecord,
+                            linkedSubscription,
+                            linkedApprovedRecord?.student,
+                          ),
+                          linkedSubscription?.status,
+                          linkedApprovedRecord?.subscription_status,
+                          linkedApprovedRecord?.subscriptionStatus,
+                          linkedApprovedRecord?.status,
+                          codeSubscription?.status,
+                          item.subscription_status,
+                          item.subscriptionStatus,
+                          item.status,
+                          linkedSubscription?.is_active === false ||
+                          linkedApprovedRecord?.is_active === false ||
+                          codeSubscription?.is_active === false ||
+                          item.is_active === false
+                            ? "inactive"
+                            : linkedSubscription?.is_active === true ||
+                                linkedApprovedRecord?.is_active === true ||
+                                codeSubscription?.is_active === true ||
+                                item.is_active === true
+                              ? "active"
+                              : "",
+                        ]
+                          .filter(Boolean)
+                          .map((status) => String(status).toLowerCase());
+                        const linkedStatus =
+                          statusCandidates.find((status) =>
+                            inactiveStatuses.includes(status),
+                          ) ||
+                          statusCandidates[0] ||
+                          "";
+                        const isSubscriptionInactive =
+                          inactiveStatuses.includes(linkedStatus);
+                        const hasSubscriptionStatus =
+                          inactiveStatuses.includes(linkedStatus) ||
+                          activeStatuses.includes(linkedStatus);
+                        const isCopied = copiedCode === subscriptionCode;
                         return (
-                          <tr key={item.subscription_code || idx}>
+                          <tr key={subscriptionCode || idx}>
                             <td
                               style={{
                                 color: "var(--text-muted)",
@@ -3015,7 +3781,7 @@ export default function TeacherDashboardPage() {
                                   letterSpacing: "1px",
                                 }}
                               >
-                                {item.subscription_code}
+                                {subscriptionCode || "—"}
                               </span>
                             </td>
                             <td>
@@ -3024,21 +3790,38 @@ export default function TeacherDashboardPage() {
                               </span>
                             </td>
                             <td>
-                              <span
+                                                            <span
                                 className="badge-tag"
                                 style={{
-                                  background: "rgba(16, 185, 129, 0.15)",
-                                  color: "var(--emerald)",
-                                  borderColor: "rgba(16, 185, 129, 0.3)",
+                                  background: !hasSubscriptionStatus
+                                    ? "rgba(148, 163, 184, 0.12)"
+                                    : isSubscriptionInactive
+                                      ? "rgba(244, 63, 94, 0.15)"
+                                      : "rgba(16, 185, 129, 0.15)",
+                                  color: !hasSubscriptionStatus
+                                    ? "var(--text-muted)"
+                                    : isSubscriptionInactive
+                                      ? "var(--rose)"
+                                      : "var(--emerald)",
+                                  borderColor: !hasSubscriptionStatus
+                                    ? "rgba(148, 163, 184, 0.3)"
+                                    : isSubscriptionInactive
+                                      ? "rgba(244, 63, 94, 0.3)"
+                                      : "rgba(16, 185, 129, 0.3)",
+                                  whiteSpace: "nowrap",
                                 }}
                               >
-                                معتمد ونشط ✅
+                                {!hasSubscriptionStatus
+                                  ? "\u062d\u0627\u0644\u0629 \u0627\u0644\u0627\u0634\u062a\u0631\u0627\u0643 \u063a\u064a\u0631 \u0645\u062a\u0627\u062d\u0629"
+                                  : isSubscriptionInactive
+                                    ? "\u0645\u0639\u0637\u0644"
+                                    : "\u0646\u0634\u0637"}
                               </span>
                             </td>
                             <td>
                               <button
                                 onClick={() =>
-                                  handleCopyCode(item.subscription_code)
+                                  handleCopyCode(subscriptionCode)
                                 }
                                 className="btn-secondary"
                                 style={{
@@ -3465,7 +4248,7 @@ export default function TeacherDashboardPage() {
                   margin: "0 auto 12px",
                 }}
               >
-                {viewingStudent.name?.charAt(0) || "ط"}
+                {viewingStudentName.charAt(0)}
               </div>
               <h2
                 style={{
@@ -3475,10 +4258,13 @@ export default function TeacherDashboardPage() {
                   marginBottom: "4px",
                 }}
               >
-                {viewingStudent.name}
+                {viewingStudentName}
               </h2>
               <span className="badge-tag" style={{ marginTop: "4px" }}>
-                {viewingStudent.grade}
+                {getArabicGradeName(
+                  viewingStudent.grade,
+                  viewingStudent.grade_id,
+                )}
               </span>
             </div>
 
@@ -3514,8 +4300,11 @@ export default function TeacherDashboardPage() {
                     letterSpacing: "1px",
                   }}
                 >
-                  {viewingStudent.code ||
-                    viewingStudent.subscription_code ||
+                  {getSubscriptionCode(
+                    viewingStudent.code,
+                    viewingStudent.subscription_code,
+                    viewingStudent.subscription,
+                  ) ||
                     "قيد الاعتماد"}
                 </strong>
               </div>
@@ -3549,7 +4338,7 @@ export default function TeacherDashboardPage() {
                     "غير مسجل"}
                 </strong>
               </div>
-              <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", borderBottom: "1px solid rgba(255,255,255,0.05)", paddingBottom: "6px" }}>
                 <span style={{ color: "var(--text-muted)" }}>حالة الحساب:</span>
                 <span
                   style={{
@@ -3564,6 +4353,42 @@ export default function TeacherDashboardPage() {
                     ? "قيد المراجعة"
                     : "مفعّل ومعتمد"}
                 </span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", borderBottom: "1px solid rgba(255,255,255,0.05)", paddingBottom: "6px" }}>
+                <span style={{ color: "var(--text-muted)" }}>تاريخ بدء الاشتراك:</span>
+                <strong style={{ color: "#fff" }}>
+                  {viewingStudent.start_date ||
+                    viewingStudent.subscription?.start_date ||
+                    viewingStudent.created_at?.split("T")[0] ||
+                    "—"}
+                </strong>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", borderBottom: "1px solid rgba(255,255,255,0.05)", paddingBottom: "6px" }}>
+                <span style={{ color: "var(--text-muted)" }}>صلاحية وانتهاء الكود:</span>
+                <strong style={{ color: "#fff" }}>
+                  {viewingStudent.end_date ||
+                    viewingStudent.subscription?.end_date ||
+                    viewingStudent.subscription?.expires_at ||
+                    viewingStudent.code_expires_at ||
+                    "—"}
+                </strong>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                <span style={{ color: "var(--text-muted)" }}>معرف الجهاز الموثوق:</span>
+                <strong
+                  style={{
+                    color: "var(--emerald)",
+                    fontFamily: "monospace",
+                    fontSize: "0.75rem",
+                    wordBreak: "break-all",
+                    direction: "ltr",
+                  }}
+                >
+                  {viewingStudent.trusted_device?.device_identifier ||
+                    (typeof viewingStudent.trusted_device === "string"
+                      ? viewingStudent.trusted_device
+                      : viewingStudent.device_identifier || "مسجل ومحمي 🔒")}
+                </strong>
               </div>
             </div>
 
@@ -3682,38 +4507,13 @@ export default function TeacherDashboardPage() {
             >
               {viewingStudent.status === "inactive" ||
               viewingStudent.status === "cancelled" ? (
-                <button
-                  type="button"
-                  onClick={async () => {
-                    await handleReactivateStudent(viewingStudent);
-                    setViewingStudent((prev) => ({
-                      ...prev,
-                      status: "active",
-                    }));
-                  }}
-                  disabled={isProcessingAction}
-                  className="btn-secondary"
-                  style={{
-                    flex: 1,
-                    justifyContent: "center",
-                    color: "var(--emerald)",
-                    borderColor: "rgba(16, 185, 129, 0.3)",
-                    fontSize: "0.8rem",
-                  }}
-                >
-                  <CheckCircle2 size={15} />
-                  <span>إعادة تفعيل الحساب</span>
-                </button>
+                <span className="badge-tag">إعادة التفعيل غير متاحة</span>
               ) : (
                 <button
                   type="button"
-                  onClick={async () => {
-                    await handleDeactivateStudentRow(viewingStudent);
-                    setViewingStudent((prev) => ({
-                      ...prev,
-                      status: "cancelled",
-                    }));
-                  }}
+                  onClick={() =>
+                    openStudentDeactivationConfirmation(viewingStudent)
+                  }
                   disabled={isProcessingAction}
                   className="btn-secondary"
                   style={{
@@ -3729,11 +4529,12 @@ export default function TeacherDashboardPage() {
                 </button>
               )}
 
-              <button
-                type="button"
-                onClick={async () => {
-                  await handleResetDeviceForStudent(viewingStudent);
-                }}
+              {hasActiveTrustedDevice(viewingStudent) && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await handleResetDeviceForStudent(viewingStudent);
+                  }}
                 disabled={isProcessingAction}
                 className="btn-secondary"
                 style={{
@@ -3746,7 +4547,8 @@ export default function TeacherDashboardPage() {
               >
                 <RotateCcw size={15} />
                 <span>إعادة ضبط الجهاز</span>
-              </button>
+                </button>
+              )}
             </div>
 
             <button
@@ -4022,10 +4824,11 @@ export default function TeacherDashboardPage() {
               </div>
               <div className="form-group" style={{ marginBottom: "1rem" }}>
                 <label className="form-label">
-                  رابط الفيديو (YouTube Embed / MP4)
+                  رابط الفيديو (YouTube / MP4) *
                 </label>
                 <input
-                  type="text"
+                  type="url"
+                  required
                   value={newLessonData.videoUrl}
                   onChange={(e) =>
                     setNewLessonData({
@@ -4451,7 +5254,7 @@ export default function TeacherDashboardPage() {
               </div>
               <div className="form-group">
                 <label className="form-label" htmlFor="exam-question-points">
-                  النقاط
+                  النقاط / الدرجة
                 </label>
                 <input
                   id="exam-question-points"
@@ -4468,6 +5271,127 @@ export default function TeacherDashboardPage() {
                   }
                 />
               </div>
+
+              {/* Multiple Choice Options */}
+              {!questionModal.isEdit && (
+                <div
+                  style={{
+                    marginTop: "1rem",
+                    borderTop: "1px solid rgba(255,255,255,0.08)",
+                    paddingTop: "1rem",
+                  }}
+                >
+                  <label
+                    className="form-label"
+                    style={{
+                      marginBottom: "10px",
+                      color: "var(--cyan)",
+                      fontWeight: 800,
+                      display: "block",
+                    }}
+                  >
+                    خيارات الإجابة (اختر الإجابة الصحيحة بالضغط على الدائرة 🔘):
+                  </label>
+
+                  {[
+                    { key: "opt1", num: 1, label: "أ" },
+                    { key: "opt2", num: 2, label: "ب" },
+                    { key: "opt3", num: 3, label: "جـ" },
+                    { key: "opt4", num: 4, label: "د" },
+                  ].map((item) => (
+                    <div
+                      key={item.key}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "10px",
+                        marginBottom: "10px",
+                        background:
+                          questionModal.correctOption === item.num
+                            ? "rgba(16, 185, 129, 0.12)"
+                            : "#050914",
+                        border: `1px solid ${
+                          questionModal.correctOption === item.num
+                            ? "var(--emerald)"
+                            : "rgba(255,255,255,0.08)"
+                        }`,
+                        padding: "8px 12px",
+                        borderRadius: "10px",
+                        transition: "all 0.15s ease",
+                      }}
+                    >
+                      <input
+                        type="radio"
+                        name="correct-option"
+                        id={`opt-radio-${item.num}`}
+                        checked={questionModal.correctOption === item.num}
+                        onChange={() =>
+                          setQuestionModal({
+                            ...questionModal,
+                            correctOption: item.num,
+                          })
+                        }
+                        style={{
+                          accentColor: "var(--emerald)",
+                          cursor: "pointer",
+                          width: "18px",
+                          height: "18px",
+                        }}
+                        title="تحديد هذا الخيار كإجابة صحيحة"
+                      />
+                      <label
+                        htmlFor={`opt-radio-${item.num}`}
+                        style={{
+                          color:
+                            questionModal.correctOption === item.num
+                              ? "var(--emerald)"
+                              : "var(--text-muted)",
+                          fontSize: "0.88rem",
+                          fontWeight: 800,
+                          cursor: "pointer",
+                          width: "28px",
+                        }}
+                      >
+                        ({item.label})
+                      </label>
+                      <input
+                        type="text"
+                        placeholder={`اكتب نص الخيار (${item.label})...`}
+                        required={item.num <= 2}
+                        value={questionModal[item.key]}
+                        onChange={(e) =>
+                          setQuestionModal({
+                            ...questionModal,
+                            [item.key]: e.target.value,
+                          })
+                        }
+                        className="form-input"
+                        style={{
+                          padding: "8px 12px",
+                          fontSize: "0.85rem",
+                          flex: 1,
+                        }}
+                      />
+                      {questionModal.correctOption === item.num && (
+                        <span
+                          style={{
+                            fontSize: "0.72rem",
+                            color: "var(--emerald)",
+                            fontWeight: 800,
+                            whiteSpace: "nowrap",
+                            background: "rgba(16, 185, 129, 0.2)",
+                            padding: "2px 6px",
+                            borderRadius: "4px",
+                          }}
+                        >
+                          الإجابة الصحيحة ✓
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
               <div
                 style={{
                   display: "flex",
@@ -4481,7 +5405,9 @@ export default function TeacherDashboardPage() {
                   disabled={isProcessingAction}
                   style={{ flex: 1 }}
                 >
-                  حفظ السؤال
+                  {questionModal.isEdit
+                    ? "حفظ تعديل السؤال"
+                    : "حفظ السؤال وخياراته بالكامل"}
                 </button>
                 <button
                   type="button"

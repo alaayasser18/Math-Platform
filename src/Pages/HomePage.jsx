@@ -6,12 +6,12 @@ import { Video, FileQuestion, BookOpen, ArrowLeft } from "lucide-react";
 
 export default function HomePage() {
   const { student, lessonsList } = useStudent();
-  const currentGrade = student?.grade || "الصف الثالث الثانوي";
+  const currentGrade = student?.grade || "";
 
   // Filter lessons for the current student's grade
-  const displayLessons = (lessonsList || []).filter(
-    (l) => l.grade === currentGrade,
-  );
+  const displayLessons = currentGrade
+    ? (lessonsList || []).filter((l) => l.grade === currentGrade)
+    : lessonsList || [];
 
   return (
     <div className="container">

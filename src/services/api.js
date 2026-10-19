@@ -1,18 +1,34 @@
 /**
  * MathPlatform API Client (OpenAPI 3.0.0 Aligned)
- * Base URL: http://127.0.0.1:8000
+ * Base URL: VITE_API_URL (defaults to the production Railway API)
  */
 
 const API_BASE =
   (typeof import.meta !== "undefined" && import.meta.env?.VITE_API_URL) ||
-  "http://127.0.0.1:8000";
+  "https://mathplatform-production-31e0.up.railway.app/api/v1";
+
+const getCleanBaseDomain = () => {
+  return String(API_BASE)
+    .trim()
+    .replace(/\/+$/, "")
+    .replace(/\/api\/documentation$/, "")
+    .replace(/\/api\/v1$/, "");
+};
+
+export function buildApiUrl(endpoint) {
+  const baseDomain = getCleanBaseDomain();
+  const cleanEndpoint = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
+
+  if (cleanEndpoint.startsWith("/api/v1")) {
+    return `${baseDomain}${cleanEndpoint}`;
+  }
+  return `${baseDomain}/api/v1${cleanEndpoint}`;
+}
 
 // Token & Device Storage Keys
 const ADMIN_TOKEN_KEY = "mathplatform_admin_token";
 const STUDENT_TOKEN_KEY = "mathplatform_student_token";
 const DEVICE_ID_KEY = "mathplatform_device_id";
-const OFFLINE_REQUESTS_KEY = "mathplatform_offline_requests";
-const OFFLINE_APPROVED_KEY = "mathplatform_offline_approved";
 
 // ======================================================================
 // TOKEN STORAGE
@@ -104,24 +120,24 @@ export function getOrCreateDeviceId() {
 // ======================================================================
 
 export const GRADE_ID_MAP = {
-  1: "الصف الثالث الثانوي",
+  1: "الصف الأول الثانوي",
   2: "الصف الثاني الثانوي",
-  3: "الصف الأول الثانوي",
+  3: "الصف الثالث الثانوي",
   4: "الصف الثالث الإعدادي",
   5: "الصف الثاني الإعدادي",
   6: "الصف الأول الإعدادي",
 
-  sec3: 1,
+  sec1: 1,
   sec2: 2,
-  sec1: 3,
+  sec3: 3,
 
   prep3: 4,
   prep2: 5,
   prep1: 6,
 
-  "الصف الثالث الثانوي": 1,
+  "الصف الأول الثانوي": 1,
   "الصف الثاني الثانوي": 2,
-  "الصف الأول الثانوي": 3,
+  "الصف الثالث الثانوي": 3,
   "الصف الثالث الإعدادي": 4,
   "الصف الثاني الإعدادي": 5,
   "الصف الأول الإعدادي": 6,
@@ -136,8 +152,46 @@ export const getGradeIdByName = (name) => GRADE_ID_MAP[name] || 1;
 // STANDARD HTTP REQUEST
 // ======================================================================
 
+function translateApiError(message) {
+  if (typeof message !== "string") return message;
+
+  const normalized = message.trim().toLowerCase().replace(/[.!؟]+$/g, "");
+  const translations = {
+    "this subscription is not active": "الاشتراك ده غير نشط.",
+    "this subscription does not have an active trusted device":
+      "الاشتراك ده مفيهوش جهاز موثوق نشط لإعادة ضبطه.",
+    "invalid subscription code": "كود الاشتراك غير صحيح.",
+    "no active trusted device":
+      "مفيش جهاز موثوق نشط للاشتراك ده.",
+    "subscription not found": "الاشتراك ده غير موجود.",
+    unauthenticated: "انتهت الجلسة. يلزم تسجيل الدخول مرة أخرى.",
+    "admin access required": "العملية دي متاحة لحساب الإدارة فقط.",
+  };
+
+  if (translations[normalized]) return translations[normalized];
+
+  if (normalized.includes("this subscription is not active")) {
+    return translations["this subscription is not active"];
+  }
+  if (
+    normalized.includes(
+      "this subscription does not have an active trusted device",
+    )
+  ) {
+    return translations[
+      "this subscription does not have an active trusted device"
+    ];
+  }
+
+  // Never expose an untranslated English server or network error in the UI.
+  if (/[a-z]/i.test(message)) {
+    return "حدث خطأ أثناء تنفيذ الطلب. يُرجى مراجعة البيانات والمحاولة مرة أخرى.";
+  }
+  return message;
+}
+
 async function request(endpoint, options = {}, authType = null) {
-  const url = `${API_BASE}${endpoint}`;
+  const url = buildApiUrl(endpoint);
 
   const headers = {
     "Content-Type": "application/json",
@@ -147,7 +201,6 @@ async function request(endpoint, options = {}, authType = null) {
 
   if (authType === "admin") {
     const token = tokenStorage.getAdminToken();
-
     if (token) {
       headers.Authorization = `Bearer ${token}`;
     }
@@ -155,7 +208,6 @@ async function request(endpoint, options = {}, authType = null) {
 
   if (authType === "student") {
     const token = tokenStorage.getStudentToken();
-
     if (token) {
       headers.Authorization = `Bearer ${token}`;
     }
@@ -166,23 +218,35 @@ async function request(endpoint, options = {}, authType = null) {
 
     const timeoutId = setTimeout(() => {
       controller.abort();
-    }, 6000);
+    }, 15000);
 
-    const response = await fetch(url, {
-      ...options,
-      headers,
-      signal: controller.signal,
-    });
-
-    clearTimeout(timeoutId);
+    let response;
+    try {
+      response = await fetch(url, {
+        ...options,
+        headers,
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     const data = await response.json().catch(() => null);
 
     if (!response.ok) {
-      const errorMsg =
+      let errorMsg =
         data?.message ||
         data?.error ||
         `خطأ ${response.status}: فشل استدعاء الخادم`;
+
+      if (data?.errors && typeof data.errors === "object") {
+        const errorEntries = Object.values(data.errors).flat();
+        if (errorEntries.length > 0) {
+          errorMsg = errorEntries.join(" - ");
+        }
+      }
+
+      errorMsg = translateApiError(errorMsg);
 
       const err = new Error(errorMsg);
 
@@ -213,7 +277,7 @@ async function request(endpoint, options = {}, authType = null) {
         err.message?.includes("ECONNREFUSED") ||
         err.code === "ECONNREFUSED",
 
-      error: err.message,
+      error: translateApiError(err.message),
       status: err.status || 0,
       data: err.data || null,
     };
@@ -255,252 +319,6 @@ function normalizeApiSuccess(res) {
 }
 
 // ======================================================================
-// OFFLINE REQUESTS
-// ======================================================================
-
-const getOfflineRequests = () => {
-  try {
-    const saved = localStorage.getItem(OFFLINE_REQUESTS_KEY);
-
-    return saved
-      ? JSON.parse(saved)
-      : [
-          {
-            id: 1,
-            student_id: 101,
-            first_name: "زياد",
-            last_name: "أحمد محمود",
-            phone: "01098765432",
-            parent_phone: "01123456789",
-            grade_id: 1,
-            grade_name: "الصف الثالث الثانوي",
-            status: "pending",
-            created_at: new Date(Date.now() - 3600000 * 4).toISOString(),
-          },
-          {
-            id: 2,
-            student_id: 102,
-            first_name: "فاطمة",
-            last_name: "خالد مصطفى",
-            phone: "01234567891",
-            parent_phone: "01011223344",
-            grade_id: 2,
-            grade_name: "الصف الثاني الثانوي",
-            status: "pending",
-            created_at: new Date(Date.now() - 3600000 * 12).toISOString(),
-          },
-        ];
-  } catch {
-    return [];
-  }
-};
-
-const saveOfflineRequests = (items) => {
-  try {
-    if (typeof localStorage !== "undefined") {
-      localStorage.setItem(OFFLINE_REQUESTS_KEY, JSON.stringify(items));
-    }
-  } catch (e) {
-    console.warn("Could not save offline requests", e);
-  }
-};
-
-// ======================================================================
-// OFFLINE APPROVED STUDENTS
-// ======================================================================
-
-const getOfflineApproved = () => {
-  try {
-    const saved =
-      typeof localStorage !== "undefined"
-        ? localStorage.getItem(OFFLINE_APPROVED_KEY)
-        : null;
-
-    return saved
-      ? JSON.parse(saved)
-      : [
-          {
-            id: 1,
-
-            student: {
-              id: 1,
-              first_name: "أحمد",
-              last_name: "محمد الشريف",
-              phone: "01012345678",
-              parent_phone: "01198765432",
-              grade_id: 1,
-            },
-
-            subscription_code: "SEC3-101",
-            status: "active",
-            start_date: "2026-08-25",
-            end_date: "2027-08-25",
-            code_expires_at: "2027-08-25",
-            device_identifier: "8f4c2e91-7a32-4d8b-91a2-5e6f3c8d1204",
-          },
-
-          {
-            id: 2,
-
-            student: {
-              id: 2,
-              first_name: "مريم",
-              last_name: "محمود عبد الرحمن",
-              phone: "01234567890",
-              parent_phone: "01099887766",
-              grade_id: 1,
-            },
-
-            subscription_code: "SEC3-102",
-            status: "active",
-            start_date: "2026-08-26",
-            end_date: "2027-08-26",
-            code_expires_at: "2027-08-26",
-            device_identifier: null,
-          },
-
-          {
-            id: 3,
-
-            student: {
-              id: 3,
-              first_name: "عمر",
-              last_name: "خالد الصاوي",
-              phone: "01122334455",
-              parent_phone: "01555667788",
-              grade_id: 2,
-            },
-
-            subscription_code: "SEC2-201",
-            status: "active",
-            start_date: "2026-08-27",
-            end_date: "2027-08-27",
-            code_expires_at: "2027-08-27",
-            device_identifier: null,
-          },
-        ];
-  } catch {
-    return [];
-  }
-};
-
-const saveOfflineApproved = (items) => {
-  try {
-    if (typeof localStorage !== "undefined") {
-      localStorage.setItem(OFFLINE_APPROVED_KEY, JSON.stringify(items));
-    }
-  } catch (error) {
-    console.warn("Could not save offline approved students", error);
-  }
-};
-
-const OFFLINE_EXAMS_KEY = "mathplatform_offline_exams";
-
-const getDefaultOfflineExams = () => [
-  {
-    id: 1,
-    lesson_id: 1,
-    title: "اختبار الدرس الأول: المحددات والمصفوفات",
-    description: "اختبار شامل على خواص المحددات وحساب معكوس المصفوفة",
-    duration_minutes: 20,
-    passing_percentage: 60,
-    is_active: true,
-    questions: [
-      {
-        id: 1,
-        question_text:
-          "إذا كانت المصفوفة A على النظم 2×3 والمصفوفة B على النظم 3×2، فإن النظم للمصفوفة AB هو:",
-        points: 1,
-        options: [
-          { id: 1, option_text: "2×2", is_correct: true },
-          { id: 2, option_text: "3×3", is_correct: false },
-          { id: 3, option_text: "2×3", is_correct: false },
-          { id: 4, option_text: "غير معرفة", is_correct: false },
-        ],
-      },
-      {
-        id: 2,
-        question_text: "محدد مصفوفة تحتوي على صف كامل من الأصفار قيمته تساوي:",
-        points: 1,
-        options: [
-          { id: 5, option_text: "0", is_correct: true },
-          { id: 6, option_text: "1", is_correct: false },
-          { id: 7, option_text: "-1", is_correct: false },
-          { id: 8, option_text: "غير معرف", is_correct: false },
-        ],
-      },
-      {
-        id: 3,
-        question_text:
-          "المصفوفة التي يتساوى فيها عدد الصفوف مع عدد الأعمدة تسمى مصفوفة:",
-        points: 1,
-        options: [
-          { id: 9, option_text: "مربعة", is_correct: true },
-          { id: 10, option_text: "قطرية فقط", is_correct: false },
-          { id: 11, option_text: "صفرية فقط", is_correct: false },
-          { id: 12, option_text: "عمودية", is_correct: false },
-        ],
-      },
-    ],
-  },
-  {
-    id: 2,
-    lesson_id: 2,
-    title: "اختبار الدرس الثاني: مبدأ العد والتباديل",
-    description: "اختبار تقييمي على مبادئ العد الأساسية وحساب التباديل",
-    duration_minutes: 25,
-    passing_percentage: 65,
-    is_active: true,
-    questions: [
-      {
-        id: 4,
-        question_text: "قيمة التبديلة 5P3 تساوي:",
-        points: 2,
-        options: [
-          { id: 13, option_text: "60", is_correct: true },
-          { id: 14, option_text: "120", is_correct: false },
-          { id: 15, option_text: "20", is_correct: false },
-          { id: 16, option_text: "10", is_correct: false },
-        ],
-      },
-      {
-        id: 5,
-        question_text: "قيمة مضروب الصفر (0!) هي:",
-        points: 1,
-        options: [
-          { id: 17, option_text: "1", is_correct: true },
-          { id: 18, option_text: "0", is_correct: false },
-          { id: 19, option_text: "غير معرف", is_correct: false },
-          { id: 20, option_text: "∞", is_correct: false },
-        ],
-      },
-    ],
-  },
-];
-
-const getOfflineExams = () => {
-  try {
-    const saved =
-      typeof localStorage !== "undefined"
-        ? localStorage.getItem(OFFLINE_EXAMS_KEY)
-        : null;
-    return saved ? JSON.parse(saved) : getDefaultOfflineExams();
-  } catch {
-    return getDefaultOfflineExams();
-  }
-};
-
-const saveOfflineExams = (items) => {
-  try {
-    if (typeof localStorage !== "undefined") {
-      localStorage.setItem(OFFLINE_EXAMS_KEY, JSON.stringify(items));
-    }
-  } catch (e) {
-    console.warn("Could not save offline exams", e);
-  }
-};
-
-// ======================================================================
 // API ENDPOINTS
 // ======================================================================
 
@@ -508,6 +326,34 @@ export const api = {
   // ====================================================================
   // 1. STUDENT AUTHENTICATION
   // ====================================================================
+
+  async validateSession(role) {
+    const endpoint =
+      role === "teacher"
+        ? "/api/v1/admin/approved-students"
+        : role === "student"
+          ? "/api/v1/student/profile"
+          : null;
+
+    if (!endpoint) {
+      return {
+        success: false,
+        message: "نوع الحساب غير معروف",
+      };
+    }
+
+    const authType = role === "teacher" ? "admin" : "student";
+    const res = await request(endpoint, { method: "GET" }, authType);
+
+    return res.success
+      ? { success: true, data: res.data }
+      : {
+          success: false,
+          message: res.error || "تعذر التحقق من الجلسة",
+          status: res.status,
+          isNetworkError: res.isNetworkError,
+        };
+  },
 
   /**
    * POST /api/v1/auth/activate
@@ -530,30 +376,6 @@ export const api = {
 
     if (res.success) {
       return normalizeApiSuccess(res);
-    }
-
-    if (res.isNetworkError) {
-      const current = getOfflineRequests();
-
-      const newReq = {
-        id: Date.now(),
-        student_id: Math.floor(Math.random() * 900) + 100,
-        ...payload,
-        grade_name: getGradeNameById(payload.grade_id),
-        status: "pending",
-        created_at: new Date().toISOString(),
-      };
-
-      saveOfflineRequests([newReq, ...current]);
-
-      return {
-        success: true,
-        isOfflineMode: true,
-        status: "pending",
-        data: newReq,
-        message:
-          "تم تسجيل طلب التفعيل بنجاح! طلبك الآن في انتظار موافقة المعلم لتوليد كود الاشتراك.",
-      };
     }
 
     throw new Error(res.error || "فشل تقديم طلب التفعيل");
@@ -601,85 +423,46 @@ export const api = {
       }),
     });
 
-    if (res.success) {
-      const result = normalizeApiSuccess(res);
-
-      const token =
-        result?.data?.token ||
-        result?.token ||
-        result?.data?.access_token ||
-        result?.access_token;
-
-      if (token) {
-        tokenStorage.setStudentToken(token);
-      }
-
-      return result;
-    }
-
-    // Offline mode
-    if (res.isNetworkError) {
-      const approved = getOfflineApproved();
-
-      const match = approved.find(
-        (item) =>
-          item.subscription_code?.toUpperCase() === cleanCode &&
-          item.status === "active",
-      );
-
-      if (match) {
-        const studentInfo = {
-          id: match.student?.id || match.id,
-
-          code: match.subscription_code,
-
-          name:
-            `${match.student?.first_name || ""} ${
-              match.student?.last_name || ""
-            }`.trim() || "طالب متميز",
-
-          grade: getGradeNameById(match.student?.grade_id || 1),
-
-          gradeId: match.student?.grade_id || 1,
-
-          phone: match.student?.phone || "",
-
-          parentPhone: match.student?.parent_phone || "",
-
-          subscriptionStatus: "active",
-
-          device_identifier: deviceId,
-        };
-
-        const simulatedToken = `simulated_token_${cleanCode}`;
-
-        tokenStorage.setStudentToken(simulatedToken);
-
+    if (!res.success) {
+      const serverError =
+        res.data?.message ||
+        res.data?.errors?.subscription_code?.[0] ||
+        res.error;
+      if (serverError) {
+        const translatedError = translateApiError(serverError);
         return {
-          success: true,
-          isOfflineMode: true,
-          message: "تم تسجيل الدخول بنجاح",
-
-          data: {
-            student: studentInfo,
-          },
-
-          student: studentInfo,
-          token: simulatedToken,
+          success: false,
+          message: translatedError,
+          error: translatedError,
         };
       }
-
       return {
         success: false,
-        isOfflineMode: true,
-        message: "كود الاشتراك غير صحيح أو الحساب لم يتم تفعيله بعد من المعلم.",
+        message:
+          res.data?.message ||
+          res.data?.errors?.subscription_code?.[0] ||
+          res.error ||
+          "كود الاشتراك غير صالح أو الحساب غير مفعّل",
+        error: res.error || "كود الاشتراك غير صالح أو الحساب غير مفعّل",
       };
     }
 
-    return {
-      success: false,
-      error: res.error || "كود الاشتراك غير صالح أو الحساب غير مفعّل",
-    };
+    const result = normalizeApiSuccess(res);
+    const token =
+      result?.data?.token ||
+      result?.token ||
+      result?.data?.access_token ||
+      result?.access_token;
+
+    if (!token) {
+      return {
+        success: false,
+        message: "لم يُرجع الخادم رمز دخول صالحًا",
+      };
+    }
+
+    tokenStorage.setStudentToken(token);
+    return { ...result, token };
   },
 
   /**
@@ -746,53 +529,39 @@ export const api = {
 
     if (res.success) {
       const result = normalizeApiSuccess(res);
-
       const token =
         result?.data?.token ||
         result?.token ||
         result?.data?.access_token ||
         result?.access_token;
 
-      if (token) {
-        tokenStorage.setAdminToken(token);
-      }
-
-      return result;
-    }
-
-    if (res.isNetworkError) {
-      if (
-        (email === "admin@example.com" && adminPassword === "Admin@12345") ||
-        adminPassword === "admin" ||
-        adminPassword === "123456"
-      ) {
-        const mockToken = `offline_admin_token_${Date.now()}`;
-
-        tokenStorage.setAdminToken(mockToken);
-
+      if (!token) {
         return {
-          success: true,
-          isOfflineMode: true,
-          message: "تم تسجيل دخول المعلم / الإدارة بنجاح",
-
-          data: {
-            token: mockToken,
-          },
-
-          token: mockToken,
+          success: false,
+          message: "لم يُرجع الخادم رمز دخول صالحًا",
         };
       }
 
+      tokenStorage.setAdminToken(token);
       return {
-        success: false,
-        isOfflineMode: true,
-        message: "البريد الإلكتروني أو كلمة المرور غير صحيحة.",
+        ...result,
+        success: true,
+        message: result?.message || "تم تسجيل دخول المعلم / الإدارة بنجاح",
+        token,
       };
     }
 
+    const errorMessage =
+      res.data?.message ||
+      res.data?.errors?.email?.[0] ||
+      res.data?.errors?.password?.[0] ||
+      res.error ||
+      "بيانات تسجيل الدخول غير صحيحة (تأكد من البريد الإلكتروني وكلمة المرور)";
+
     return {
       success: false,
-      error: res.error || "فشل تسجيل دخول الإدارة",
+      message: translateApiError(errorMessage),
+      error: translateApiError(errorMessage),
     };
   },
 
@@ -846,16 +615,9 @@ export const api = {
       };
     }
 
-    if (res.isNetworkError) {
-      return {
-        success: true,
-        isOfflineMode: true,
-        data: getOfflineRequests(),
-      };
-    }
-
     return {
       success: false,
+      data: [],
       error: res.error || "فشل تحميل طلبات التفعيل المعلقة",
     };
   },
@@ -881,72 +643,6 @@ export const api = {
       return normalizeApiSuccess(res);
     }
 
-    if (res.isNetworkError) {
-      const requests = getOfflineRequests();
-
-      const targetReq = requests.find((r) => r.id === subscriptionId);
-
-      const remainingReqs = requests.filter((r) => r.id !== subscriptionId);
-
-      saveOfflineRequests(remainingReqs);
-
-      const approved = getOfflineApproved();
-
-      const gradePrefix =
-        targetReq?.grade_id === 1
-          ? "SEC3"
-          : targetReq?.grade_id === 2
-            ? "SEC2"
-            : targetReq?.grade_id === 3
-              ? "SEC1"
-              : "PREP3";
-
-      const genCode = `${gradePrefix}-${Math.floor(Math.random() * 899) + 100}`;
-
-      const newApprovedItem = {
-        id: subscriptionId,
-
-        student: {
-          id: targetReq?.student_id || subscriptionId,
-          first_name: targetReq?.first_name || "طالب",
-          last_name: targetReq?.last_name || "جديد",
-          phone: targetReq?.phone || "",
-          parent_phone: targetReq?.parent_phone || "",
-          grade_id: targetReq?.grade_id || 1,
-        },
-
-        subscription_code: genCode,
-        status: "active",
-
-        start_date: new Date().toISOString().split("T")[0],
-
-        end_date: new Date(Date.now() + 365 * 86400000)
-          .toISOString()
-          .split("T")[0],
-
-        code_expires_at: new Date(Date.now() + 365 * 86400000)
-          .toISOString()
-          .split("T")[0],
-
-        device_identifier: null,
-      };
-
-      saveOfflineApproved([newApprovedItem, ...approved]);
-
-      return {
-        success: true,
-        isOfflineMode: true,
-
-        message: `تمت الموافقة وتفعيل كود الاشتراك [ ${genCode} ] بنجاح!`,
-
-        data: {
-          subscription: newApprovedItem,
-        },
-
-        subscription: newApprovedItem,
-      };
-    }
-
     return {
       success: false,
       error: res.error || "فشل قبول طلب التفعيل",
@@ -967,20 +663,6 @@ export const api = {
 
     if (res.success) {
       return normalizeApiSuccess(res);
-    }
-
-    if (res.isNetworkError) {
-      const requests = getOfflineRequests();
-
-      const remaining = requests.filter((r) => r.id !== subscriptionId);
-
-      saveOfflineRequests(remaining);
-
-      return {
-        success: true,
-        isOfflineMode: true,
-        message: "تم إلغاء / رفض طلب التفعيل بنجاح",
-      };
     }
 
     return {
@@ -1019,16 +701,9 @@ export const api = {
       };
     }
 
-    if (res.isNetworkError) {
-      return {
-        success: true,
-        isOfflineMode: true,
-        data: getOfflineApproved(),
-      };
-    }
-
     return {
       success: false,
+      data: [],
       error: res.error || "فشل تحميل قائمة الطلاب المعتمدين",
     };
   },
@@ -1047,29 +722,6 @@ export const api = {
 
     if (res.success) {
       return normalizeApiSuccess(res);
-    }
-
-    if (res.isNetworkError) {
-      const approved = getOfflineApproved();
-
-      const updated = approved.map((item) => {
-        if (item.id === subscriptionId) {
-          return {
-            ...item,
-            status: "cancelled",
-          };
-        }
-
-        return item;
-      });
-
-      saveOfflineApproved(updated);
-
-      return {
-        success: true,
-        isOfflineMode: true,
-        message: "تم تعطيل الاشتراك بنجاح",
-      };
     }
 
     return {
@@ -1099,68 +751,17 @@ export const api = {
       return normalizeApiSuccess(res);
     }
 
-    if (res.isNetworkError) {
-      const approved = getOfflineApproved();
-
-      const updated = approved.map((item) => {
-        if (item.id === subscriptionId) {
-          return {
-            ...item,
-            device_identifier: null,
-          };
-        }
-
-        return item;
-      });
-
-      saveOfflineApproved(updated);
-
-      return {
-        success: true,
-        isOfflineMode: true,
-
-        message:
-          "تمت إعادة ضبط الجهاز الموثوق بنجاح. يمكن للطالب الآن تسجيل الدخول من جهاز جديد.",
-      };
-    }
-
     return {
       success: false,
       error: res.error || "فشل إعادة ضبط جهاز الطالب",
+      status: res.status,
+      isNetworkError: res.isNetworkError,
     };
   },
 
   // Alias used by StudentContext
   async resetStudentDevice(subscriptionId) {
     return api.resetTrustedDevice(subscriptionId);
-  },
-
-  /**
-   * POST /api/v1/admin/subscriptions/{subscription}/activate
-   */
-  async reactivateSubscription(subscriptionId) {
-    const res = await request(
-      `/api/v1/admin/subscriptions/${subscriptionId}/activate`,
-      {
-        method: "POST",
-      },
-      "admin",
-    );
-
-    if (res.success) {
-      return normalizeApiSuccess(res);
-    }
-
-    return {
-      success: false,
-      error: res.error || "فشل إعادة تفعيل اشتراك الطالب",
-      status: res.status,
-      isNetworkError: res.isNetworkError,
-    };
-  },
-
-  async reactivateStudent(subscriptionId) {
-    return api.reactivateSubscription(subscriptionId);
   },
 
   /**
@@ -1177,38 +778,13 @@ export const api = {
 
     if (res.success) {
       const normalized = normalizeApiSuccess(res);
-
-      const list = Array.isArray(normalized.data)
-        ? normalized.data
-        : normalized.data?.data || [];
+      const codes = normalized.data;
+      const list = Array.isArray(codes)
+        ? codes
+        : codes?.students || codes?.data || [];
 
       return {
         ...normalized,
-        data: list,
-      };
-    }
-
-    if (res.isNetworkError) {
-      const approved = getOfflineApproved();
-
-      const list = approved
-        .filter(
-          (item) =>
-            item.student?.grade_id == gradeId && item.status === "active",
-        )
-        .map((item) => ({
-          student_name: `${item.student?.first_name || ""} ${
-            item.student?.last_name || ""
-          }`.trim(),
-
-          subscription_code: item.subscription_code,
-
-          grade_id: gradeId,
-        }));
-
-      return {
-        success: true,
-        isOfflineMode: true,
         data: list,
       };
     }
@@ -1241,45 +817,30 @@ export const api = {
     );
 
     if (res.success) {
-      return res.data;
-    }
-
-    if (res.isNetworkError) {
-      const approved = getOfflineApproved();
-
-      const list = approved.map((item) => ({
-        id: item.student?.id || item.id,
-
-        first_name: item.student?.first_name,
-
-        last_name: item.student?.last_name,
-
-        name: `${item.student?.first_name || ""} ${
-          item.student?.last_name || ""
-        }`.trim(),
-
-        phone: item.student?.phone,
-
-        parent_phone: item.student?.parent_phone,
-
-        grade_id: item.student?.grade_id || 1,
-
-        grade: getGradeNameById(item.student?.grade_id || 1),
-
-        subscription_code: item.subscription_code,
-
-        status: item.status,
-      }));
+      const payload = res.data?.data ?? res.data;
+      const list = Array.isArray(payload)
+        ? payload
+        : Array.isArray(payload?.data)
+          ? payload.data
+          : Array.isArray(res.data?.data)
+            ? res.data.data
+            : [];
 
       return {
         data: list,
-        current_page: 1,
-        last_page: 1,
-        total: list.length,
+        current_page:
+          payload?.current_page || res.data?.current_page || Number(page) || 1,
+        last_page: payload?.last_page || res.data?.last_page || 1,
+        total: payload?.total || res.data?.total || list.length,
       };
     }
 
-    throw new Error(res.error || "فشل تحميل قائمة الطلاب");
+    return {
+      data: [],
+      current_page: 1,
+      last_page: 1,
+      total: 0,
+    };
   },
 
   /**
@@ -1321,54 +882,20 @@ export const api = {
     );
 
     if (res.success) {
-      return res.data;
-    }
-
-    if (res.isNetworkError) {
-      const approved = getOfflineApproved();
-
-      const prefix =
-        body.grade_id === 1
-          ? "SEC3"
-          : body.grade_id === 2
-            ? "SEC2"
-            : body.grade_id === 3
-              ? "SEC1"
-              : "PREP3";
-
-      const code = `${prefix}-${Math.floor(Math.random() * 899) + 100}`;
-
-      const newId = Date.now();
-
-      const item = {
-        id: newId,
-
-        student: {
-          id: newId,
-          ...body,
-        },
-
-        subscription_code: code,
-        status: "active",
-        start_date: body.start_date,
-        end_date: body.end_date,
-        code_expires_at: body.code_expires_at,
-        device_identifier: null,
-      };
-
-      saveOfflineApproved([item, ...approved]);
-
+      const result = normalizeApiSuccess(res);
       return {
+        ...result,
         success: true,
-        isOfflineMode: true,
-
-        message: `تم إنشاء الطالب وتفعيل كود الاشتراك [ ${code} ] بنجاح!`,
-
-        student: item,
+        data: result.data?.data ?? result.data,
       };
     }
 
-    throw new Error(res.error || "فشل إنشاء حساب الطالب");
+    return {
+      success: false,
+      message: res.error || "فشل إنشاء حساب الطالب",
+      status: res.status,
+      isNetworkError: res.isNetworkError,
+    };
   },
 
   /**
@@ -1384,24 +911,18 @@ export const api = {
     );
 
     if (res.success) {
-      return res.data;
+      const payload = res.data?.data ?? res.data?.student ?? res.data;
+      return {
+        success: true,
+        data: payload,
+      };
     }
 
-    if (res.isNetworkError) {
-      const approved = getOfflineApproved();
-
-      const found = approved.find(
-        (item) => item.student?.id == studentId || item.id == studentId,
-      );
-
-      if (found) {
-        return found;
-      }
-
-      throw new Error("لم يتم العثور على بيانات الطالب");
-    }
-
-    throw new Error(res.error || "فشل جلب بيانات الطالب");
+    return {
+      success: false,
+      data: null,
+      error: res.error || "فشل جلب بيانات الطالب",
+    };
   },
 
   /**
@@ -1429,33 +950,6 @@ export const api = {
 
     if (res.success) {
       return res.data;
-    }
-
-    if (res.isNetworkError) {
-      const approved = getOfflineApproved();
-
-      const updated = approved.map((item) => {
-        if (item.student?.id == studentId || item.id == studentId) {
-          return {
-            ...item,
-
-            student: {
-              ...item.student,
-              ...body,
-            },
-          };
-        }
-
-        return item;
-      });
-
-      saveOfflineApproved(updated);
-
-      return {
-        success: true,
-        isOfflineMode: true,
-        message: "تم تحديث بيانات الطالب بنجاح",
-      };
     }
 
     throw new Error(res.error || "فشل تحديث بيانات الطالب");
@@ -1527,63 +1021,7 @@ export const api = {
       return res.data;
     }
 
-    if (res.isNetworkError) {
-      return {
-        success: true,
-        isOfflineMode: true,
-        message: "تم حفظ المحاضرة محلياً (وضع عدم الاتصال)",
-
-        lesson: {
-          id: Date.now(),
-          ...body,
-        },
-      };
-    }
-
     throw new Error(res.error || "فشل إنشاء المحاضرة");
-  },
-
-  /**
-   * PUT /api/v1/admin/lessons/{lesson}
-   *
-   * Added because StudentContext uses updateAdminLesson.
-   */
-  async updateAdminLesson(lessonId, payload) {
-    const body = {
-      grade_id: Number(payload.grade_id || payload.gradeId || 1),
-
-      section_name:
-        payload.section_name || payload.branch || "الجبر والهندسة الفراغية",
-
-      title: payload.title?.trim() || "",
-
-      description: payload.description || "",
-
-      video_url: payload.video_url || payload.videoUrl,
-    };
-
-    const res = await request(
-      `/api/v1/admin/lessons/${lessonId}`,
-      {
-        method: "PUT",
-        body: JSON.stringify(body),
-      },
-      "admin",
-    );
-
-    if (res.success) {
-      return res.data;
-    }
-
-    if (res.isNetworkError) {
-      return {
-        success: true,
-        isOfflineMode: true,
-        message: "تم تعديل المحاضرة محلياً",
-      };
-    }
-
-    throw new Error(res.error || "فشل تعديل المحاضرة");
   },
 
   /**
@@ -1600,14 +1038,6 @@ export const api = {
 
     if (res.success) {
       return res.data;
-    }
-
-    if (res.isNetworkError) {
-      return {
-        success: true,
-        isOfflineMode: true,
-        message: "تم حذف المحاضرة",
-      };
     }
 
     throw new Error(res.error || "فشل حذف المحاضرة");
@@ -1635,10 +1065,6 @@ export const api = {
       return payload?.exams || payload?.data || [];
     }
 
-    if (res.isNetworkError) {
-      return getOfflineExams();
-    }
-
     throw new Error(res.error || "فشل جلب قائمة الامتحانات");
   },
 
@@ -1646,8 +1072,13 @@ export const api = {
    * POST /api/v1/admin/exams
    */
   async createAdminExam(payload = {}) {
+    const lessonId = Number(payload.lesson_id ?? payload.lessonId);
+    if (!Number.isInteger(lessonId) || lessonId < 1) {
+      throw new Error("يُرجى اختيار محاضرة لربط الامتحان بها.");
+    }
+
     const body = {
-      lesson_id: Number(payload.lesson_id || payload.lessonId || 1),
+      lesson_id: lessonId,
       title: String(payload.title || "").trim(),
       description: payload.description || "",
       duration_minutes:
@@ -1674,24 +1105,6 @@ export const api = {
       return res.data;
     }
 
-    if (res.isNetworkError) {
-      const exams = getOfflineExams();
-      const newExam = {
-        id: Date.now(),
-        ...body,
-        is_active: true,
-        questions: [],
-      };
-      saveOfflineExams([...exams, newExam]);
-      return {
-        success: true,
-        isOfflineMode: true,
-        data: newExam,
-        exam: newExam,
-        message: "تم إنشاء الاختبار بنجاح (محلياً)",
-      };
-    }
-
     throw new Error(res.error || "فشل إنشاء الاختبار");
   },
 
@@ -1709,12 +1122,6 @@ export const api = {
 
     if (res.success) {
       return res.data?.data || res.data;
-    }
-
-    if (res.isNetworkError) {
-      const exams = getOfflineExams();
-      const exam = exams.find((e) => e.id == examId) || exams[0];
-      return exam;
     }
 
     throw new Error(res.error || "فشل جلب تفاصيل الاختبار");
@@ -1737,19 +1144,6 @@ export const api = {
       return res.data;
     }
 
-    if (res.isNetworkError) {
-      const exams = getOfflineExams();
-      const updated = exams.map((e) =>
-        e.id == examId ? { ...e, ...payload } : e,
-      );
-      saveOfflineExams(updated);
-      return {
-        success: true,
-        isOfflineMode: true,
-        message: "تم تحديث الاختبار بنجاح",
-      };
-    }
-
     throw new Error(res.error || "فشل تعديل الاختبار");
   },
 
@@ -1767,17 +1161,6 @@ export const api = {
 
     if (res.success) {
       return res.data;
-    }
-
-    if (res.isNetworkError) {
-      const exams = getOfflineExams();
-      const filtered = exams.filter((e) => e.id != examId);
-      saveOfflineExams(filtered);
-      return {
-        success: true,
-        isOfflineMode: true,
-        message: "تم حذف الاختبار بنجاح",
-      };
     }
 
     throw new Error(res.error || "فشل حذف الاختبار");
@@ -1809,31 +1192,6 @@ export const api = {
       return res.data;
     }
 
-    if (res.isNetworkError) {
-      const exams = getOfflineExams();
-      const newQuestion = {
-        id: Date.now(),
-        ...body,
-        options: [],
-      };
-      const updated = exams.map((e) => {
-        if (e.id == examId) {
-          return {
-            ...e,
-            questions: [...(e.questions || []), newQuestion],
-          };
-        }
-        return e;
-      });
-      saveOfflineExams(updated);
-      return {
-        success: true,
-        isOfflineMode: true,
-        data: newQuestion,
-        message: "تمت إضافة السؤال بنجاح",
-      };
-    }
-
     throw new Error(res.error || "فشل إضافة السؤال");
   },
 
@@ -1854,22 +1212,6 @@ export const api = {
       return res.data;
     }
 
-    if (res.isNetworkError) {
-      const exams = getOfflineExams();
-      const updated = exams.map((e) => ({
-        ...e,
-        questions: (e.questions || []).map((q) =>
-          q.id == questionId ? { ...q, ...payload } : q,
-        ),
-      }));
-      saveOfflineExams(updated);
-      return {
-        success: true,
-        isOfflineMode: true,
-        message: "تم تعديل السؤال بنجاح",
-      };
-    }
-
     throw new Error(res.error || "فشل تعديل السؤال");
   },
 
@@ -1887,20 +1229,6 @@ export const api = {
 
     if (res.success) {
       return res.data;
-    }
-
-    if (res.isNetworkError) {
-      const exams = getOfflineExams();
-      const updated = exams.map((e) => ({
-        ...e,
-        questions: (e.questions || []).filter((q) => q.id != questionId),
-      }));
-      saveOfflineExams(updated);
-      return {
-        success: true,
-        isOfflineMode: true,
-        message: "تم حذف السؤال بنجاح",
-      };
     }
 
     throw new Error(res.error || "فشل حذف السؤال");
@@ -1932,37 +1260,6 @@ export const api = {
       return res.data;
     }
 
-    if (res.isNetworkError) {
-      const exams = getOfflineExams();
-      const newOption = {
-        id: Date.now(),
-        ...body,
-      };
-      const updated = exams.map((e) => ({
-        ...e,
-        questions: (e.questions || []).map((q) => {
-          if (q.id == questionId) {
-            // If new option is marked correct, toggle others to false
-            const currentOpts = (q.options || []).map((opt) =>
-              body.is_correct ? { ...opt, is_correct: false } : opt,
-            );
-            return {
-              ...q,
-              options: [...currentOpts, newOption],
-            };
-          }
-          return q;
-        }),
-      }));
-      saveOfflineExams(updated);
-      return {
-        success: true,
-        isOfflineMode: true,
-        data: newOption,
-        message: "تمت إضافة خيار الإجابة بنجاح",
-      };
-    }
-
     throw new Error(res.error || "فشل إضافة خيار الإجابة");
   },
 
@@ -1983,25 +1280,6 @@ export const api = {
       return res.data;
     }
 
-    if (res.isNetworkError) {
-      const exams = getOfflineExams();
-      const updated = exams.map((e) => ({
-        ...e,
-        questions: (e.questions || []).map((q) => ({
-          ...q,
-          options: (q.options || []).map((opt) =>
-            opt.id == optionId ? { ...opt, ...payload } : opt,
-          ),
-        })),
-      }));
-      saveOfflineExams(updated);
-      return {
-        success: true,
-        isOfflineMode: true,
-        message: "تم تعديل خيار الإجابة بنجاح",
-      };
-    }
-
     throw new Error(res.error || "فشل تعديل خيار الإجابة");
   },
 
@@ -2019,23 +1297,6 @@ export const api = {
 
     if (res.success) {
       return res.data;
-    }
-
-    if (res.isNetworkError) {
-      const exams = getOfflineExams();
-      const updated = exams.map((e) => ({
-        ...e,
-        questions: (e.questions || []).map((q) => ({
-          ...q,
-          options: (q.options || []).filter((opt) => opt.id != optionId),
-        })),
-      }));
-      saveOfflineExams(updated);
-      return {
-        success: true,
-        isOfflineMode: true,
-        message: "تم حذف خيار الإجابة بنجاح",
-      };
     }
 
     throw new Error(res.error || "فشل حذف خيار الإجابة");
@@ -2061,16 +1322,9 @@ export const api = {
       return normalizeApiSuccess(res);
     }
 
-    if (res.isNetworkError) {
-      return {
-        success: false,
-        isOfflineMode: true,
-        data: null,
-      };
-    }
-
     return {
       success: false,
+      data: null,
       error: res.error || "فشل جلب الملف الشخصي للطالب",
     };
   },
@@ -2093,10 +1347,6 @@ export const api = {
       return payload?.lessons || payload?.data || [];
     }
 
-    if (res.isNetworkError) {
-      return null;
-    }
-
     throw new Error(res.error || "فشل جلب دروس الطالب");
   },
 
@@ -2114,14 +1364,6 @@ export const api = {
 
     if (res.success) {
       return res.data?.data || res.data;
-    }
-
-    if (res.isNetworkError) {
-      return {
-        id: Number(videoId),
-        is_locked: false,
-        status: "accessible",
-      };
     }
 
     const err = new Error(res.error || "الفيديو مقفل أو غير متاح حالياً");
@@ -2172,14 +1414,6 @@ export const api = {
       return normalizeApiSuccess(res);
     }
 
-    if (res.isNetworkError) {
-      return {
-        success: true,
-        isOfflineMode: true,
-        data: body,
-      };
-    }
-
     return {
       success: false,
       error: res.error,
@@ -2206,13 +1440,6 @@ export const api = {
       return res.data?.data || res.data;
     }
 
-    if (res.isNetworkError) {
-      const exams = getOfflineExams();
-      const exam =
-        exams.find((e) => e.id == examId || e.lesson_id == examId) || exams[0];
-      return exam;
-    }
-
     const err = new Error(res.error || "الاختبار مقفل أو غير متاح حالياً");
     err.status = res.status;
     err.isLocked = res.status === 403;
@@ -2233,14 +1460,6 @@ export const api = {
 
     if (res.success) {
       return res.data;
-    }
-
-    if (res.isNetworkError) {
-      return {
-        success: true,
-        isOfflineMode: true,
-        attempt_id: Date.now(),
-      };
     }
 
     throw new Error(res.error || "فشل بدء الاختبار");
@@ -2292,14 +1511,6 @@ export const api = {
 
     if (res.success) {
       return res.data;
-    }
-
-    if (res.isNetworkError) {
-      return {
-        success: true,
-        isOfflineMode: true,
-        message: "تم تسليم الإجابات بنجاح",
-      };
     }
 
     throw new Error(res.error || "فشل تسليم إجابات الاختبار");

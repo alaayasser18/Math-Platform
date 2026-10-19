@@ -1,6 +1,6 @@
 export function getYouTubeVideoId(url) {
   if (!url) {
-    return "qJ-Op0x0yCM";
+    return "";
   }
 
   const regExp =
@@ -16,5 +16,5 @@ export function getYouTubeVideoId(url) {
     return url.trim();
   }
 
-  return "qJ-Op0x0yCM";
+  return "";
 }

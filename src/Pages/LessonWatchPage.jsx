@@ -3,6 +3,7 @@ import { useParams, Link, useNavigate } from "react-router-dom";
 import { useStudent } from "../context/useStudent";
 import { FileText, Award, ArrowRight, CheckCircle2 } from "lucide-react";
 import ProtectedVideoPlayer from "../Components/ProtectedVideoPlayer";
+import { getYouTubeVideoId } from "../utils/youtube";
 
 export default function LessonWatchPage() {
   const { id } = useParams();
@@ -12,7 +13,12 @@ export default function LessonWatchPage() {
   const isTeacher = userRole === "teacher";
 
   const lesson = (lessonsList || []).find((l) => l.id === parseInt(id));
-  const videoId = lesson?.video?.id || lesson?.video_id || lesson?.id;
+  const videoId =
+    lesson?.videoId ||
+    lesson?.video?.id ||
+    lesson?.video_id ||
+    lesson?.videos?.[0]?.id ||
+    null;
   const [videoAccess, setVideoAccess] = useState({
     id: null,
     status: "checking",
@@ -20,7 +26,11 @@ export default function LessonWatchPage() {
   });
 
   useEffect(() => {
-    if (!lesson || isTeacher || !videoId) {
+    if (!lesson || isTeacher) {
+      return;
+    }
+
+    if (!videoId) {
       return;
     }
 
@@ -36,6 +46,11 @@ export default function LessonWatchPage() {
           response?.data ||
           response;
 
+        const resolvedVideoUrl =
+          video?.video_url ||
+          video?.videoUrl ||
+          video?.url ||
+          lesson.videoUrl;
         const isLocked =
           video?.is_locked ||
           video?.access_status === "locked" ||
@@ -43,7 +58,11 @@ export default function LessonWatchPage() {
 
         setVideoAccess({
           id: videoId,
-          status: isLocked ? "locked" : "allowed",
+          status: isLocked
+            ? "locked"
+            : getYouTubeVideoId(resolvedVideoUrl)
+              ? "allowed"
+              : "unavailable",
           video,
         });
       })
@@ -62,8 +81,15 @@ export default function LessonWatchPage() {
   }, [getStudentVideo, isTeacher, lesson, videoId]);
 
   const videoAccessStatus = isTeacher
-    ? "allowed"
-    : videoAccess.id === videoId
+    ? videoId &&
+      getYouTubeVideoId(
+        lesson.videoUrl || lesson.video?.video_url || lesson.video?.url,
+      )
+      ? "allowed"
+      : "unavailable"
+    : !videoId
+      ? "unavailable"
+      : videoAccess.id === videoId
       ? videoAccess.status
       : "checking";
 
@@ -227,8 +253,7 @@ export default function LessonWatchPage() {
                   videoAccess.video?.video_url ||
                   videoAccess.video?.videoUrl ||
                   videoAccess.video?.url ||
-                  lesson.videoUrl ||
-                  "https://youtu.be/qJ-Op0x0yCM?si=HrcEYlkOUWW4X5m9"
+                  lesson.videoUrl
                 }
                 title={lesson.title}
                 duration={lesson.duration}
@@ -241,7 +266,9 @@ export default function LessonWatchPage() {
                   ? "جاري التحقق من صلاحية مشاهدة الفيديو..."
                   : videoAccessStatus === "locked"
                     ? "هذا الفيديو مقفل أو غير متاح لاشتراكك."
-                    : "تعذر التحقق من صلاحية مشاهدة الفيديو. حاولي مرة أخرى لاحقًا."}
+                    : videoAccessStatus === "unavailable"
+                      ? "لا يوجد فيديو مرتبط بهذه المحاضرة حتى الآن."
+                    : "تعذر التحقق من صلاحية مشاهدة الفيديو. يُرجى المحاولة مرة أخرى لاحقًا."}
               </div>
             )}
           </div>

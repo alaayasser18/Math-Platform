@@ -8,9 +8,21 @@ export default function TopBar() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const isTeacher = userRole === "teacher";
-  const studentName = student?.name || "أحمد محمد الشريف";
-  const studentGrade = student?.grade || "الصف الثالث الثانوي";
-  const studentCode = student?.code || "SEC3-101";
+  const studentName = isTeacher
+    ? "لوحة المعلم"
+    : student?.name ||
+      (student?.first_name
+        ? `${student.first_name} ${student.last_name || ""}`.trim()
+        : "طالب");
+  const studentGrade = student?.grade || "";
+  const studentCode =
+    (typeof student?.code === "string" && student.code) ||
+    (typeof student?.subscription_code === "string" &&
+      student.subscription_code) ||
+    student?.subscription_code?.code ||
+    student?.subscription?.code ||
+    student?.subscription?.subscription_code ||
+    "";
 
   return (
     <header className="topbar">
@@ -51,7 +63,6 @@ export default function TopBar() {
                   `nav-link ${isActive ? "active" : ""}`
                 }
                 style={{
-                  color: "var(--cyan)",
                   fontWeight: 800,
                   whiteSpace: "nowrap",
                 }}

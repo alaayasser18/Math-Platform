@@ -13,11 +13,11 @@ import { useStudent } from "../context/useStudent";
 import { getYouTubeVideoId } from "../utils/youtube";
 
 export default function ProtectedVideoPlayer({
-  videoUrl = "https://youtu.be/qJ-Op0x0yCM?si=HrcEYlkOUWW4X5m9",
+  videoUrl = "",
   title = "شرح المحاضرة - مستر محمد عبد الخالق",
   duration: _duration = "45 دقيقة",
   thumbnail = "/teacher.png",
-  videoId = 1,
+  videoId = null,
 }) {
   const { student, userRole, reportVideoProgress } = useStudent();
 
@@ -258,8 +258,8 @@ export default function ProtectedVideoPlayer({
         Math.round((currentTime / totalDuration) * 100),
       );
 
-      if (typeof reportVideoProgress === "function") {
-        reportVideoProgress(videoId || 1, {
+      if (typeof reportVideoProgress === "function" && videoId) {
+        reportVideoProgress(videoId, {
           current_position_seconds: Math.floor(currentTime),
 
           watched_duration_seconds: Math.floor(currentTime),
@@ -662,11 +662,23 @@ export default function ProtectedVideoPlayer({
               }}
             />
 
-            <span>{student?.name || "أحمد محمد الشريف"}</span>
+            <span>
+              {student?.name ||
+                (student?.first_name
+                  ? `${student.first_name} ${student.last_name || ""}`.trim()
+                  : "طالب")}
+            </span>
 
             <span>•</span>
 
-            <span>{student?.phone || "01012345678"}</span>
+            <span>
+              {student?.phone ||
+                (typeof student?.subscription_code === "string"
+                  ? student.subscription_code
+                  : student?.subscription_code?.code ||
+                    student?.subscription?.code ||
+                    "")}
+            </span>
 
             <span
               style={{

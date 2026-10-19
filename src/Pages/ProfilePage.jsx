@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useStudent } from "../context/useStudent";
 import {
   User,
@@ -12,18 +13,76 @@ import {
   FileQuestion,
   CheckCircle2,
   Award,
+  Key,
+  RefreshCw,
+  Clock,
+  Smartphone,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 
 export default function ProfilePage() {
-  const { student, lessonsList, memosList, openAuthModal } = useStudent();
+  const {
+    student,
+    lessonsList,
+    memosList,
+    openAuthModal,
+    fetchStudentProfile,
+    showToast,
+  } = useStudent();
 
-  const studentName = student?.name || "أحمد محمد الشريف";
-  const studentGrade = student?.grade || "الصف الثالث الثانوي";
-  const studentPhone = student?.phone || "01012345678";
-  const parentPhone = student?.parentPhone || "01198765432";
-  const governorate = student?.governorate || "القاهرة";
-  const regDate = student?.registeredAt || "2026-08-25";
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    if (typeof fetchStudentProfile === "function") {
+      await fetchStudentProfile();
+    }
+    setIsRefreshing(false);
+    showToast("تم تحديث بيانات الحساب من السيرفر بنجاح");
+  };
+
+  const studentName =
+    student?.name ||
+    `${student?.first_name || ""} ${student?.last_name || ""}`.trim() ||
+    "طالب";
+  const studentGrade = student?.grade || "غير محدد";
+  const studentPhone = student?.phone || "غير مسجل";
+  const parentPhone =
+    student?.parent_phone || student?.parentPhone || "غير مسجل";
+  const governorate = student?.governorate || "غير محدد";
+  const regDate =
+    student?.start_date ||
+    student?.created_at ||
+    student?.registeredAt ||
+    "-";
+
+  const rawSubscriptionCode =
+    student?.subscription_code || student?.code || student?.subscription;
+  const subscriptionCode =
+    (typeof rawSubscriptionCode === "string" && rawSubscriptionCode) ||
+    rawSubscriptionCode?.code ||
+    rawSubscriptionCode?.subscription_code ||
+    student?.subscription?.code ||
+    student?.subscription?.subscription_code ||
+    "-";
+
+  const subscriptionStatus =
+    student?.subscription?.status ||
+    student?.subscription?.approval_status ||
+    (student?.status === "active" ? "نشط ومفعل" : "معتمد");
+
+  const subscriptionEndDate =
+    student?.subscription?.end_date ||
+    student?.subscription?.expires_at ||
+    student?.subscription?.code_expires_at ||
+    student?.end_date ||
+    "مستمر حتى نهاية العام";
+
+  const trustedDeviceId =
+    student?.trusted_device?.device_identifier ||
+    (typeof student?.trusted_device === "string"
+      ? student?.trusted_device
+      : student?.device_identifier || null);
 
   // Grade-filtered content for this student
   const studentLessons = (lessonsList || []).filter(
@@ -132,14 +191,39 @@ export default function ProfilePage() {
                 </span>
                 <span>•</span>
                 <span>
-                  كود الطالب:{" "}
+                  كود الاشتراك:{" "}
                   <strong style={{ color: "#fff", fontFamily: "monospace" }}>
-                    #{student?.code || student?.id || "std-1"}
+                    #{subscriptionCode}
                   </strong>
                 </span>
               </div>
             </div>
           </div>
+
+          {/* Server Profile Refresh Button */}
+          <button
+            onClick={handleRefresh}
+            disabled={isRefreshing}
+            className="btn-secondary"
+            style={{
+              padding: "7px 14px",
+              fontSize: "0.8rem",
+              display: "flex",
+              alignItems: "center",
+              gap: "7px",
+              borderColor: "rgba(6, 182, 212, 0.4)",
+              color: "var(--cyan)",
+            }}
+            title="تحديث بيانات الحساب والاشتراك من السيرفر"
+          >
+            <RefreshCw
+              size={14}
+              style={{
+                animation: isRefreshing ? "spin 1s linear infinite" : "none",
+              }}
+            />
+            <span>{isRefreshing ? "جارٍ التحديث..." : "تحديث البيانات"}</span>
+          </button>
         </div>
 
         {/* Academic Performance Summary */}
@@ -425,8 +509,42 @@ export default function ProfilePage() {
                   marginBottom: "3px",
                 }}
               >
-                <ShieldCheck size={13} style={{ color: "var(--emerald)" }} />
-                <span>حماية الجهاز الموثوق:</span>
+                <Key size={13} style={{ color: "var(--cyan)" }} />
+                <span>كود الاشتراك الفعلي:</span>
+              </div>
+              <div
+                style={{
+                  fontSize: "0.9rem",
+                  fontWeight: 800,
+                  color: "var(--cyan)",
+                  fontFamily: "monospace",
+                  letterSpacing: "1px",
+                }}
+              >
+                {subscriptionCode}
+              </div>
+            </div>
+
+            <div
+              style={{
+                background: "#090e1a",
+                padding: "12px 14px",
+                borderRadius: "var(--radius-md)",
+                border: "1px solid var(--border-subtle)",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  fontSize: "0.75rem",
+                  color: "var(--text-muted)",
+                  marginBottom: "3px",
+                }}
+              >
+                <CheckCircle2 size={13} style={{ color: "var(--emerald)" }} />
+                <span>حالة الاشتراك بالباك:</span>
               </div>
               <div
                 style={{
@@ -435,7 +553,73 @@ export default function ProfilePage() {
                   color: "var(--emerald)",
                 }}
               >
-                {student?.trustedDevice?.name || "جهازك الحالي مسجل ومحمي 🔒"}
+                {subscriptionStatus}
+              </div>
+            </div>
+
+            <div
+              style={{
+                background: "#090e1a",
+                padding: "12px 14px",
+                borderRadius: "var(--radius-md)",
+                border: "1px solid var(--border-subtle)",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  fontSize: "0.75rem",
+                  color: "var(--text-muted)",
+                  marginBottom: "3px",
+                }}
+              >
+                <Clock size={13} style={{ color: "var(--amber)" }} />
+                <span>صلاحية الاشتراك:</span>
+              </div>
+              <div
+                style={{
+                  fontSize: "0.85rem",
+                  fontWeight: 800,
+                  color: "#ffffff",
+                }}
+              >
+                {subscriptionEndDate}
+              </div>
+            </div>
+
+            <div
+              style={{
+                background: "#090e1a",
+                padding: "12px 14px",
+                borderRadius: "var(--radius-md)",
+                border: "1px solid var(--border-subtle)",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  fontSize: "0.75rem",
+                  color: "var(--text-muted)",
+                  marginBottom: "3px",
+                }}
+              >
+                <ShieldCheck size={13} style={{ color: "var(--emerald)" }} />
+                <span>حماية الجهاز الموثوق:</span>
+              </div>
+              <div
+                style={{
+                  fontSize: "0.8rem",
+                  fontWeight: 800,
+                  color: "var(--emerald)",
+                  fontFamily: trustedDeviceId ? "monospace" : "inherit",
+                  wordBreak: "break-all",
+                }}
+              >
+                {trustedDeviceId ? `جهاز موثق (${trustedDeviceId.slice(0, 12)}...) 🔒` : "جهازك الحالي مسجل ومحمي 🔒"}
               </div>
             </div>
           </div>

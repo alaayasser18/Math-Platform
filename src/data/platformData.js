@@ -2,9 +2,9 @@ export const GRADES = [
   { id: 'prep1', numericId: 6, name: 'الصف الأول الإعدادي', shortName: '1 إعدادي' },
   { id: 'prep2', numericId: 5, name: 'الصف الثاني الإعدادي', shortName: '2 إعدادي' },
   { id: 'prep3', numericId: 4, name: 'الصف الثالث الإعدادي', shortName: '3 إعدادي' },
-  { id: 'sec1', numericId: 3, name: 'الصف الأول الثانوي', shortName: '1 ثانوي' },
+  { id: 'sec1', numericId: 1, name: 'الصف الأول الثانوي', shortName: '1 ثانوي' },
   { id: 'sec2', numericId: 2, name: 'الصف الثاني الثانوي', shortName: '2 ثانوي' },
-  { id: 'sec3', numericId: 1, name: 'الصف الثالث الثانوي', shortName: '3 ثانوي' },
+  { id: 'sec3', numericId: 3, name: 'الصف الثالث الثانوي', shortName: '3 ثانوي' },
 ];
 
 export const BRANCHES = [
@@ -17,8 +17,6 @@ export const BRANCHES = [
   'الهندسة التحليلية',
   'الجبر والإحصاء'
 ];
-
-export const TEACHER_CODES = ['TEACHER', 'ADMIN', '01002727502', 'MOHAMED2026', 'مدرس', 'المستر'];
 
 export const INITIAL_STUDENT = {
   id: 'std-1',

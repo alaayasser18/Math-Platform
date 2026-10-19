@@ -32,8 +32,8 @@ export default function LoginPage() {
 
   // Form 2: Admin Login State (Email & Password)
   const [adminData, setAdminData] = useState({
-    email: "admin@example.com",
-    password: "Admin@12345",
+    email: "",
+    password: "",
   });
 
   // Password visibility toggle
@@ -130,7 +130,7 @@ export default function LoginPage() {
     setIsLoading(false);
 
     if (!res?.success) {
-      setErrorMessage(res?.message || "فشل تسجيل الدخول");
+      setErrorMessage(res?.message || res?.error || "فشل تسجيل الدخول");
     }
   };
   // 3. Handle Activation Request Submission with Validation

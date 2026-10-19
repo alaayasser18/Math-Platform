@@ -204,10 +204,19 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
           throw new Error(attempt.message || "تعذر بدء الاختبار");
         }
 
+        const startedAttemptId =
+          attempt?.attempt_id ||
+          attempt?.attempt?.id ||
+          attempt?.data?.attempt_id ||
+          attempt?.data?.attempt?.id ||
+          attempt?.data?.id;
+
+        if (!startedAttemptId) {
+          throw new Error("لم يُرجع الخادم رقم محاولة الاختبار");
+        }
+
         if (isMounted) {
-          setAttemptId(
-            attempt?.attempt_id || attempt?.data?.attempt_id || null,
-          );
+          setAttemptId(startedAttemptId);
           setExamLoadState("ready");
         }
       } catch (error) {
@@ -276,7 +285,7 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
             selectedAnswers[index] + 1,
         }));
         const response = await submitExamAttempt(examId, {
-          attempt_id: attemptId || 1,
+          attempt_id: attemptId,
           answers: answersPayload,
         });
 

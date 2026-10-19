@@ -1,12 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 
 import {
-  INITIAL_STUDENT,
-  INITIAL_STUDENTS_LIST,
-  LESSONS_DATA,
   MEMOS_DATA,
   GRADES,
-  TEACHER_CODES,
   TEACHER_INFO,
 } from "../data/platformData";
 
@@ -25,9 +21,8 @@ export const StudentProvider = ({ children }) => {
   // AUTH STATE
   // ============================================================
 
-  const [isAuthenticated, setIsAuthenticated] = useState(() => {
-    return localStorage.getItem("el_eamid_auth") === "true";
-  });
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isAuthReady, setIsAuthReady] = useState(false);
 
   const [userRole, setUserRole] = useState(() => {
     return localStorage.getItem("el_eamid_role") || "student";
@@ -36,20 +31,13 @@ export const StudentProvider = ({ children }) => {
   const [student, setStudent] = useState(() => {
     try {
       const savedStudent = localStorage.getItem("el_eamid_student");
-      return savedStudent ? JSON.parse(savedStudent) : INITIAL_STUDENT;
+      return savedStudent ? JSON.parse(savedStudent) : null;
     } catch {
-      return INITIAL_STUDENT;
+      return null;
     }
   });
 
-  const [studentsList, setStudentsList] = useState(() => {
-    try {
-      const savedStudents = localStorage.getItem("el_eamid_students_list");
-      return savedStudents ? JSON.parse(savedStudents) : INITIAL_STUDENTS_LIST;
-    } catch {
-      return INITIAL_STUDENTS_LIST;
-    }
-  });
+  const [studentsList, setStudentsList] = useState([]);
 
   // ============================================================
   // REQUESTS / SUBSCRIPTIONS
@@ -80,6 +68,16 @@ export const StudentProvider = ({ children }) => {
   // ============================================================
 
   const [paginatedStudents, setPaginatedStudents] = useState([]);
+  const [locallyRemovedStudentIds, setLocallyRemovedStudentIds] = useState(() => {
+    try {
+      const savedIds = JSON.parse(
+        localStorage.getItem("el_eamid_locally_removed_students") || "[]",
+      );
+      return Array.isArray(savedIds) ? savedIds.map(String) : [];
+    } catch {
+      return [];
+    }
+  });
   const [studentsPagination, setStudentsPagination] = useState({
     current_page: 1,
     last_page: 1,
@@ -92,35 +90,7 @@ export const StudentProvider = ({ children }) => {
   // LESSONS
   // ============================================================
 
-  const [lessonsList, setLessonsList] = useState(() => {
-    try {
-      const savedLessons = localStorage.getItem("el_eamid_lessons_list");
-
-      if (!savedLessons) {
-        return LESSONS_DATA;
-      }
-
-      const parsedLessons = JSON.parse(savedLessons);
-
-      if (!Array.isArray(parsedLessons)) {
-        return LESSONS_DATA;
-      }
-
-      if (parsedLessons.length < LESSONS_DATA.length) {
-        return LESSONS_DATA;
-      }
-
-      return parsedLessons.map((lesson) => ({
-        ...lesson,
-        videoUrl:
-          !lesson.videoUrl || lesson.videoUrl.includes("dQw4w9WgXcQ")
-            ? "https://youtu.be/qJ-Op0x0yCM?si=HrcEYlkOUWW4X5m9"
-            : lesson.videoUrl,
-      }));
-    } catch {
-      return LESSONS_DATA;
-    }
-  });
+  const [lessonsList, setLessonsList] = useState([]);
 
   // ============================================================
   // MEMOS
@@ -142,6 +112,67 @@ export const StudentProvider = ({ children }) => {
 
   const [toast, setToast] = useState(null);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const restoreSession = async () => {
+      const savedRole = localStorage.getItem("el_eamid_role");
+      const hasSavedSession =
+        localStorage.getItem("el_eamid_auth") === "true";
+      const savedToken =
+        savedRole === "teacher"
+          ? tokenStorage.getAdminToken()
+          : savedRole === "student"
+            ? tokenStorage.getStudentToken()
+            : null;
+
+      // Clean up any legacy offline mock keys from localStorage
+      localStorage.removeItem("mathplatform_offline_requests");
+      localStorage.removeItem("mathplatform_offline_approved");
+      localStorage.removeItem("mathplatform_offline_exams");
+      localStorage.removeItem("el_eamid_students_list");
+
+      if (!hasSavedSession || !savedToken) {
+        tokenStorage.clearTokens();
+        localStorage.removeItem("el_eamid_auth");
+        localStorage.removeItem("el_eamid_role");
+        localStorage.removeItem("el_eamid_student");
+        if (isMounted) setIsAuthReady(true);
+        return;
+      }
+
+      try {
+        const result = await api.validateSession(savedRole);
+
+        if (!isMounted) return;
+
+        if (result?.success) {
+          setUserRole(savedRole);
+          setIsAuthenticated(true);
+        } else {
+          if (result?.status === 401 || result?.status === 403) {
+            tokenStorage.clearTokens();
+            localStorage.removeItem("el_eamid_auth");
+            localStorage.removeItem("el_eamid_role");
+            localStorage.removeItem("el_eamid_student");
+          }
+          setIsAuthenticated(false);
+        }
+      } catch (error) {
+        console.error("Failed to validate saved authentication:", error);
+        if (isMounted) setIsAuthenticated(false);
+      } finally {
+        if (isMounted) setIsAuthReady(true);
+      }
+    };
+
+    restoreSession();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   // ============================================================
   // TOAST
@@ -218,7 +249,7 @@ export const StudentProvider = ({ children }) => {
   }, []);
 
   // ============================================================
-  // FETCH STUDENT PROFILE
+  // FETCH STUDENT PROFILE (GET /api/v1/student/profile)
   // ============================================================
 
   const fetchStudentProfile = useCallback(async () => {
@@ -233,24 +264,76 @@ export const StudentProvider = ({ children }) => {
 
       if (result?.success && result.data) {
         const profile = result.data;
+        const profileStudent = profile.student || profile.user || profile;
+        const subscription =
+          profile.subscription ||
+          profile.active_subscription ||
+          (typeof profileStudent.subscription_code === "object"
+            ? profileStudent.subscription_code
+            : null);
+        const trustedDevice =
+          profile.trusted_device || profile.device || profile.trustedDevice || null;
 
         setStudent((prev) => {
-          const profileStudent = profile.student || profile;
-
-          return {
+          const rawSubscriptionCode =
+            profileStudent.subscription_code || prev?.subscription_code;
+          const subscriptionCode =
+            typeof rawSubscriptionCode === "string"
+              ? rawSubscriptionCode
+              : rawSubscriptionCode?.code ||
+                rawSubscriptionCode?.subscription_code ||
+                subscription?.code ||
+                subscription?.subscription_code ||
+                "";
+          const updated = {
             ...prev,
             ...profileStudent,
+            subscription,
+            code: subscriptionCode || prev?.code || "",
+            subscription_code: subscriptionCode,
+            trusted_device: trustedDevice || prev?.trusted_device,
             grade:
-              getGradeNameById(
-                profileStudent.grade_id || prev?.grade_id || 1,
-              ) || prev?.grade,
-            trusted_device:
-              profile.trusted_device || profile.device || prev?.trusted_device,
+              typeof profile.grade === "string"
+                ? profile.grade
+                : profile.grade?.name ||
+                  getGradeNameById(
+                    profileStudent.grade_id || prev?.grade_id || 1,
+                  ) ||
+                  prev?.grade,
+            grade_id: profileStudent.grade_id || prev?.grade_id || 1,
           };
+
+          try {
+            localStorage.setItem(
+              "el_eamid_student",
+              JSON.stringify(updated),
+            );
+          } catch {
+            // ignore
+          }
+
+          return updated;
         });
       }
     } catch (error) {
       console.error("Failed to fetch student profile:", error);
+    }
+  }, []);
+
+  // ============================================================
+  // GET STUDENT DETAILS (GET /api/v1/admin/students/{id})
+  // ============================================================
+
+  const getStudentDetails = useCallback(async (studentId) => {
+    try {
+      const result = await api.getStudentDetails(studentId);
+      return result;
+    } catch (error) {
+      console.error("Failed to fetch student details:", error);
+      return {
+        success: false,
+        error: error?.message || "فشل جلب تفاصيل الطالب",
+      };
     }
   }, []);
 
@@ -288,18 +371,53 @@ export const StudentProvider = ({ children }) => {
         }
 
         const data = result.data || {};
-
-        if (data.token) {
-          tokenStorage.setStudentToken(data.token);
+        const studentData = data.student || data.user;
+        if (!studentData) {
+          tokenStorage.clearStudentToken();
+          showToast("لم يرجع الخادم بيانات الطالب", "error");
+          return {
+            success: false,
+            message: "لم يرجع الخادم بيانات الطالب",
+          };
         }
 
+        const gradeId =
+          studentData.grade_id || studentData.gradeId || studentData.grade?.id;
+        const studentName =
+          studentData.name ||
+          `${studentData.first_name || ""} ${studentData.last_name || ""}`.trim();
+        const rawSubscription =
+          studentData.subscription ||
+          studentData.active_subscription ||
+          (typeof studentData.subscription_code === "object"
+            ? studentData.subscription_code
+            : null);
+        const rawSubscriptionCode =
+          studentData.subscription_code || data.subscription_code || code;
+        const resolvedSubscriptionCode =
+          typeof rawSubscriptionCode === "string"
+            ? rawSubscriptionCode
+            : rawSubscriptionCode?.code ||
+              rawSubscriptionCode?.subscription_code ||
+              rawSubscription?.code ||
+              rawSubscription?.subscription_code ||
+              code;
         const loggedStudent = {
-          ...INITIAL_STUDENT,
-          ...(data.student || data.user || {}),
-          subscription_code:
-            data.student?.subscription_code || data.subscription_code || code,
+          ...studentData,
+          subscription: rawSubscription,
+          name: studentName,
+          grade:
+            typeof studentData.grade === "string"
+              ? studentData.grade
+              : studentData.grade?.name ||
+                (gradeId ? getGradeNameById(gradeId) : ""),
+          gradeId: gradeId || null,
+          code: resolvedSubscriptionCode,
+          subscription_code: resolvedSubscriptionCode,
         };
 
+        tokenStorage.clearAdminToken();
+        tokenStorage.setStudentToken(data.token || result.token);
         setStudent(loggedStudent);
         setUserRole("student");
         setIsAuthenticated(true);
@@ -309,6 +427,11 @@ export const StudentProvider = ({ children }) => {
         localStorage.setItem("el_eamid_student", JSON.stringify(loggedStudent));
 
         showToast("تم تسجيل الدخول بنجاح");
+
+        // Immediately fetch latest backend profile, active subscription & trusted device
+        setTimeout(() => {
+          fetchStudentProfile();
+        }, 100);
 
         return {
           success: true,
@@ -382,7 +505,7 @@ export const StudentProvider = ({ children }) => {
 
         if (!result?.success) {
           showToast(
-            result?.message || "بيانات تسجيل الدخول غير صحيحة",
+            result?.message || result?.error || "بيانات تسجيل الدخول غير صحيحة",
             "error",
           );
 
@@ -409,6 +532,7 @@ export const StudentProvider = ({ children }) => {
           };
         }
 
+        tokenStorage.clearStudentToken();
         tokenStorage.setAdminToken(token);
 
         setUserRole("teacher");
@@ -517,16 +641,31 @@ export const StudentProvider = ({ children }) => {
     try {
       const res = await api.getAllStudents(page);
       if (res) {
-        const list = Array.isArray(res.data)
-          ? res.data
-          : Array.isArray(res)
-            ? res
-            : [];
-        setPaginatedStudents(list);
+        const payload = res.data?.data ?? res.data;
+        const list = Array.isArray(payload)
+          ? payload
+          : Array.isArray(payload?.data)
+            ? payload.data
+            : Array.isArray(res.data)
+              ? res.data
+              : Array.isArray(res)
+                ? res
+                : [];
+        const visibleList = list.filter(
+          (item) =>
+            !locallyRemovedStudentIds.includes(
+              String(item.id || item.student_id),
+            ),
+        );
+        setPaginatedStudents(visibleList);
         setStudentsPagination({
-          current_page: res.current_page || page,
-          last_page: res.last_page || 1,
-          total: res.total || list.length,
+          current_page: res.current_page || payload?.current_page || page,
+          last_page: res.last_page || payload?.last_page || 1,
+          total: Math.max(
+            0,
+            (res.total || payload?.total || list.length) -
+              locallyRemovedStudentIds.length,
+          ),
         });
         return res;
       }
@@ -535,7 +674,7 @@ export const StudentProvider = ({ children }) => {
     } finally {
       setIsLoadingStudents(false);
     }
-  }, []);
+  }, [locallyRemovedStudentIds]);
 
   // ============================================================
   // DEACTIVATE STUDENT
@@ -544,6 +683,23 @@ export const StudentProvider = ({ children }) => {
   const deactivateStudent = useCallback(
     async (studentId) => {
       try {
+        const approvedRecord = approvedSubscriptions.find((item) => {
+          const subscription =
+            item.subscription ||
+            item.active_subscription ||
+            item.subscriptions?.[0] ||
+            (typeof item.subscription_code === "object"
+              ? item.subscription_code
+              : null);
+          const currentSubscriptionId =
+            item.subscription_id || subscription?.id || item.id;
+          return String(currentSubscriptionId) === String(studentId);
+        });
+        const targetStudentId =
+          approvedRecord?.student?.id ||
+          approvedRecord?.user?.id ||
+          approvedRecord?.student_id ||
+          approvedRecord?.user_id;
         const result = await api.deactivateStudent(studentId);
 
         if (!result?.success) {
@@ -556,6 +712,16 @@ export const StudentProvider = ({ children }) => {
 
         await fetchApprovedStudents();
         await fetchAdminStudents();
+        if (targetStudentId != null) {
+          setPaginatedStudents((current) =>
+            current.map((student) =>
+              String(student.student_id || student.id) ===
+              String(targetStudentId)
+                ? { ...student, subscription_status: "inactive" }
+                : student,
+            ),
+          );
+        }
 
         return result;
       } catch (error) {
@@ -569,7 +735,7 @@ export const StudentProvider = ({ children }) => {
         };
       }
     },
-    [fetchApprovedStudents, fetchAdminStudents, showToast],
+    [approvedSubscriptions, fetchApprovedStudents, fetchAdminStudents, showToast],
   );
 
   // ============================================================
@@ -582,7 +748,21 @@ export const StudentProvider = ({ children }) => {
         const result = await api.resetStudentDevice(studentId);
 
         if (!result?.success) {
-          showToast(result?.message || "فشل إعادة ضبط الجهاز", "error");
+          if (
+            result?.error?.includes(
+              "This subscription does not have an active trusted device",
+            )
+          ) {
+            showToast(
+              "لا يوجد جهاز موثوق نشط لهذا الاشتراك لإعادة ضبطه.",
+              "error",
+            );
+            return result;
+          }
+          showToast(
+            result?.message || result?.error || "فشل إعادة ضبط الجهاز",
+            "error",
+          );
 
           return result;
         }
@@ -601,44 +781,6 @@ export const StudentProvider = ({ children }) => {
         return {
           success: false,
           message: error?.message || "Reset failed",
-        };
-      }
-    },
-    [fetchApprovedStudents, fetchAdminStudents, showToast],
-  );
-
-  // ============================================================
-  // REACTIVATE STUDENT
-  // ============================================================
-
-  const reactivateStudent = useCallback(
-    async (studentId) => {
-      try {
-        const result = await api.reactivateStudent(studentId);
-
-        if (!result?.success) {
-          showToast(
-            result?.message || result?.error || "فشل إعادة تفعيل الطالب",
-            "error",
-          );
-
-          return result;
-        }
-
-        showToast(result.message || "تمت إعادة تفعيل حساب الطالب بنجاح");
-
-        await fetchApprovedStudents();
-        await fetchAdminStudents();
-
-        return result;
-      } catch (error) {
-        console.error("Reactivate student error:", error);
-
-        showToast("حدث خطأ أثناء إعادة التفعيل", "error");
-
-        return {
-          success: false,
-          message: error?.message || "Reactivation failed",
         };
       }
     },
@@ -665,7 +807,7 @@ export const StudentProvider = ({ children }) => {
         if (result?.success) {
           const list = Array.isArray(result.data)
             ? result.data
-            : result.data?.data || [];
+            : result.data?.students || result.data?.data || [];
           setSubscriptionCodesList(list);
           return { success: true, data: list };
         } else {
@@ -868,58 +1010,79 @@ export const StudentProvider = ({ children }) => {
           const remoteLessons = await api.getAdminLessons(gradeId);
           if (Array.isArray(remoteLessons)) {
             setLessonsList(
-              remoteLessons.map((l, idx) => ({
-                ...l,
-                id: l.id || idx + 1,
-                number: idx + 1,
-                title: l.title || "درس رياضيات",
-                branch: l.section_name || l.branch || "الجبر والهندسة الفراغية",
-                grade: getGradeNameById(l.grade_id || 1),
-                gradeId: l.grade_id || 1,
-                description: l.description || "",
-                duration: l.duration || "45 دقيقة",
-                videoUrl:
-                  l.video_url ||
-                  l.videoUrl ||
-                  "https://youtu.be/qJ-Op0x0yCM?si=HrcEYlkOUWW4X5m9",
-                quiz: l.quiz || {
-                  title: `اختبار: ${l.title}`,
-                  questions: [],
-                },
-              })),
+              remoteLessons.filter((lesson) => lesson?.id).map((l, idx) => {
+                const video = l.video || l.videos?.[0] || null;
+                const sectionName =
+                  l.section_name || l.section?.name || l.branch || "";
+                const gradeId =
+                  l.grade_id || l.gradeId || l.section?.grade_id || l.grade?.id;
+
+                return {
+                  ...l,
+                  video,
+                videoId: video?.id || l.video_id || l.videoId || null,
+                  id: l.id,
+                  number: idx + 1,
+                  title: l.title || "درس رياضيات",
+                  branch: sectionName,
+                  grade: l.grade?.name || l.grade_name || getGradeNameById(gradeId || 1),
+                  gradeId: gradeId || 1,
+                  description: l.description || "",
+                  duration: video?.duration || l.duration || "",
+                  videoUrl:
+                    video?.video_url || video?.url || l.video_url || l.videoUrl || "",
+                  quiz: l.quiz || {
+                    title: `اختبار: ${l.title}`,
+                    questions: [],
+                  },
+                };
+              }),
             );
+          } else {
+            setLessonsList([]);
           }
         } else if (userRole === "student") {
           const studentLessons = await api.getStudentLessons();
           if (Array.isArray(studentLessons)) {
             setLessonsList(
-              studentLessons.map((l, idx) => ({
-                ...l,
-                id: l.id || idx + 1,
-                number: idx + 1,
-                title: l.title || "درس رياضيات",
-                branch: l.section_name || l.branch || "الجبر والهندسة الفراغية",
-                grade: getGradeNameById(l.grade_id || 1),
-                gradeId: l.grade_id || 1,
-                description: l.description || "",
-                duration: l.duration || "45 دقيقة",
-                videoUrl:
-                  l.video_url ||
-                  l.videoUrl ||
-                  "https://youtu.be/qJ-Op0x0yCM?si=HrcEYlkOUWW4X5m9",
-                isCompleted: Boolean(l.is_completed),
-                progress: l.progress || 0,
-                accessStatus: l.access_status || "accessible",
-                quiz: l.quiz || {
-                  title: `اختبار: ${l.title}`,
-                  questions: [],
-                },
-              })),
+              studentLessons.filter((lesson) => lesson?.id).map((l, idx) => {
+                const video = l.video || l.videos?.[0] || null;
+                const sectionName =
+                  l.section_name || l.section?.name || l.branch || "";
+                const gradeId =
+                  l.grade_id || l.gradeId || l.section?.grade_id || l.grade?.id;
+
+                return {
+                  ...l,
+                  video,
+                  videoId: video?.id || l.video_id || l.videoId || null,
+                  id: l.id,
+                  number: idx + 1,
+                  title: l.title || "درس رياضيات",
+                  branch: sectionName,
+                  grade: l.grade?.name || l.grade_name || getGradeNameById(gradeId || 1),
+                  gradeId: gradeId || 1,
+                  description: l.description || "",
+                  duration: video?.duration || l.duration || "",
+                  videoUrl:
+                    video?.video_url || video?.url || l.video_url || l.videoUrl || "",
+                  isCompleted: Boolean(l.is_completed),
+                  progress: l.progress || 0,
+                  accessStatus: l.access_status || "accessible",
+                  quiz: l.quiz || {
+                    title: `اختبار: ${l.title}`,
+                    questions: [],
+                  },
+                };
+              }),
             );
+          } else {
+            setLessonsList([]);
           }
         }
       } catch (err) {
         console.warn("Fetch lessons notice:", err);
+        setLessonsList([]);
       } finally {
         setIsLoadingLessons(false);
       }
@@ -944,29 +1107,12 @@ export const StudentProvider = ({ children }) => {
   // ============================================================
 
   const loginWithCredentials = useCallback(
-    async ({ name = "", grade = "", code = "" }) => {
-      const normalizedCode = String(code || "")
-        .trim()
-        .toUpperCase();
-
-      const isTeacherCode = TEACHER_CODES?.some(
-        (teacherCode) =>
-          String(teacherCode).trim().toUpperCase() === normalizedCode,
-      );
-
-      const isTeacherGrade = String(grade || "")
-        .toLowerCase()
-        .includes("teacher");
-
-      if (isTeacherCode || isTeacherGrade) {
-        return adminLoginWithCredentials({
-          name,
-          grade,
-          code: normalizedCode,
-        });
+    async ({ email = "", password = "", code = "" } = {}) => {
+      if (email.trim() && password) {
+        return adminLoginWithCredentials({ email, password });
       }
 
-      return studentLoginWithCode(normalizedCode);
+      return studentLoginWithCode(code);
     },
     [adminLoginWithCredentials, studentLoginWithCode],
   );
@@ -1001,13 +1147,13 @@ export const StudentProvider = ({ children }) => {
     try {
       if (userRole === "student") {
         await api.studentLogout();
-        tokenStorage.clearStudentToken();
       } else if (userRole === "teacher") {
         await api.adminLogout();
-        tokenStorage.clearAdminToken();
       }
     } catch (error) {
       console.error("Logout error:", error);
+    } finally {
+      tokenStorage.clearTokens();
     }
 
     setIsAuthenticated(false);
@@ -1017,20 +1163,10 @@ export const StudentProvider = ({ children }) => {
     localStorage.removeItem("el_eamid_student");
 
     setUserRole("student");
-    setStudent(INITIAL_STUDENT);
+    setStudent(null);
 
     showToast("تم تسجيل الخروج");
   }, [userRole, showToast]);
-
-  // ============================================================
-  // SWITCH ROLE
-  // ============================================================
-
-  const switchRole = useCallback((role) => {
-    setUserRole(role);
-
-    localStorage.setItem("el_eamid_role", role);
-  }, []);
 
   // ============================================================
   // SELECT ACTIVE STUDENT
@@ -1109,38 +1245,6 @@ export const StudentProvider = ({ children }) => {
       }
     },
     [fetchLessons, showToast],
-  );
-
-  // ============================================================
-  // LESSONS - UPDATE
-  // ============================================================
-
-  const updateLesson = useCallback(
-    async (lessonId, updatedData) => {
-      setLessonsList((prev) => {
-        const updated = prev.map((lesson) =>
-          lesson.id === lessonId
-            ? {
-                ...lesson,
-                ...updatedData,
-              }
-            : lesson,
-        );
-
-        localStorage.setItem("el_eamid_lessons_list", JSON.stringify(updated));
-
-        return updated;
-      });
-
-      try {
-        await api.updateAdminLesson(lessonId, updatedData);
-      } catch (error) {
-        console.error("Update lesson API error:", error);
-      }
-
-      showToast("تم تعديل الدرس بنجاح");
-    },
-    [showToast],
   );
 
   // ============================================================
@@ -1262,7 +1366,11 @@ export const StudentProvider = ({ children }) => {
       if (progressData?.completion_percentage >= 90) {
         setLessonsList((prev) => {
           const updated = prev.map((l) =>
-            l.id === Number(lessonId) || l.video_id === Number(lessonId)
+            l.id === Number(lessonId) ||
+            l.video_id === Number(lessonId) ||
+            l.videoId === Number(lessonId) ||
+            l.video?.id === Number(lessonId) ||
+            l.videos?.some((video) => video.id === Number(lessonId))
               ? { ...l, isCompleted: true, progress: 100 }
               : l,
           );
@@ -1444,7 +1552,26 @@ export const StudentProvider = ({ children }) => {
         return updated;
       });
 
-      showToast("تم حذف الطالب");
+      setPaginatedStudents((prev) =>
+        prev.filter(
+          (item) => String(item.id || item.student_id) !== String(studentId),
+        ),
+      );
+      setLocallyRemovedStudentIds((prev) => {
+        const next = prev.includes(String(studentId))
+          ? prev
+          : [...prev, String(studentId)];
+        localStorage.setItem(
+          "el_eamid_locally_removed_students",
+          JSON.stringify(next),
+        );
+        return next;
+      });
+      setStudentsPagination((prev) => ({
+        ...prev,
+        total: Math.max(0, (prev.total || 0) - 1),
+      }));
+      showToast("\u062a\u0645\u062a \u0625\u0632\u0627\u0644\u0629 \u0627\u0644\u0637\u0627\u0644\u0628 \u0645\u0646 \u0627\u0644\u0633\u062c\u0644 \u0627\u0644\u0645\u062d\u0644\u064a. \u0627\u0644\u062d\u0630\u0641 \u0645\u0646 \u0642\u0627\u0639\u062f\u0629 \u0627\u0644\u0628\u064a\u0627\u0646\u0627\u062a \u063a\u064a\u0631 \u0645\u062a\u0627\u062d \u062d\u0627\u0644\u064a\u064b\u0627.");
     },
     [showToast],
   );
@@ -1457,11 +1584,40 @@ export const StudentProvider = ({ children }) => {
     async (studentData) => {
       try {
         const result = await api.createStudentByAdmin(studentData);
-        if (result?.success || result?.student || result?.id) {
-          showToast(
-            result?.message || "تم إنشاء حساب الطالب وتفعيل كود الاشتراك بنجاح",
+        if (result?.success) {
+          const gradeId = Number(
+            studentData.grade_id || studentData.gradeId || 1,
           );
-          await fetchApprovedStudents();
+          const createdStudent =
+            result.student ||
+            result.data?.student ||
+            result.data?.data?.student ||
+            result.data?.data ||
+            result.data;
+          const [, codesResult] = await Promise.all([
+            fetchApprovedStudents(),
+            fetchSubscriptionCodes(gradeId),
+          ]);
+          const studentName =
+            `${studentData.first_name || studentData.firstName || ""} ${
+              studentData.last_name || studentData.lastName || ""
+            }`.trim();
+          const createdCode =
+            createdStudent?.subscription_code ||
+            createdStudent?.subscription?.code ||
+            codesResult?.data?.find(
+              (item) =>
+                (createdStudent?.id &&
+                  String(item.student_id) === String(createdStudent.id)) ||
+                item.student_name?.trim() === studentName,
+            )?.subscription_code;
+
+          showToast(
+            createdCode
+              ? `تم إنشاء حساب الطالب. كود الاشتراك: ${createdCode}`
+              : result?.message ||
+                  "تم إنشاء حساب الطالب وتفعيل كود الاشتراك بنجاح",
+          );
           return { success: true, ...result };
         }
         showToast(result?.message || "فشل إنشاء حساب الطالب", "error");
@@ -1472,7 +1628,7 @@ export const StudentProvider = ({ children }) => {
         return { success: false, message: error.message };
       }
     },
-    [fetchApprovedStudents, showToast],
+    [fetchApprovedStudents, fetchSubscriptionCodes, showToast],
   );
 
   const updateStudentByAdmin = useCallback(
@@ -1481,6 +1637,7 @@ export const StudentProvider = ({ children }) => {
         const result = await api.updateStudent(studentId, updatedData);
         showToast("تم تحديث بيانات الطالب بنجاح");
         await fetchApprovedStudents();
+        await fetchAdminStudents();
         return { success: true, ...result };
       } catch (error) {
         console.error("Update student error:", error);
@@ -1491,7 +1648,7 @@ export const StudentProvider = ({ children }) => {
         return { success: false, message: error.message };
       }
     },
-    [fetchApprovedStudents, showToast],
+    [fetchApprovedStudents, fetchAdminStudents, showToast],
   );
 
   // ============================================================
@@ -1524,6 +1681,7 @@ export const StudentProvider = ({ children }) => {
     };
   }, [
     isAuthenticated,
+    isAuthReady,
     userRole,
     fetchPendingRequests,
     fetchApprovedStudents,
@@ -1541,9 +1699,8 @@ export const StudentProvider = ({ children }) => {
   const value = {
     // Auth
     isAuthenticated,
-    setIsAuthenticated,
+    isAuthReady,
     userRole,
-    setUserRole,
     student,
     setStudent,
     studentsList,
@@ -1603,7 +1760,6 @@ export const StudentProvider = ({ children }) => {
     registerStudent,
     submitActivationRequest,
     logout,
-    switchRole,
     selectActiveStudent,
 
     // Admin requests
@@ -1611,12 +1767,10 @@ export const StudentProvider = ({ children }) => {
     cancelRequest,
     deactivateStudent,
     resetStudentDevice,
-    reactivateStudent,
     approveActivationRequest: approveRequest,
     cancelActivationRequest: cancelRequest,
     deactivateStudentSubscription: deactivateStudent,
     resetTrustedDevice: resetStudentDevice,
-    reactivateStudentSubscription: reactivateStudent,
 
     // Lessons
     lessonsList,
@@ -1624,7 +1778,6 @@ export const StudentProvider = ({ children }) => {
     isLoadingLessons,
     fetchLessons,
     addLesson,
-    updateLesson,
     deleteLesson,
 
     // Quiz
@@ -1653,10 +1806,10 @@ export const StudentProvider = ({ children }) => {
     updateStudentByAdmin,
     updateStudentByTeacher: updateStudent,
     deleteStudentByTeacher: deleteStudent,
+    getStudentDetails,
 
     // Constants
     GRADES,
-    TEACHER_CODES,
     TEACHER_INFO,
   };
 

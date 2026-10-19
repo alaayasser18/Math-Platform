@@ -18,7 +18,18 @@ import TeacherDashboardPage from "./Pages/TeacherDashboardPage";
 import NotFoundPage from "./Pages/NotFoundPage";
 
 function AppContent() {
-  const { isAuthenticated, userRole } = useStudent();
+  const { isAuthenticated, isAuthReady, userRole } = useStudent();
+
+  if (!isAuthReady) {
+    return (
+      <div
+        className="app-container"
+        style={{ minHeight: "100vh", display: "grid", placeItems: "center" }}
+      >
+        <p>جارٍ التحقق من الجلسة...</p>
+      </div>
+    );
+  }
 
   // If not logged in, render the Login / Access Code Portal
   if (!isAuthenticated) {
