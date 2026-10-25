@@ -92,17 +92,23 @@ export default function ExamsPage() {
             String(exam.id || exam.exam_id) === String(id) ||
             String(exam.lesson_id || exam.lesson?.id) === String(id),
         )
-      : null;
+      : (adminExamsList || []).find(
+          (exam) =>
+            String(exam.id) === String(id) ||
+            String(exam.lesson_id) === String(id),
+        );
     const linkedLessonId = routeExam?.lesson_id || routeExam?.lesson?.id;
     const matchedLesson = id
       ? (lessonsList || []).find(
           (lesson) =>
             String(lesson.id) === String(id) ||
             (linkedLessonId != null &&
-              String(lesson.id) === String(linkedLessonId)),
+              String(lesson.id) === String(linkedLessonId)) ||
+            String(lesson.exam?.id) === String(id) ||
+            String(lesson.quiz?.id) === String(id),
         )
       : gradeLessons.find(
-          (lesson) => lesson.quiz && lesson.quiz.questions?.length > 0,
+          (lesson) => (lesson.quiz || lesson.exam) && (lesson.quiz || lesson.exam).questions?.length > 0,
         ) || gradeLessons[0];
     const lesson =
       matchedLesson ||
@@ -121,6 +127,8 @@ export default function ExamsPage() {
               routeExam.grade_name ||
               studentGrade,
             branch: routeExam.lesson?.branch || routeExam.branch || "",
+            quiz: routeExam,
+            exam: routeExam,
           }
         : null);
     const resolvedExamId =
@@ -128,11 +136,12 @@ export default function ExamsPage() {
       routeExam?.exam_id ||
       lesson?.exam_id ||
       lesson?.exam?.id ||
+      lesson?.quiz?.id ||
       lesson?.exams?.[0]?.id ||
-      (isTeacher ? lesson?.id : null);
+      (isTeacher ? (lesson?.exam?.id || lesson?.quiz?.id || lesson?.id) : null);
 
     return { lesson, resolvedExamId };
-  }, [id, isTeacher, lessonsList, studentExamsList, studentGrade]);
+  }, [id, isTeacher, lessonsList, studentExamsList, adminExamsList, studentGrade]);
 
   // Teacher previewing an exam as a student
   // If teacher and NOT taking/previewing a specific exam, show TeacherExamsManager
@@ -2023,12 +2032,14 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
     submitExamAttempt,
     getStudentExam,
     getStudentLessonQuizAnswers,
+    fetchAdminExamDetails,
   } = useStudent();
+  const initialQuiz = lesson?.quiz || lesson?.exam || null;
   const [examData, setExamData] = useState(
-    isTeacher ? lesson?.quiz || null : null,
+    isTeacher ? initialQuiz : null,
   );
   const [examLoadState, setExamLoadState] = useState(
-    isTeacher ? "ready" : "loading",
+    isTeacher ? (initialQuiz?.questions?.length ? "ready" : "loading") : "loading",
   );
   const [examLoadError, setExamLoadError] = useState("");
   const [serverResult, setServerResult] = useState(null);
@@ -2051,8 +2062,32 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
 
     const loadExam = async () => {
       if (isTeacher) {
-        setExamData(lesson?.quiz || null);
-        setExamLoadState("ready");
+        const teacherQuiz = lesson?.quiz || lesson?.exam;
+        if (teacherQuiz && Array.isArray(teacherQuiz.questions) && teacherQuiz.questions.length > 0) {
+          setExamData(teacherQuiz);
+          setExamLoadState("ready");
+          return;
+        }
+
+        const targetExamId = examId || teacherQuiz?.id || lesson?.exam?.id || lesson?.id;
+        if (targetExamId && typeof fetchAdminExamDetails === 'function') {
+          try {
+            setExamLoadState("loading");
+            const detail = await fetchAdminExamDetails(targetExamId);
+            if (isMounted && detail) {
+              setExamData(detail);
+              setExamLoadState("ready");
+              return;
+            }
+          } catch (e) {
+            console.warn("Could not fetch admin exam details:", e);
+          }
+        }
+
+        if (isMounted) {
+          setExamData(teacherQuiz || null);
+          setExamLoadState("ready");
+        }
         return;
       }
 
