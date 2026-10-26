@@ -4,7 +4,10 @@ import { GRADES, BRANCHES } from "../data/platformData";
 export default function GradeFilter({
   value,
   onChange,
-  options = GRADES.map((grade) => ({ value: grade.name, label: grade.shortName || grade.name })),
+  options = GRADES.map((grade) => ({
+    value: grade.name,
+    label: grade.shortName || grade.name,
+  })),
   label = "الصف الدراسي",
   includeAll = false,
   allValue = BRANCHES[0],
@@ -18,10 +21,12 @@ export default function GradeFilter({
 
   return (
     <div className="grade-filter" role="group" aria-label={label}>
-      {showLabel && <span className="grade-filter-label">
-        <Filter size={15} aria-hidden="true" />
-        {label}
-      </span>}
+      {showLabel && (
+        <span className="grade-filter-label">
+          <Filter size={15} aria-hidden="true" />
+          {label}
+        </span>
+      )}
       <div className="grade-filter-options">
         {choices.map((option) => {
           const selected = value === option.value;

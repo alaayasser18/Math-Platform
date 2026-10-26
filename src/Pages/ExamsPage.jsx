@@ -376,6 +376,7 @@ export default function ExamsPage() {
             <span>العودة لإدارة بنك الامتحانات</span>
           </button>
           <span
+            className="student-preview-badge"
             style={{
               fontSize: "0.8rem",
               color: "var(--amber)",
@@ -986,7 +987,7 @@ function TeacherExamsManager({
                         };
                         onPreviewAsStudent(targetLesson);
                       }}
-                      className="btn-secondary"
+                      className="btn-secondary btn-preview-as-student"
                       style={{
                         fontSize: "0.8rem",
                         padding: "7px 12px",

@@ -17,6 +17,7 @@ import {
   AlertTriangle,
   FileText,
   Clock,
+  RotateCcw,
 } from "lucide-react";
 import { getYouTubeVideoId } from "../utils/youtube";
 
@@ -314,196 +315,141 @@ export default function LessonsPage() {
       className="container"
       style={{ paddingTop: "1.5rem", paddingBottom: "3rem" }}
     >
-      {/* Header & Search */}
-      <div className="section-header" style={{ alignItems: "flex-start", gap: "1.25rem" }}>
+      {/* Header */}
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: "1.25rem",
+          flexWrap: "wrap",
+          gap: "1rem",
+        }}
+      >
         <div>
-          <div
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "6px",
-              fontSize: "0.75rem",
-              color: "var(--cyan)",
-              fontWeight: 700,
-              marginBottom: "6px",
-            }}
-          >
-            <BookOpen size={14} />
-            <span>المكتبة التعليمية ومحاضرات الفيديو</span>
-          </div>
           <h1 className="section-title">
-            {isTeacher
-              ? "معاينة وإدارة المحاضرات والدروس"
-              : `المحاضرات والشروحات المقررة لـ (${studentGrade})`}
+            {isTeacher ? "المحاضرات والدروس" : `دروس ${studentGrade}`}
           </h1>
           <p className="section-desc">
             {isTeacher
-              ? "تصفح المحاضرات المرفوعة، رفع شروحات جديدة، والتحكم في بنك الدروس"
-              : `محتوى مخصص ومقيد لـ: ${student?.name || "طالب المنصة"} • ${studentGrade}`}
+              ? "إدارة ورفع شروحات الفيديو وامتحانات الدروس"
+              : `المحاضرات والشروحات المقررة لـ ${student?.name || "طالب المنصة"}`}
           </p>
         </div>
 
-        {/* Action Buttons: Add Lesson (Teacher), Search, Refresh */}
-        <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
-          {isTeacher && (
-            <button
-              onClick={() => setIsAddLessonOpen(true)}
-              className="btn-primary"
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "8px",
-                fontSize: "0.85rem",
-                padding: "9px 18px",
-                boxShadow: "0 4px 14px rgba(6, 182, 212, 0.35)",
-              }}
-            >
-              <Plus size={17} />
-              <span>رفع درس جديد</span>
-            </button>
-          )}
-
-          <div style={{ position: "relative", flex: "1 1 200px", minWidth: 0 }}>
-            <input
-              type="text"
-              placeholder={isTeacher ? "ابحث في كل الدروس..." : "ابحث في دروس صفك..."}
-              value={searchQuery}
-              onChange={(e) => setUrlState({ search: e.target.value }, { replace: true })}
-              className="form-input"
-              style={{
-                paddingLeft: "1rem",
-                paddingRight: "2.5rem",
-                fontSize: "0.85rem",
-              }}
-            />
-            <Search
-              size={16}
-              style={{
-                position: "absolute",
-                right: "12px",
-                top: "50%",
-                transform: "translateY(-50%)",
-                color: "var(--text-dim)",
-              }}
-            />
-          </div>
-
+        {isTeacher && (
           <button
-            onClick={() => fetchLessons()}
-            className="btn-secondary"
-            title="تحديث قائمة الدروس من الخادم"
-            style={{ padding: "8px 12px" }}
-            disabled={isLoadingLessons}
-          >
-            <RefreshCw
-              size={15}
-              className={isLoadingLessons ? "animate-spin" : ""}
-            />
-          </button>
-        </div>
-      </div>
-
-      {/* Grade Lock Indicator for Student */}
-      {!isTeacher && (
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            background:
-              "linear-gradient(90deg, rgba(79, 70, 229, 0.15) 0%, rgba(6, 182, 212, 0.1) 100%)",
-            border: "1px solid rgba(6, 182, 212, 0.25)",
-            borderRadius: "var(--radius-lg, 14px)",
-            padding: "12px 18px",
-            marginBottom: "1.5rem",
-            flexWrap: "wrap",
-            gap: "10px",
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-            <div
-              style={{
-                width: "38px",
-                height: "38px",
-                borderRadius: "10px",
-                background: "rgba(6, 182, 212, 0.2)",
-                color: "var(--cyan)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              <GraduationCap size={22} />
-            </div>
-            <div>
-              <div
-                style={{
-                  fontWeight: 800,
-                  color: "#ffffff",
-                  fontSize: "0.95rem",
-                }}
-              >
-                المحتوى المعروض خاص بـ:{" "}
-                <span style={{ color: "var(--cyan)" }}>{studentGrade}</span>
-              </div>
-              <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
-                يتم عرض الشروحات والتمارين والواجبات الخاصة بمرحلتك الدراسية فقط
-              </div>
-            </div>
-          </div>
-
-          <div
+            onClick={() => setIsAddLessonOpen(true)}
+            className="btn-primary"
             style={{
-              display: "flex",
+              display: "inline-flex",
               alignItems: "center",
-              gap: "6px",
-              fontSize: "0.75rem",
-              color: "var(--emerald)",
-              background: "rgba(16, 185, 129, 0.15)",
-              padding: "4px 12px",
-              borderRadius: "999px",
-              border: "1px solid rgba(16, 185, 129, 0.3)",
-              fontWeight: 700,
+              gap: "8px",
+              fontSize: "0.85rem",
+              padding: "9px 18px",
+              boxShadow: "0 4px 14px rgba(6, 182, 212, 0.35)",
             }}
           >
-            <Shield size={13} />
-            <span>حساب موثق ومفعل</span>
+            <Plus size={17} />
+            <span>رفع درس جديد</span>
+          </button>
+        )}
+      </div>
+
+      {/* Modern Unified Filter Bar */}
+      <div className="modern-filter-bar" style={{ marginBottom: "1.5rem" }}>
+        {/* Row 1: Search & Controls */}
+        <div className="modern-filter-row">
+          <div className="modern-search-box">
+            <span className="modern-search-icon">
+              <Search size={15} />
+            </span>
+            <input
+              type="text"
+              placeholder={isTeacher ? "بحث في الدروس بالعنوان أو الفرع..." : "ابحث في دروس صفك..."}
+              value={searchQuery}
+              onChange={(e) => setUrlState({ search: e.target.value }, { replace: true })}
+              className="modern-search-input"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setUrlState({ search: "" }, { replace: true })}
+                className="modern-search-clear"
+                title="مسح البحث"
+              >
+                <X size={13} />
+              </button>
+            )}
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+            <button
+              onClick={() => fetchLessons()}
+              className="btn-secondary"
+              title="تحديث قائمة الدروس من الخادم"
+              style={{ padding: "8px 14px", fontSize: "0.8rem", gap: "6px" }}
+              disabled={isLoadingLessons}
+            >
+              <RefreshCw
+                size={14}
+                className={isLoadingLessons ? "animate-spin" : ""}
+              />
+              <span>تحديث</span>
+            </button>
+
+            {(searchQuery || (isTeacher && selectedGrade !== BRANCHES[0]) || selectedBranch !== BRANCHES[0]) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setUrlState({
+                    search: "",
+                    grade: BRANCHES[0],
+                    branch: BRANCHES[0],
+                  }, { replace: true });
+                }}
+                className="btn-secondary"
+                style={{ fontSize: "0.78rem", padding: "8px 12px", gap: "5px" }}
+                title="إلغاء جميع الفلاتر"
+              >
+                <RotateCcw size={13} />
+                <span>إعادة ضبط</span>
+              </button>
+            )}
           </div>
         </div>
-      )}
 
-      {/* Grade Tabs ONLY FOR TEACHER */}
-      {isTeacher && (
-        <GradeFilter
-          value={selectedGrade}
-          onChange={setSelectedGrade}
-          options={gradeOptions}
-          includeAll
-        />
-      )}
+        {/* Row 2: Grade Tabs (Teacher only) & Branch Chips */}
+        <div className="modern-filter-row" style={{ paddingTop: "0.35rem", borderTop: "1px solid rgba(148, 163, 184, 0.08)", gap: "0.75rem", flexWrap: "wrap" }}>
+          {isTeacher && (
+            <GradeFilter
+              value={selectedGrade}
+              onChange={setSelectedGrade}
+              options={gradeOptions}
+              includeAll
+              showLabel={true}
+            />
+          )}
 
-      {/* Branch Tabs for current Grade */}
-      <div className="filter-tabs-row" style={{ marginBottom: "1.75rem" }}>
-        <span
-          style={{
-            fontSize: "0.8rem",
-            fontWeight: 700,
-            color: "var(--text-muted)",
-            marginLeft: "8px",
-          }}
-        >
-          الفرع:
-        </span>
-        {gradeBranches.map((branch) => (
-          <button
-            key={branch}
-            onClick={() => setSelectedBranch(branch)}
-            className={`tab-btn ${selectedBranch === branch ? "active" : ""}`}
-            style={{ fontSize: "0.75rem", padding: "4px 14px" }}
-          >
-            {branch}
-          </button>
-        ))}
+          <div className="grade-filter" role="group" aria-label="أفرع المادة">
+            <span className="grade-filter-label">الفرع:</span>
+            <div className="grade-filter-options">
+              {gradeBranches.map((branch) => {
+                const isActive = selectedBranch === branch;
+                return (
+                  <button
+                    key={branch}
+                    type="button"
+                    onClick={() => setSelectedBranch(branch)}
+                    className={`grade-filter-option ${isActive ? "is-active" : ""}`}
+                  >
+                    {branch}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Lessons List */}

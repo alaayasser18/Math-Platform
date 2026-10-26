@@ -1803,87 +1803,6 @@ export default function TeacherDashboardPage() {
         </div>
       </div>
 
-      {/* Dedicated Content Portals Ribbon */}
-      <div
-        className="portals-ribbon"
-        style={{
-          background: "linear-gradient(90deg, rgba(15, 23, 42, 0.8) 0%, rgba(30, 41, 59, 0.6) 100%)",
-          border: "1px solid rgba(255, 255, 255, 0.08)",
-          borderRadius: "16px",
-          padding: "1rem 1.25rem",
-          marginBottom: "1.75rem",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          flexWrap: "wrap",
-          gap: "1rem",
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-          <span style={{ color: "var(--cyan)", fontWeight: 800, fontSize: "0.88rem" }}>
-            بوابات المحتوى التعليمي:
-          </span>
-          <span style={{ color: "var(--text-muted)", fontSize: "0.8rem" }}>
-            صفحات مخصصة ومستقلة لمعاينة وإدارة المحاضرات، بنك الأسئلة، والمذكرات
-          </span>
-        </div>
-
-        <div className="portals-ribbon-links" style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-          <Link
-            to="/lessons"
-            className="btn-secondary"
-            style={{
-              padding: "7px 14px",
-              fontSize: "0.82rem",
-              color: "var(--cyan)",
-              borderColor: "rgba(6, 182, 212, 0.35)",
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "6px",
-              textDecoration: "none",
-            }}
-          >
-            <Video size={14} />
-            <span>معاينة ورفع الدروس ({lessonsList.length}) ↗</span>
-          </Link>
-
-          <Link
-            to="/exams"
-            className="btn-secondary"
-            style={{
-              padding: "7px 14px",
-              fontSize: "0.82rem",
-              color: "var(--amber)",
-              borderColor: "rgba(245, 158, 11, 0.35)",
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "6px",
-              textDecoration: "none",
-            }}
-          >
-            <FileQuestion size={14} />
-            <span>معاينة وبنك الأسئلة ({adminExamsList.length}) ↗</span>
-          </Link>
-
-          <Link
-            to="/memos"
-            className="btn-secondary"
-            style={{
-              padding: "7px 14px",
-              fontSize: "0.82rem",
-              color: "var(--purple)",
-              borderColor: "rgba(168, 85, 247, 0.35)",
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "6px",
-              textDecoration: "none",
-            }}
-          >
-            <BookOpen size={14} />
-            <span>مذكرات PDF ({memosList.length}) ↗</span>
-          </Link>
-        </div>
-      </div>
 
       {/* Main Administrative Tabs Bar (Exactly 4 focused tabs) */}
       <div
@@ -2168,144 +2087,250 @@ export default function TeacherDashboardPage() {
             </div>
           ) : (
             <div className="modern-table-container">
-              <div className="modern-table-scroll">
-                <table className="modern-table">
-                  <thead>
-                    <tr>
-                      <th style={{ width: "26%" }}>اسم الطالب</th>
-                      <th style={{ width: "16%" }}>الصف الدراسي</th>
-                      <th style={{ width: "16%" }}>هاتف الطالب</th>
-                      <th style={{ width: "16%" }}>هاتف ولي الأمر</th>
-                      <th style={{ width: "12%" }}>تاريخ التقديم</th>
-                      <th style={{ width: "14%", textAlign: "center" }}>قرار المعلم</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredPendingRequests.map((req) => {
-                      const studentObj = req.student || req.user || req;
-                      const firstName = req.first_name || studentObj.first_name || "";
-                      const lastName = req.last_name || studentObj.last_name || "";
-                      const studentFullName =
-                        `${firstName} ${lastName}`.trim() ||
-                        req.name ||
-                        studentObj.name ||
-                        "طالب جديد";
+              {/* Desktop Table View (> 768px) */}
+              <div className="modern-table-desktop-view">
+                <div className="modern-table-scroll">
+                  <table className="modern-table">
+                    <thead>
+                      <tr>
+                        <th style={{ width: "26%" }}>اسم الطالب</th>
+                        <th style={{ width: "16%" }}>الصف الدراسي</th>
+                        <th style={{ width: "16%" }}>هاتف الطالب</th>
+                        <th style={{ width: "16%" }}>هاتف ولي الأمر</th>
+                        <th style={{ width: "12%" }}>تاريخ التقديم</th>
+                        <th style={{ width: "14%", textAlign: "center" }}>قرار المعلم</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredPendingRequests.map((req) => {
+                        const studentObj = req.student || req.user || req;
+                        const firstName = req.first_name || studentObj.first_name || "";
+                        const lastName = req.last_name || studentObj.last_name || "";
+                        const studentFullName =
+                          `${firstName} ${lastName}`.trim() ||
+                          req.name ||
+                          studentObj.name ||
+                          "طالب جديد";
 
-                      const gradeId =
-                        req.grade_id ||
-                        studentObj.grade_id ||
-                        req.grade?.id ||
-                        studentObj.grade?.id ||
-                        1;
+                        const gradeId =
+                          req.grade_id ||
+                          studentObj.grade_id ||
+                          req.grade?.id ||
+                          studentObj.grade?.id ||
+                          1;
 
-                      const gradeTitle =
-                        req.grade?.name ||
-                        studentObj.grade?.name ||
-                        req.grade_name ||
-                        studentObj.grade_name ||
-                        getGradeNameById(gradeId);
+                        const gradeTitle =
+                          req.grade?.name ||
+                          studentObj.grade?.name ||
+                          req.grade_name ||
+                          studentObj.grade_name ||
+                          getGradeNameById(gradeId);
 
-                      const studentPhone = req.phone || studentObj.phone || "—";
-                      const parentPhone =
-                        req.parent_phone ||
-                        req.parentPhone ||
-                        studentObj.parent_phone ||
-                        studentObj.parentPhone ||
-                        "—";
+                        const studentPhone = req.phone || studentObj.phone || "—";
+                        const parentPhone =
+                          req.parent_phone ||
+                          req.parentPhone ||
+                          studentObj.parent_phone ||
+                          studentObj.parentPhone ||
+                          "—";
 
-                      return (
-                        <tr key={req.id}>
-                          <td>
-                            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                              <div
-                                style={{
-                                  width: "36px",
-                                  height: "36px",
-                                  borderRadius: "11px",
-                                  background: "linear-gradient(135deg, #f59e0b, #d97706)",
-                                  color: "#fff",
-                                  display: "flex",
-                                  alignItems: "center",
-                                  justifyContent: "center",
-                                  fontWeight: 900,
-                                  fontSize: "0.85rem",
-                                  flexShrink: 0,
-                                  boxShadow: "0 3px 10px rgba(245, 158, 11, 0.25)",
-                                }}
-                              >
-                                {studentFullName.charAt(0)}
-                              </div>
-                              <div>
-                                <div style={{ fontWeight: 800, color: "#fff", fontSize: "0.88rem" }}>
-                                  {studentFullName}
+                        return (
+                          <tr key={req.id}>
+                            <td>
+                              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                                <div
+                                  style={{
+                                    width: "36px",
+                                    height: "36px",
+                                    borderRadius: "11px",
+                                    background: "linear-gradient(135deg, #f59e0b, #d97706)",
+                                    color: "#fff",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    fontWeight: 900,
+                                    fontSize: "0.85rem",
+                                    flexShrink: 0,
+                                    boxShadow: "0 3px 10px rgba(245, 158, 11, 0.25)",
+                                  }}
+                                >
+                                  {studentFullName.charAt(0)}
                                 </div>
-                                <span style={{ fontSize: "0.7rem", color: "#f59e0b", fontWeight: 700 }}>
-                                  طلب قيد المراجعة
-                                </span>
+                                <div>
+                                  <div style={{ fontWeight: 800, color: "#fff", fontSize: "0.88rem" }}>
+                                    {studentFullName}
+                                  </div>
+                                  <span style={{ fontSize: "0.7rem", color: "#f59e0b", fontWeight: 700 }}>
+                                    طلب قيد المراجعة
+                                  </span>
+                                </div>
                               </div>
+                            </td>
+                            <td>
+                              <span className="badge-tag">{gradeTitle}</span>
+                            </td>
+                            <td style={{ direction: "ltr", textAlign: "right", color: "var(--text-main)", fontFamily: "monospace", fontSize: "0.85rem" }}>
+                              {studentPhone}
+                            </td>
+                            <td style={{ direction: "ltr", textAlign: "right", color: "var(--text-muted)", fontFamily: "monospace", fontSize: "0.85rem" }}>
+                              {parentPhone}
+                            </td>
+                            <td style={{ color: "var(--text-muted)", fontSize: "0.8rem", whiteSpace: "nowrap" }}>
+                              {req.created_at ? new Date(req.created_at).toLocaleDateString("ar-EG") : "اليوم"}
+                            </td>
+                            <td style={{ textAlign: "center" }}>
+                              <div style={{ display: "inline-flex", alignItems: "center", gap: "8px", justifyContent: "center" }}>
+                                <button
+                                  onClick={() =>
+                                    handleApproveRequest(
+                                      req.subscription_id || req.id || req.subscription?.id,
+                                    )
+                                  }
+                                  disabled={isProcessingAction}
+                                  className="btn-primary"
+                                  style={{
+                                    padding: "6px 14px",
+                                    fontSize: "0.78rem",
+                                    background: "linear-gradient(135deg, #10b981 0%, #059669 100%)",
+                                    boxShadow: "0 2px 12px rgba(16, 185, 129, 0.35)",
+                                    gap: "5px",
+                                  }}
+                                  title="قبول طلب التفعيل وتوليد كود الاشتراك"
+                                >
+                                  <Check size={14} />
+                                  <span>قبول</span>
+                                </button>
+                                <button
+                                  onClick={() =>
+                                    handleRejectRequest(
+                                      req.subscription_id || req.id || req.subscription?.id,
+                                    )
+                                  }
+                                  disabled={isProcessingAction}
+                                  className="btn-secondary"
+                                  style={{
+                                    padding: "6px 12px",
+                                    fontSize: "0.78rem",
+                                    color: "#fda4af",
+                                    borderColor: "rgba(244, 63, 94, 0.35)",
+                                    gap: "5px",
+                                  }}
+                                  title="إلغاء / رفض طلب التفعيل"
+                                >
+                                  <XCircle size={14} />
+                                  <span>رفض</span>
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Mobile Cards View (<= 768px) */}
+              <div className="modern-cards-mobile-view">
+                {filteredPendingRequests.map((req) => {
+                  const studentObj = req.student || req.user || req;
+                  const firstName = req.first_name || studentObj.first_name || "";
+                  const lastName = req.last_name || studentObj.last_name || "";
+                  const studentFullName =
+                    `${firstName} ${lastName}`.trim() ||
+                    req.name ||
+                    studentObj.name ||
+                    "طالب جديد";
+
+                  const gradeId =
+                    req.grade_id ||
+                    studentObj.grade_id ||
+                    req.grade?.id ||
+                    studentObj.grade?.id ||
+                    1;
+
+                  const gradeTitle =
+                    req.grade?.name ||
+                    studentObj.grade?.name ||
+                    req.grade_name ||
+                    studentObj.grade_name ||
+                    getGradeNameById(gradeId);
+
+                  const studentPhone = req.phone || studentObj.phone || "—";
+                  const parentPhone =
+                    req.parent_phone ||
+                    req.parentPhone ||
+                    studentObj.parent_phone ||
+                    studentObj.parentPhone ||
+                    "—";
+
+                  return (
+                    <div key={req.id} className="student-mobile-card">
+                      <div className="student-mobile-card-header">
+                        <div className="student-card-info">
+                          <div className="student-card-avatar is-pending">
+                            {studentFullName.charAt(0)}
+                          </div>
+                          <div>
+                            <div className="student-card-name">{studentFullName}</div>
+                            <div className="student-card-meta">
+                              <span className="badge-tag">{gradeTitle}</span>
+                              <span className="student-card-id">طلب اشتراك جديد</span>
                             </div>
-                          </td>
-                          <td>
-                            <span className="badge-tag">{gradeTitle}</span>
-                          </td>
-                          <td style={{ direction: "ltr", textAlign: "right", color: "var(--text-main)", fontFamily: "monospace", fontSize: "0.85rem" }}>
-                            {studentPhone}
-                          </td>
-                          <td style={{ direction: "ltr", textAlign: "right", color: "var(--text-muted)", fontFamily: "monospace", fontSize: "0.85rem" }}>
-                            {parentPhone}
-                          </td>
-                          <td style={{ color: "var(--text-muted)", fontSize: "0.8rem", whiteSpace: "nowrap" }}>
-                            {req.created_at ? new Date(req.created_at).toLocaleDateString("ar-EG") : "اليوم"}
-                          </td>
-                          <td style={{ textAlign: "center" }}>
-                            <div style={{ display: "inline-flex", alignItems: "center", gap: "8px", justifyContent: "center" }}>
-                              <button
-                                onClick={() =>
-                                  handleApproveRequest(
-                                    req.subscription_id || req.id || req.subscription?.id,
-                                  )
-                                }
-                                disabled={isProcessingAction}
-                                className="btn-primary"
-                                style={{
-                                  padding: "6px 14px",
-                                  fontSize: "0.78rem",
-                                  background: "linear-gradient(135deg, #10b981 0%, #059669 100%)",
-                                  boxShadow: "0 2px 12px rgba(16, 185, 129, 0.35)",
-                                  gap: "5px",
-                                }}
-                                title="قبول طلب التفعيل وتوليد كود الاشتراك"
-                              >
-                                <Check size={14} />
-                                <span>قبول</span>
-                              </button>
-                              <button
-                                onClick={() =>
-                                  handleRejectRequest(
-                                    req.subscription_id || req.id || req.subscription?.id,
-                                  )
-                                }
-                                disabled={isProcessingAction}
-                                className="btn-secondary"
-                                style={{
-                                  padding: "6px 12px",
-                                  fontSize: "0.78rem",
-                                  color: "#fda4af",
-                                  borderColor: "rgba(244, 63, 94, 0.35)",
-                                  gap: "5px",
-                                }}
-                                title="إلغاء / رفض طلب التفعيل"
-                              >
-                                <XCircle size={14} />
-                                <span>رفض</span>
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                          </div>
+                        </div>
+
+                        <span className="status-badge-pill pending-pill">
+                          <span className="status-dot" />
+                          <span>قيد المراجعة</span>
+                        </span>
+                      </div>
+
+                      <div className="student-mobile-card-body">
+                        <div className="card-info-grid">
+                          <div className="card-info-col">
+                            <span className="card-label">هاتف الطالب:</span>
+                            <span className="card-value font-mono ltr">{studentPhone}</span>
+                          </div>
+                          <div className="card-info-col">
+                            <span className="card-label">هاتف ولي الأمر:</span>
+                            <span className="card-value font-mono ltr">{parentPhone}</span>
+                          </div>
+                        </div>
+                        <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                          تاريخ الطلب: {req.created_at ? new Date(req.created_at).toLocaleDateString("ar-EG") : "اليوم"}
+                        </div>
+                      </div>
+
+                      <div className="student-mobile-card-footer">
+                        <button
+                          onClick={() =>
+                            handleApproveRequest(
+                              req.subscription_id || req.id || req.subscription?.id,
+                            )
+                          }
+                          disabled={isProcessingAction}
+                          className="btn-card-action btn-success-action"
+                        >
+                          <Check size={15} />
+                          <span>قبول وتفعيل</span>
+                        </button>
+                        <button
+                          onClick={() =>
+                            handleRejectRequest(
+                              req.subscription_id || req.id || req.subscription?.id,
+                            )
+                          }
+                          disabled={isProcessingAction}
+                          className="btn-card-action btn-danger-action"
+                        >
+                          <XCircle size={15} />
+                          <span>رفض الطلب</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
               <div className="modern-table-footer">
                 <span>
@@ -2400,7 +2425,7 @@ export default function TeacherDashboardPage() {
               </div>
 
               {/* Status Segmented Filter */}
-              <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+              <div className="status-filter-wrapper">
                 <div className="status-filter-group" role="group" aria-label="تصفية حسب الحالة">
                   <button
                     type="button"
@@ -2431,18 +2456,6 @@ export default function TeacherDashboardPage() {
                     <span className="status-filter-count">{approvedStats.deactivated}</span>
                   </button>
                 </div>
-
-                {/* Quick Deactivated Shortcut Button */}
-                <button
-                  type="button"
-                  onClick={() => setApprovedStatus(approvedStatus === "deactivated" ? "all" : "deactivated")}
-                  className={`btn-quick-deactivated ${approvedStatus === "deactivated" ? "is-active" : ""}`}
-                  title={approvedStatus === "deactivated" ? "إظهار جميع الاشتراكات" : "تصفية وعرض الاشتراكات المعطلة فقط"}
-                >
-                  <UserX size={15} />
-                  <span>{approvedStatus === "deactivated" ? "إلغاء فلتر المعطلين" : "عرض المعطلين فقط"}</span>
-                  <span className="badge-pill">{approvedStats.deactivated}</span>
-                </button>
               </div>
             </div>
 
@@ -2550,319 +2563,515 @@ export default function TeacherDashboardPage() {
             </div>
           ) : (
             <div className="modern-table-container">
-              <div className="modern-table-scroll">
-                <table className="modern-table">
-                  <thead>
-                    <tr>
-                      <th style={{ width: "22%" }}>اسم الطالب</th>
-                      <th style={{ width: "13%", textAlign: "center" }}>الصف الدراسي</th>
-                      <th style={{ width: "18%", textAlign: "center" }}>كود الاشتراك</th>
-                      <th style={{ width: "13%", textAlign: "center" }}>حالة الاشتراك</th>
-                      <th style={{ width: "12%", textAlign: "center" }}>تاريخ البداية</th>
-                      <th style={{ width: "12%" }}>الهاتف</th>
-                      <th style={{ width: "14%", textAlign: "center" }}>الإجراءات</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredApproved.map((item) => {
-                      const studentObj = item.student || item.user || item;
-                      const subObj =
-                        item.subscription ||
-                        item.active_subscription ||
-                        item.subscriptions?.[0] ||
-                        item;
+              {/* Desktop Table View (> 768px) */}
+              <div className="modern-table-desktop-view">
+                <div className="modern-table-scroll">
+                  <table className="modern-table">
+                    <thead>
+                      <tr>
+                        <th style={{ width: "22%" }}>اسم الطالب</th>
+                        <th style={{ width: "13%", textAlign: "center" }}>الصف الدراسي</th>
+                        <th style={{ width: "18%", textAlign: "center" }}>كود الاشتراك</th>
+                        <th style={{ width: "13%", textAlign: "center" }}>حالة الاشتراك</th>
+                        <th style={{ width: "12%", textAlign: "center" }}>تاريخ البداية</th>
+                        <th style={{ width: "12%" }}>الهاتف</th>
+                        <th style={{ width: "14%", textAlign: "center" }}>الإجراءات</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredApproved.map((item) => {
+                        const studentObj = item.student || item.user || item;
+                        const subObj =
+                          item.subscription ||
+                          item.active_subscription ||
+                          item.subscriptions?.[0] ||
+                          item;
 
-                      const firstName = item.first_name || studentObj.first_name || "";
-                      const lastName = item.last_name || studentObj.last_name || "";
-                      const studentName =
-                        `${firstName} ${lastName}`.trim() ||
-                        item.name ||
-                        studentObj.name ||
-                        "طالب معتمد";
+                        const firstName = item.first_name || studentObj.first_name || "";
+                        const lastName = item.last_name || studentObj.last_name || "";
+                        const studentName =
+                          `${firstName} ${lastName}`.trim() ||
+                          item.name ||
+                          studentObj.name ||
+                          "طالب معتمد";
 
-                      const gradeId =
-                        item.grade_id ||
-                        studentObj.grade_id ||
-                        item.grade?.id ||
-                        studentObj.grade?.id ||
-                        1;
-                      const gradeName = getArabicGradeName(
-                        item.grade || studentObj.grade,
-                        gradeId,
-                      );
+                        const gradeId =
+                          item.grade_id ||
+                          studentObj.grade_id ||
+                          item.grade?.id ||
+                          studentObj.grade?.id ||
+                          1;
+                        const gradeName = getArabicGradeName(
+                          item.grade || studentObj.grade,
+                          gradeId,
+                        );
 
-                      const subscriptionCode =
-                        getSubscriptionCode(
-                          subObj.subscription_code,
-                          item.subscription_code,
-                          studentObj.subscription_code,
-                          subObj,
-                          item.code,
-                          studentObj.code,
-                        ) || "—";
+                        const subscriptionCode =
+                          getSubscriptionCode(
+                            subObj.subscription_code,
+                            item.subscription_code,
+                            studentObj.subscription_code,
+                            subObj,
+                            item.code,
+                            studentObj.code,
+                          ) || "—";
 
-                      const statusVal =
-                        getSubscriptionStatus(subObj, item, studentObj) || "active";
-                      const isDeactivated =
-                        isDeactivatedStatus(statusVal) ||
-                        subObj.is_active === false ||
-                        item.is_active === false;
-                      const isActive = !isDeactivated;
+                        const statusVal =
+                          getSubscriptionStatus(subObj, item, studentObj) || "active";
+                        const isDeactivated =
+                          isDeactivatedStatus(statusVal) ||
+                          subObj.is_active === false ||
+                          item.is_active === false;
+                        const isActive = !isDeactivated;
 
-                      const subscriptionStartDateRaw =
-                        subObj.start_date ||
-                        item.start_date ||
-                        studentObj.start_date ||
-                        subObj.subscription?.start_date ||
-                        item.subscription?.start_date ||
-                        "";
-                      const subscriptionStartDate =
-                        formatSubscriptionExpiry(subscriptionStartDateRaw);
-                      const phone = studentObj.phone || item.phone || "—";
-                      const isCopied = copiedCode === subscriptionCode;
+                        const subscriptionStartDateRaw =
+                          subObj.start_date ||
+                          item.start_date ||
+                          studentObj.start_date ||
+                          subObj.subscription?.start_date ||
+                          item.subscription?.start_date ||
+                          "";
+                        const subscriptionStartDate =
+                          formatSubscriptionExpiry(subscriptionStartDateRaw);
+                        const phone = studentObj.phone || item.phone || "—";
+                        const isCopied = copiedCode === subscriptionCode;
 
-                      return (
-                        <tr key={item.id} className={!isActive ? "row-deactivated" : ""}>
-                          <td>
-                            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                        return (
+                          <tr key={item.id} className={!isActive ? "row-deactivated" : ""}>
+                            <td>
+                              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                                <div
+                                  style={{
+                                    width: "36px",
+                                    height: "36px",
+                                    borderRadius: "11px",
+                                    background: isActive
+                                      ? "linear-gradient(135deg, #10b981 0%, #059669 100%)"
+                                      : "linear-gradient(135deg, #e11d48 0%, #9f1239 100%)",
+                                    color: "#fff",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    fontWeight: 900,
+                                    fontSize: "0.85rem",
+                                    flexShrink: 0,
+                                    boxShadow: isActive
+                                      ? "0 3px 10px rgba(16, 185, 129, 0.25)"
+                                      : "0 3px 10px rgba(225, 29, 72, 0.25)",
+                                  }}
+                                >
+                                  {studentName.charAt(0)}
+                                </div>
+                                <div style={{ minWidth: 0 }}>
+                                  <div
+                                    title={studentName}
+                                    style={{
+                                      fontWeight: 800,
+                                      color: "#fff",
+                                      fontSize: "0.88rem",
+                                      whiteSpace: "nowrap",
+                                      overflow: "hidden",
+                                      textOverflow: "ellipsis",
+                                    }}
+                                  >
+                                    {studentName}
+                                  </div>
+                                  <span style={{ fontSize: "0.7rem", color: "var(--text-dim)" }}>
+                                    ID: {item.student_id || studentObj.id || item.id}
+                                  </span>
+                                </div>
+                              </div>
+                            </td>
+                            <td style={{ textAlign: "center" }}>
+                              <span className="badge-tag">{gradeName}</span>
+                            </td>
+                            <td style={{ textAlign: "center" }}>
                               <div
                                 style={{
-                                  width: "36px",
-                                  height: "36px",
-                                  borderRadius: "11px",
-                                  background: isActive
-                                    ? "linear-gradient(135deg, #10b981 0%, #059669 100%)"
-                                    : "linear-gradient(135deg, #e11d48 0%, #9f1239 100%)",
-                                  color: "#fff",
-                                  display: "flex",
+                                  display: "inline-flex",
                                   alignItems: "center",
-                                  justifyContent: "center",
-                                  fontWeight: 900,
-                                  fontSize: "0.85rem",
-                                  flexShrink: 0,
-                                  boxShadow: isActive
-                                    ? "0 3px 10px rgba(16, 185, 129, 0.25)"
-                                    : "0 3px 10px rgba(225, 29, 72, 0.25)",
+                                  gap: "6px",
+                                  background: "rgba(6, 182, 212, 0.08)",
+                                  border: "1px solid rgba(6, 182, 212, 0.22)",
+                                  padding: "4px 10px",
+                                  borderRadius: "8px",
                                 }}
                               >
-                                {studentName.charAt(0)}
-                              </div>
-                              <div style={{ minWidth: 0 }}>
-                                <div
-                                  title={studentName}
+                                <span
                                   style={{
-                                    fontWeight: 800,
-                                    color: "#fff",
+                                    fontFamily: "monospace",
+                                    fontWeight: 900,
+                                    color: "var(--cyan)",
                                     fontSize: "0.88rem",
-                                    whiteSpace: "nowrap",
-                                    overflow: "hidden",
-                                    textOverflow: "ellipsis",
+                                    letterSpacing: "0.8px",
+                                    direction: "ltr",
                                   }}
                                 >
-                                  {studentName}
-                                </div>
-                                <span style={{ fontSize: "0.7rem", color: "var(--text-dim)" }}>
-                                  ID: {item.student_id || studentObj.id || item.id}
+                                  {subscriptionCode}
                                 </span>
+                                {subscriptionCode !== "—" && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleCopyCode(subscriptionCode)}
+                                    style={{
+                                      background: "none",
+                                      border: "none",
+                                      color: isCopied ? "var(--emerald)" : "var(--text-muted)",
+                                      cursor: "pointer",
+                                      padding: "2px",
+                                      display: "flex",
+                                    }}
+                                    title="نسخ الكود"
+                                  >
+                                    {isCopied ? <Check size={14} /> : <Copy size={14} />}
+                                  </button>
+                                )}
                               </div>
-                            </div>
-                          </td>
-                          <td style={{ textAlign: "center" }}>
-                            <span className="badge-tag">{gradeName}</span>
-                          </td>
-                          <td style={{ textAlign: "center" }}>
-                            <div
-                              style={{
-                                display: "inline-flex",
-                                alignItems: "center",
-                                gap: "6px",
-                                background: "rgba(6, 182, 212, 0.08)",
-                                border: "1px solid rgba(6, 182, 212, 0.22)",
-                                padding: "4px 10px",
-                                borderRadius: "8px",
-                              }}
-                            >
+                            </td>
+                            <td style={{ textAlign: "center" }}>
                               <span
                                 style={{
-                                  fontFamily: "monospace",
-                                  fontWeight: 900,
-                                  color: "var(--cyan)",
-                                  fontSize: "0.88rem",
-                                  letterSpacing: "0.8px",
-                                  direction: "ltr",
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "5px",
+                                  fontSize: "0.74rem",
+                                  fontWeight: 800,
+                                  padding: "4px 10px",
+                                  borderRadius: "999px",
+                                  background: isActive
+                                    ? "rgba(16, 185, 129, 0.14)"
+                                    : "rgba(244, 63, 94, 0.14)",
+                                  color: isActive ? "var(--emerald)" : "#fda4af",
+                                  border: `1px solid ${isActive ? "rgba(16, 185, 129, 0.3)" : "rgba(244, 63, 94, 0.3)"}`,
+                                  whiteSpace: "nowrap",
                                 }}
                               >
-                                {subscriptionCode}
-                              </span>
-                              {subscriptionCode !== "—" && (
-                                <button
-                                  type="button"
-                                  onClick={() => handleCopyCode(subscriptionCode)}
+                                <span
                                   style={{
-                                    background: "none",
-                                    border: "none",
-                                    color: isCopied ? "var(--emerald)" : "var(--text-muted)",
-                                    cursor: "pointer",
-                                    padding: "2px",
-                                    display: "flex",
+                                    width: "6px",
+                                    height: "6px",
+                                    borderRadius: "50%",
+                                    background: isActive ? "var(--emerald)" : "var(--rose)",
                                   }}
-                                  title="نسخ الكود"
-                                >
-                                  {isCopied ? <Check size={14} /> : <Copy size={14} />}
-                                </button>
-                              )}
-                            </div>
-                          </td>
-                          <td style={{ textAlign: "center" }}>
-                            <span
+                                />
+                                <span>{isActive ? "نشط ومفعل" : "معطل / محظور"}</span>
+                              </span>
+                            </td>
+                            <td
                               style={{
-                                display: "inline-flex",
-                                alignItems: "center",
-                                gap: "5px",
-                                fontSize: "0.74rem",
-                                fontWeight: 800,
-                                padding: "4px 10px",
-                                borderRadius: "999px",
-                                background: isActive
-                                  ? "rgba(16, 185, 129, 0.14)"
-                                  : "rgba(244, 63, 94, 0.14)",
-                                color: isActive ? "var(--emerald)" : "#fda4af",
-                                border: `1px solid ${isActive ? "rgba(16, 185, 129, 0.3)" : "rgba(244, 63, 94, 0.3)"}`,
+                                color: "var(--text-muted)",
+                                fontSize: "0.82rem",
+                                textAlign: "center",
+                                whiteSpace: "nowrap",
+                              }}
+                              title={String(subscriptionStartDateRaw)}
+                            >
+                              {subscriptionStartDate}
+                            </td>
+                            <td
+                              style={{
+                                direction: "ltr",
+                                textAlign: "right",
+                                color: "var(--text-muted)",
+                                fontFamily: "monospace",
+                                fontSize: "0.85rem",
                                 whiteSpace: "nowrap",
                               }}
                             >
-                              <span
+                              {phone}
+                            </td>
+                            <td style={{ textAlign: "center" }}>
+                              <div
                                 style={{
-                                  width: "6px",
-                                  height: "6px",
-                                  borderRadius: "50%",
-                                  background: isActive ? "var(--emerald)" : "var(--rose)",
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "6px",
+                                  justifyContent: "center",
+                                  flexWrap: "nowrap",
                                 }}
-                              />
-                              <span>{isActive ? "نشط ومفعل" : "معطل / محظور"}</span>
-                            </span>
-                          </td>
-                          <td
-                            style={{
-                              color: "var(--text-muted)",
-                              fontSize: "0.82rem",
-                              textAlign: "center",
-                              whiteSpace: "nowrap",
-                            }}
-                            title={String(subscriptionStartDateRaw)}
-                          >
-                            {subscriptionStartDate}
-                          </td>
-                          <td
-                            style={{
-                              direction: "ltr",
-                              textAlign: "right",
-                              color: "var(--text-muted)",
-                              fontFamily: "monospace",
-                              fontSize: "0.85rem",
-                              whiteSpace: "nowrap",
-                            }}
-                          >
-                            {phone}
-                          </td>
-                          <td style={{ textAlign: "center" }}>
-                            <div
-                              style={{
-                                display: "inline-flex",
-                                alignItems: "center",
-                                gap: "6px",
-                                justifyContent: "center",
-                                flexWrap: "nowrap",
-                              }}
-                            >
-                              {isActive ? (
-                                <>
-                                  <button
-                                    onClick={() =>
-                                      setDeactivationTarget({
-                                        type: "subscription",
-                                        subscriptionId:
-                                          item.subscription_id ||
-                                          subObj.subscription_id ||
-                                          (subObj !== item ? subObj.id : null) ||
-                                          item.active_subscription?.id ||
-                                          item.subscriptions?.[0]?.id ||
-                                          item.id,
-                                        studentName,
-                                        subscriptionCode:
-                                          subscriptionCode === "—" ? "" : subscriptionCode,
-                                      })
-                                    }
-                                    disabled={isProcessingAction}
-                                    className="btn-secondary"
-                                    style={{
-                                      padding: "5px 10px",
-                                      fontSize: "0.75rem",
-                                      color: "var(--rose)",
-                                      borderColor: "rgba(244, 63, 94, 0.3)",
-                                      gap: "4px",
-                                    }}
-                                    title="تعطيل الاشتراك ومنعه من الدخول"
-                                  >
-                                    <PowerOff size={13} />
-                                    <span>تعطيل</span>
-                                  </button>
-                                  {hasActiveTrustedDevice(item, studentObj, subObj) && (
+                              >
+                                {isActive ? (
+                                  <>
                                     <button
                                       onClick={() =>
-                                        handleResetDevice(
-                                          item.subscription_id ||
+                                        setDeactivationTarget({
+                                          type: "subscription",
+                                          subscriptionId:
+                                            item.subscription_id ||
                                             subObj.subscription_id ||
                                             (subObj !== item ? subObj.id : null) ||
                                             item.active_subscription?.id ||
                                             item.subscriptions?.[0]?.id ||
                                             item.id,
-                                        )
+                                          studentName,
+                                          subscriptionCode:
+                                            subscriptionCode === "—" ? "" : subscriptionCode,
+                                        })
                                       }
                                       disabled={isProcessingAction}
                                       className="btn-secondary"
                                       style={{
                                         padding: "5px 10px",
                                         fontSize: "0.75rem",
-                                        color: "var(--amber)",
-                                        borderColor: "rgba(245, 158, 11, 0.3)",
+                                        color: "var(--rose)",
+                                        borderColor: "rgba(244, 63, 94, 0.3)",
                                         gap: "4px",
                                       }}
-                                      title="إعادة ضبط الجهاز الموثوق ليتمكن الطالب من التسجيل بجهاز جديد"
+                                      title="تعطيل الاشتراك ومنعه من الدخول"
                                     >
-                                      <RotateCcw size={13} />
-                                      <span>ضبط الجهاز</span>
+                                      <PowerOff size={13} />
+                                      <span>تعطيل</span>
                                     </button>
-                                  )}
-                                </>
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    openStudentDeactivationConfirmation(studentObj || item)
-                                  }
-                                  disabled={isProcessingAction}
-                                  className="btn-secondary"
-                                  style={{
-                                    padding: "5px 10px",
-                                    fontSize: "0.74rem",
-                                    color: "#fda4af",
-                                    borderColor: "rgba(244, 63, 94, 0.35)",
-                                    gap: "4px",
-                                  }}
-                                  title="حذف هذا الاشتراك المعطل نهائياً"
-                                >
-                                  <Trash2 size={13} />
-                                  <span>حذف نهائي</span>
-                                </button>
-                              )}
+                                    {hasActiveTrustedDevice(item, studentObj, subObj) && (
+                                      <button
+                                        onClick={() =>
+                                          handleResetDevice(
+                                            item.subscription_id ||
+                                              subObj.subscription_id ||
+                                              (subObj !== item ? subObj.id : null) ||
+                                              item.active_subscription?.id ||
+                                              item.subscriptions?.[0]?.id ||
+                                              item.id,
+                                          )
+                                        }
+                                        disabled={isProcessingAction}
+                                        className="btn-secondary"
+                                        style={{
+                                          padding: "5px 10px",
+                                          fontSize: "0.75rem",
+                                          color: "var(--amber)",
+                                          borderColor: "rgba(245, 158, 11, 0.3)",
+                                          gap: "4px",
+                                        }}
+                                        title="إعادة ضبط الجهاز الموثوق ليتمكن الطالب من التسجيل بجهاز جديد"
+                                      >
+                                        <RotateCcw size={13} />
+                                        <span>ضبط الجهاز</span>
+                                      </button>
+                                    )}
+                                  </>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      openStudentDeactivationConfirmation(studentObj || item)
+                                    }
+                                    disabled={isProcessingAction}
+                                    className="btn-secondary"
+                                    style={{
+                                      padding: "5px 10px",
+                                      fontSize: "0.74rem",
+                                      color: "#fda4af",
+                                      borderColor: "rgba(244, 63, 94, 0.35)",
+                                      gap: "4px",
+                                    }}
+                                    title="حذف هذا الاشتراك المعطل نهائياً"
+                                  >
+                                    <Trash2 size={13} />
+                                    <span>حذف نهائي</span>
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Mobile Cards View (<= 768px) */}
+              <div className="modern-cards-mobile-view">
+                {filteredApproved.map((item) => {
+                  const studentObj = item.student || item.user || item;
+                  const subObj =
+                    item.subscription ||
+                    item.active_subscription ||
+                    item.subscriptions?.[0] ||
+                    item;
+
+                  const firstName = item.first_name || studentObj.first_name || "";
+                  const lastName = item.last_name || studentObj.last_name || "";
+                  const studentName =
+                    `${firstName} ${lastName}`.trim() ||
+                    item.name ||
+                    studentObj.name ||
+                    "طالب معتمد";
+
+                  const gradeId =
+                    item.grade_id ||
+                    studentObj.grade_id ||
+                    item.grade?.id ||
+                    studentObj.grade?.id ||
+                    1;
+                  const gradeName = getArabicGradeName(
+                    item.grade || studentObj.grade,
+                    gradeId,
+                  );
+
+                  const subscriptionCode =
+                    getSubscriptionCode(
+                      subObj.subscription_code,
+                      item.subscription_code,
+                      studentObj.subscription_code,
+                      subObj,
+                      item.code,
+                      studentObj.code,
+                    ) || "—";
+
+                  const statusVal =
+                    getSubscriptionStatus(subObj, item, studentObj) || "active";
+                  const isDeactivated =
+                    isDeactivatedStatus(statusVal) ||
+                    subObj.is_active === false ||
+                    item.is_active === false;
+                  const isActive = !isDeactivated;
+
+                  const subscriptionStartDateRaw =
+                    subObj.start_date ||
+                    item.start_date ||
+                    studentObj.start_date ||
+                    subObj.subscription?.start_date ||
+                    item.subscription?.start_date ||
+                    "";
+                  const subscriptionStartDate =
+                    formatSubscriptionExpiry(subscriptionStartDateRaw);
+                  const phone = studentObj.phone || item.phone || "—";
+                  const isCopied = copiedCode === subscriptionCode;
+
+                  return (
+                    <div
+                      key={item.id}
+                      className={`student-mobile-card ${!isActive ? "is-deactivated" : ""}`}
+                    >
+                      {/* Header */}
+                      <div className="student-mobile-card-header">
+                        <div className="student-card-info">
+                          <div
+                            className={`student-card-avatar ${isActive ? "is-active" : "is-deactivated"}`}
+                          >
+                            {studentName.charAt(0)}
+                          </div>
+                          <div>
+                            <div className="student-card-name">{studentName}</div>
+                            <div className="student-card-meta">
+                              <span className="badge-tag">{gradeName}</span>
+                              <span className="student-card-id">
+                                ID: {item.student_id || studentObj.id || item.id}
+                              </span>
                             </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                          </div>
+                        </div>
+
+                        <span
+                          className={`status-badge-pill ${isActive ? "active-pill" : "deactivated-pill"}`}
+                        >
+                          <span className="status-dot" />
+                          <span>{isActive ? "نشط ومفعل" : "معطل"}</span>
+                        </span>
+                      </div>
+
+                      {/* Body */}
+                      <div className="student-mobile-card-body">
+                        <div className="card-code-row">
+                          <span className="card-label">كود الاشتراك:</span>
+                          <div className="card-code-pill">
+                            <span className="card-code-text">{subscriptionCode}</span>
+                            {subscriptionCode !== "—" && (
+                              <button
+                                type="button"
+                                onClick={() => handleCopyCode(subscriptionCode)}
+                                className="card-code-copy-btn"
+                                title="نسخ كود الاشتراك"
+                              >
+                                {isCopied ? (
+                                  <Check size={14} style={{ color: "var(--emerald)" }} />
+                                ) : (
+                                  <Copy size={14} />
+                                )}
+                                <span>{isCopied ? "تم النسخ" : "نسخ"}</span>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="card-info-grid">
+                          <div className="card-info-col">
+                            <span className="card-label">رقم الهاتف:</span>
+                            <span className="card-value font-mono ltr">{phone}</span>
+                          </div>
+                          <div className="card-info-col">
+                            <span className="card-label">تاريخ التفعيل:</span>
+                            <span className="card-value">{subscriptionStartDate}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Footer Actions */}
+                      <div className="student-mobile-card-footer">
+                        {isActive ? (
+                          <>
+                            <button
+                              onClick={() =>
+                                setDeactivationTarget({
+                                  type: "subscription",
+                                  subscriptionId:
+                                    item.subscription_id ||
+                                    subObj.subscription_id ||
+                                    (subObj !== item ? subObj.id : null) ||
+                                    item.active_subscription?.id ||
+                                    item.subscriptions?.[0]?.id ||
+                                    item.id,
+                                  studentName,
+                                  subscriptionCode:
+                                    subscriptionCode === "—" ? "" : subscriptionCode,
+                                })
+                              }
+                              disabled={isProcessingAction}
+                              className="btn-card-action btn-danger-action"
+                            >
+                              <PowerOff size={14} />
+                              <span>تعطيل الاشتراك</span>
+                            </button>
+
+                            {hasActiveTrustedDevice(item, studentObj, subObj) && (
+                              <button
+                                onClick={() =>
+                                  handleResetDevice(
+                                    item.subscription_id ||
+                                      subObj.subscription_id ||
+                                      (subObj !== item ? subObj.id : null) ||
+                                      item.active_subscription?.id ||
+                                      item.subscriptions?.[0]?.id ||
+                                      item.id,
+                                  )
+                                }
+                                disabled={isProcessingAction}
+                                className="btn-card-action btn-warning-action"
+                              >
+                                <RotateCcw size={14} />
+                                <span>ضبط الجهاز</span>
+                              </button>
+                            )}
+                          </>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              openStudentDeactivationConfirmation(studentObj || item)
+                            }
+                            disabled={isProcessingAction}
+                            className="btn-card-action btn-danger-action"
+                          >
+                            <Trash2 size={14} />
+                            <span>حذف نهائي</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
               <div className="modern-table-footer">
                 <span>
@@ -2961,7 +3170,7 @@ export default function TeacherDashboardPage() {
               </div>
 
               {/* Status Segmented Filter */}
-              <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+              <div className="status-filter-wrapper">
                 <div className="status-filter-group" role="group" aria-label="تصفية حالة الطلاب">
                   <button
                     type="button"
@@ -2992,18 +3201,6 @@ export default function TeacherDashboardPage() {
                     <span className="status-filter-count">{studentsStats.deactivated}</span>
                   </button>
                 </div>
-
-                {/* Quick Deactivated Shortcut Button */}
-                <button
-                  type="button"
-                  onClick={() => setStudentsStatus(studentsStatus === "deactivated" ? "all" : "deactivated")}
-                  className={`btn-quick-deactivated ${studentsStatus === "deactivated" ? "is-active" : ""}`}
-                  title={studentsStatus === "deactivated" ? "إظهار جميع الطلاب" : "تصفية وعرض الطلاب المعطلين فقط"}
-                >
-                  <UserX size={15} />
-                  <span>{studentsStatus === "deactivated" ? "إلغاء فلتر المعطلين" : "عرض الطلاب المعطلين"}</span>
-                  <span className="badge-pill">{studentsStats.deactivated}</span>
-                </button>
               </div>
             </div>
 
@@ -3036,7 +3233,9 @@ export default function TeacherDashboardPage() {
 
           {/* Table Container */}
           <div className="modern-table-container">
-            <div className="modern-table-scroll">
+            {/* Desktop Table View */}
+            <div className="modern-table-desktop-view">
+              <div className="modern-table-scroll">
               <table className="modern-table">
                 <thead>
                   <tr>
@@ -3414,8 +3613,243 @@ export default function TeacherDashboardPage() {
                 </tbody>
               </table>
             </div>
+          </div>
 
-            {/* Table Footer */}
+          {/* Mobile Cards View */}
+          <div className="modern-cards-mobile-view">
+            {isLoadingStudents ? (
+              <div style={{ padding: "3rem 1rem", textAlign: "center", color: "var(--text-muted)" }}>
+                <RefreshCw size={24} className="animate-spin" style={{ margin: "0 auto 10px", color: "var(--cyan)" }} />
+                <p>جاري تحميل سجل الطلاب...</p>
+              </div>
+            ) : filteredStudents.length === 0 ? (
+              <div style={{ padding: "2.5rem 1rem", textAlign: "center" }}>
+                {studentsStatus === "deactivated" ? (
+                  <div style={{ maxWidth: 360, margin: "0 auto" }}>
+                    <div
+                      style={{
+                        width: "50px",
+                        height: "50px",
+                        borderRadius: "50%",
+                        background: "rgba(16, 185, 129, 0.12)",
+                        color: "var(--emerald)",
+                        display: "grid",
+                        placeItems: "center",
+                        margin: "0 auto 12px",
+                      }}
+                    >
+                      <CheckCircle2 size={26} />
+                    </div>
+                    <h4 style={{ color: "#fff", fontSize: "1rem", fontWeight: 800, marginBottom: "6px" }}>
+                      لا يوجد طلاب معطلين حالياً 🎉
+                    </h4>
+                    <p style={{ color: "var(--text-muted)", fontSize: "0.82rem", marginBottom: "1rem" }}>
+                      جميع حسابات الطلاب نشطة ومفعلة للدخول
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setStudentsStatus("all")}
+                      className="btn-secondary"
+                      style={{ fontSize: "0.8rem", padding: "6px 16px", margin: "0 auto" }}
+                    >
+                      عرض جميع الطلاب
+                    </button>
+                  </div>
+                ) : (
+                  <div>
+                    <p style={{ color: "var(--text-muted)", marginBottom: "1rem", fontSize: "0.88rem" }}>
+                      لا يوجد طلاب يطابقون خيارات البحث أو التصفية المحددة
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSearchQuery("");
+                        setGradeFilter(BRANCHES[0]);
+                        setStudentsStatus("all");
+                      }}
+                      className="btn-secondary"
+                      style={{ fontSize: "0.8rem", padding: "6px 14px", margin: "0 auto" }}
+                    >
+                      إعادة ضبط الفلاتر
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              filteredStudents.map((std, index) => {
+                const studentSubscription = approvedSubscriptions.find(
+                  (item) => {
+                    const itemStudentId =
+                      item.student?.id ||
+                      item.user?.id ||
+                      item.student_id ||
+                      item.user_id;
+                    return (
+                      (itemStudentId != null &&
+                        String(itemStudentId) ===
+                          String(std.student_id || std.id)) ||
+                      String(
+                        item.subscription_id ||
+                          item.subscription?.id ||
+                          item.active_subscription?.id ||
+                          item.subscriptions?.[0]?.id ||
+                          item.id ||
+                          "",
+                      ) ===
+                        String(
+                          std.subscription_id ||
+                            std.subscription?.id ||
+                            std.active_subscription?.id ||
+                            "__no_subscription_id__",
+                        )
+                    );
+                  },
+                );
+                const studentCode = getSubscriptionCode(
+                  std.subscription_code,
+                  std.code,
+                  studentSubscription?.subscription_code,
+                  std.active_subscription?.code,
+                  std.subscriptions?.[0]?.code,
+                  studentSubscription?.code,
+                  std.active_subscription?.subscription_code,
+                  std.subscriptions?.[0]?.subscription_code,
+                  studentSubscription?.subscription?.code,
+                  studentSubscription?.subscription?.subscription_code,
+                );
+                const isStudentActive =
+                  std.is_active !== false &&
+                  std.status !== "inactive" &&
+                  std.status !== "deactivated";
+                const isCopied = copiedCode === studentCode;
+                const studentName = std.name || `${std.first_name || ""} ${std.last_name || ""}`.trim() || "طالب بدون اسم";
+                const gradeName = getArabicGradeName(std.grade, std.grade_id);
+                const phone = std.phone || "—";
+                const parentPhone = std.parentPhone || std.parent_phone || "—";
+
+                return (
+                  <div
+                    key={std.id || index}
+                    className={`student-mobile-card ${!isStudentActive ? "is-deactivated" : ""}`}
+                  >
+                    {/* Header */}
+                    <div className="student-mobile-card-header">
+                      <div className="student-card-info">
+                        <div
+                          className={`student-card-avatar ${isStudentActive ? "is-student" : "is-deactivated"}`}
+                        >
+                          {studentName.charAt(0)}
+                        </div>
+                        <div>
+                          <div className="student-card-name">{studentName}</div>
+                          <div className="student-card-meta">
+                            <span className="badge-tag">{gradeName}</span>
+                            <span className="student-card-id">
+                              ID: {std.student_id || std.id}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <span
+                        className={`status-badge-pill ${isStudentActive ? "active-pill" : "deactivated-pill"}`}
+                      >
+                        <span className="status-dot" />
+                        <span>{isStudentActive ? "مفعل" : "معطل"}</span>
+                      </span>
+                    </div>
+
+                    {/* Body */}
+                    <div className="student-mobile-card-body">
+                      <div className="card-code-row">
+                        <span className="card-label">كود الدخول:</span>
+                        <div className="card-code-pill">
+                          <span className="card-code-text">{studentCode || "قيد الاعتماد"}</span>
+                          {studentCode && (
+                            <button
+                              type="button"
+                              onClick={() => handleCopyCode(studentCode)}
+                              className="card-code-copy-btn"
+                              title="نسخ كود الطالب"
+                            >
+                              {isCopied ? (
+                                <Check size={14} style={{ color: "var(--emerald)" }} />
+                              ) : (
+                                <Copy size={14} />
+                              )}
+                              <span>{isCopied ? "تم النسخ" : "نسخ"}</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="card-info-grid">
+                        <div className="card-info-col">
+                          <span className="card-label">هاتف الطالب:</span>
+                          {phone !== "—" ? (
+                            <a href={`tel:${phone}`} className="card-value font-mono ltr" style={{ color: "var(--cyan)", textDecoration: "none" }}>
+                              {phone}
+                            </a>
+                          ) : (
+                            <span className="card-value font-mono ltr">—</span>
+                          )}
+                        </div>
+                        <div className="card-info-col">
+                          <span className="card-label">هاتف ولي الأمر:</span>
+                          {parentPhone !== "—" ? (
+                            <a href={`tel:${parentPhone}`} className="card-value font-mono ltr" style={{ color: "var(--text-muted)", textDecoration: "none" }}>
+                              {parentPhone}
+                            </a>
+                          ) : (
+                            <span className="card-value font-mono ltr">—</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Footer Actions */}
+                    <div className="student-mobile-card-footer">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleOpenStudentDetails({
+                            ...std,
+                            code: studentCode || std.code || std.subscription_code,
+                            subscription_code: studentCode || std.subscription_code || std.code,
+                            studentSubscription,
+                            grade: getArabicGradeName(std.grade, std.grade_id),
+                            grade_name: getArabicGradeName(std.grade, std.grade_id),
+                          });
+                        }}
+                        className="btn-card-action btn-info-action"
+                      >
+                        <Eye size={14} />
+                        <span>التفاصيل</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setEditingStudent(std)}
+                        className="btn-card-action btn-warning-action"
+                      >
+                        <Edit3 size={14} />
+                        <span>تعديل</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => openStudentDeactivationConfirmation(std)}
+                        className="btn-card-action btn-danger-action"
+                      >
+                        {isStudentActive ? <PowerOff size={14} /> : <Trash2 size={14} />}
+                        <span>{isStudentActive ? "تعطيل" : "حذف"}</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
             <div className="modern-table-footer">
               <span>
                 عرض <strong>{filteredStudents.length}</strong> طالب في هذه الصفحة • إجمالي المسجلين: <strong>{studentsTotalCount}</strong>
@@ -4427,18 +4861,6 @@ export default function TeacherDashboardPage() {
                     <span className="status-filter-count">{codesStats.deactivated}</span>
                   </button>
                 </div>
-
-                {/* Quick Deactivated Shortcut Button */}
-                <button
-                  type="button"
-                  onClick={() => setCodesStatus(codesStatus === "deactivated" ? "all" : "deactivated")}
-                  className={`btn-quick-deactivated ${codesStatus === "deactivated" ? "is-active" : ""}`}
-                  title={codesStatus === "deactivated" ? "إظهار جميع الأكواد" : "تصفية وعرض الأكواد المعطلة فقط"}
-                >
-                  <UserX size={15} />
-                  <span>{codesStatus === "deactivated" ? "إلغاء فلتر المعطلين" : "عرض الأكواد المعطلة فقط"}</span>
-                  <span className="badge-pill">{codesStats.deactivated}</span>
-                </button>
               </div>
             </div>
 
@@ -4570,8 +4992,10 @@ export default function TeacherDashboardPage() {
             </div>
           ) : (
             <div className="modern-table-container">
-              <div className="modern-table-scroll">
-                <table className="modern-table">
+              {/* Desktop Table View */}
+              <div className="modern-table-desktop-view">
+                <div className="modern-table-scroll">
+                  <table className="modern-table">
                   <thead>
                     <tr>
                       <th style={{ width: "6%", textAlign: "center" }}>#</th>
@@ -4760,6 +5184,108 @@ export default function TeacherDashboardPage() {
                   </tbody>
                 </table>
               </div>
+            </div>
+
+            {/* Mobile Cards View */}
+            <div className="modern-cards-mobile-view">
+              {filteredCodes.map((item, idx) => {
+                const subscriptionCode = getSubscriptionCode(
+                  item.subscription_code,
+                  item.subscription,
+                  item,
+                );
+                const isSubscriptionInactive = getCodeItemInactiveState(item);
+                const isCopied = copiedCode === subscriptionCode;
+                const studentName = item.student_name || "طالب المنصة";
+                const phone = item.phone || "—";
+                const gradeName = getGradeNameById(selectedCodesGrade);
+
+                return (
+                  <div
+                    key={subscriptionCode || item.id || idx}
+                    className={`student-mobile-card ${isSubscriptionInactive ? "is-deactivated" : ""}`}
+                  >
+                    {/* Header */}
+                    <div className="student-mobile-card-header">
+                      <div className="student-card-info">
+                        <div
+                          className={`student-card-avatar ${!isSubscriptionInactive ? "is-student" : "is-deactivated"}`}
+                          style={{
+                            background: !isSubscriptionInactive
+                              ? "linear-gradient(135deg, #a855f7, #6366f1)"
+                              : undefined,
+                          }}
+                        >
+                          {studentName.trim().charAt(0)}
+                        </div>
+                        <div>
+                          <div className="student-card-name">{studentName}</div>
+                          <div className="student-card-meta">
+                            <span className="badge-tag">{gradeName}</span>
+                            <span className="student-card-id">#{idx + 1}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <span
+                        className={`status-badge-pill ${!isSubscriptionInactive ? "active-pill" : "deactivated-pill"}`}
+                      >
+                        <span className="status-dot" />
+                        <span>{!isSubscriptionInactive ? "كود نشط" : "معطل"}</span>
+                      </span>
+                    </div>
+
+                    {/* Body */}
+                    <div className="student-mobile-card-body">
+                      <div className="card-code-row">
+                        <span className="card-label">كود الاشتراك:</span>
+                        <div className="card-code-pill">
+                          <span className="card-code-text">{subscriptionCode || "—"}</span>
+                          {subscriptionCode && (
+                            <button
+                              type="button"
+                              onClick={() => handleCopyCode(subscriptionCode)}
+                              className="card-code-copy-btn"
+                              title="نسخ كود الاشتراك"
+                            >
+                              {isCopied ? (
+                                <Check size={14} style={{ color: "var(--emerald)" }} />
+                              ) : (
+                                <Copy size={14} />
+                              )}
+                              <span>{isCopied ? "تم النسخ" : "نسخ"}</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {phone !== "—" && (
+                        <div className="card-info-grid" style={{ gridTemplateColumns: "1fr" }}>
+                          <div className="card-info-col">
+                            <span className="card-label">رقم الهاتف:</span>
+                            <a href={`tel:${phone}`} className="card-value font-mono ltr" style={{ color: "var(--cyan)", textDecoration: "none" }}>
+                              {phone}
+                            </a>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Footer Actions */}
+                    <div className="student-mobile-card-footer">
+                      <button
+                        type="button"
+                        onClick={() => handleCopyCode(subscriptionCode)}
+                        className="btn-card-action btn-info-action"
+                      >
+                        {isCopied ? <Check size={14} /> : <Copy size={14} />}
+                        <span>{isCopied ? "تم نسخ كود الدخول" : "نسخ كود الاشتراك"}</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
 
               {/* Table Footer Summary */}
               <div className="modern-table-footer">

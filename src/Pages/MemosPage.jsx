@@ -317,31 +317,15 @@ export default function MemosPage() {
       style={{ paddingTop: "1.5rem", paddingBottom: "3rem" }}
     >
       {/* Header */}
-      <div className="section-header" style={{ alignItems: "flex-start", gap: "1.25rem" }}>
+      <div className="section-header" style={{ alignItems: "center", marginBottom: "1.25rem", gap: "1rem" }}>
         <div>
-          <div
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "6px",
-              fontSize: "0.75rem",
-              color: "var(--purple)",
-              fontWeight: 700,
-              marginBottom: "6px",
-            }}
-          >
-            <BookOpen size={14} />
-            <span>السلسلة التعليمية الأشهر في الرياضيات</span>
-          </div>
           <h1 className="section-title">
-            {isTeacher
-              ? "معاينة وإدارة سلسلة مذكرات العميد"
-              : `مذكرات وملخصات (${studentGrade})`}
+            {isTeacher ? "مذكرات العميد PDF" : `مذكرات ${studentGrade}`}
           </h1>
           <p className="section-desc">
             {isTeacher
-              ? "تصفح المذكرات المرفوعة، رفع مذكرات جديدة بصيغة PDF، وإدارتها للطلاب"
-              : `المذكرات الأصلية ونماذج الامتحانات المخصصة لـ: ${student?.name || "طالب المنصة"}`}
+              ? "إدارة وتحميل مذكرات الشرح ونماذج الامتحانات"
+              : `المذكرات الأصلية المخصصة لـ ${student?.name || "طالب المنصة"}`}
           </p>
         </div>
 
@@ -439,7 +423,11 @@ export default function MemosPage() {
       )}
 
       {/* Grade Filter for Teacher */}
-      {isTeacher && <GradeFilter value={selectedGrade} onChange={setSelectedGrade} includeAll />}
+      {isTeacher && (
+        <div style={{ marginBottom: "1.5rem" }}>
+          <GradeFilter value={selectedGrade} onChange={setSelectedGrade} includeAll showLabel={true} />
+        </div>
+      )}
 
       {/* Memos Grid */}
       <div
