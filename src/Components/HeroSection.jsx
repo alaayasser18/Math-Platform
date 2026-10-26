@@ -25,55 +25,55 @@ export default function HeroSection({ student = {}, onExploreLessons }) {
             <div className="lg:col-span-7 space-y-5 text-right">
               
               {/* Dynamic Welcome Pill tailored to Registered Student */}
-              <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-cyan-950/60 border border-cyan-400/30 text-cyan-300 text-xs font-semibold shadow-inner">
-                <Sparkles className="w-4 h-4 text-cyan-400 animate-spin" style={{ animationDuration: '6s' }} />
-                <span>أهلاً بك يا <strong className="text-white underline decoration-cyan-400">{studentName}</strong> في منصة الرياضيات</span>
-                <span className="text-[11px] bg-cyan-500/20 text-cyan-200 px-2 py-0.5 rounded-full border border-cyan-400/30">
+              <div className="inline-flex flex-wrap items-center gap-2 px-3 sm:px-3.5 py-1.5 rounded-2xl sm:rounded-full bg-cyan-950/60 border border-cyan-400/30 text-cyan-300 text-xs font-semibold shadow-inner max-w-full">
+                <Sparkles className="w-4 h-4 text-cyan-400 animate-spin shrink-0" style={{ animationDuration: '6s' }} />
+                <span className="break-words">أهلاً بك يا <strong className="text-white underline decoration-cyan-400">{studentName}</strong> في منصة الرياضيات</span>
+                <span className="text-[11px] bg-cyan-500/20 text-cyan-200 px-2 py-0.5 rounded-full border border-cyan-400/30 shrink-0">
                   {studentGrade}
                 </span>
               </div>
 
               {/* Main Teacher Headline */}
               <div>
-                <h1 className="text-3xl sm:text-4xl lg:text-5xl font-black tracking-tight text-white font-['Alexandria'] leading-tight">
+                <h1 className="text-2xl sm:text-4xl lg:text-5xl font-black tracking-tight text-white font-['Alexandria'] leading-tight">
                   مستر / <span className="bg-gradient-to-l from-cyan-400 via-indigo-300 to-white bg-clip-text text-transparent">محمد عبد الخالق</span>
                 </h1>
-                <p className="text-base sm:text-lg font-semibold text-indigo-300 mt-2 flex items-center gap-2">
+                <p className="text-sm sm:text-lg font-semibold text-indigo-300 mt-2 flex items-center gap-2">
                   <span className="w-2 h-2 rounded-full bg-cyan-400 inline-block"></span>
                   {TEACHER_INFO.title}
                 </p>
               </div>
 
               {/* Subtitle / Description */}
-              <p className="text-sm sm:text-base text-slate-300 leading-relaxed max-w-2xl font-light">
+              <p className="text-xs sm:text-base text-slate-300 leading-relaxed max-w-2xl font-light">
                 {TEACHER_INFO.quote}
               </p>
 
               {/* 3 Figma Stat Badges with Glowing Counters */}
-              <div className="grid grid-cols-3 gap-3 pt-2 max-w-xl">
-                <div className="p-3.5 rounded-2xl bg-slate-900/80 border border-white/10 text-center hover:border-cyan-500/40 transition-all">
-                  <div className="text-xl sm:text-2xl font-black text-cyan-400 font-['Cairo']">
+              <div className="grid grid-cols-3 gap-1.5 sm:gap-3 pt-2 max-w-xl">
+                <div className="p-2 sm:p-3.5 rounded-xl sm:rounded-2xl bg-slate-900/80 border border-white/10 text-center hover:border-cyan-500/40 transition-all">
+                  <div className="text-base sm:text-2xl font-black text-cyan-400 font-['Cairo']">
                     +2500
                   </div>
-                  <div className="text-[11px] sm:text-xs text-slate-400 font-medium mt-0.5">
+                  <div className="text-[10px] sm:text-xs text-slate-400 font-medium mt-0.5">
                     طالب متفوق
                   </div>
                 </div>
 
-                <div className="p-3.5 rounded-2xl bg-slate-900/80 border border-white/10 text-center hover:border-indigo-500/40 transition-all">
-                  <div className="text-xl sm:text-2xl font-black text-indigo-400 font-['Cairo']">
+                <div className="p-2 sm:p-3.5 rounded-xl sm:rounded-2xl bg-slate-900/80 border border-white/10 text-center hover:border-indigo-500/40 transition-all">
+                  <div className="text-base sm:text-2xl font-black text-indigo-400 font-['Cairo']">
                     +120
                   </div>
-                  <div className="text-[11px] sm:text-xs text-slate-400 font-medium mt-0.5">
+                  <div className="text-[10px] sm:text-xs text-slate-400 font-medium mt-0.5">
                     محاضرة تفاعلية
                   </div>
                 </div>
 
-                <div className="p-3.5 rounded-2xl bg-slate-900/80 border border-white/10 text-center hover:border-purple-500/40 transition-all">
-                  <div className="text-xl sm:text-2xl font-black text-purple-400 font-['Cairo']">
+                <div className="p-2 sm:p-3.5 rounded-xl sm:rounded-2xl bg-slate-900/80 border border-white/10 text-center hover:border-purple-500/40 transition-all">
+                  <div className="text-base sm:text-2xl font-black text-purple-400 font-['Cairo']">
                     99%
                   </div>
-                  <div className="text-[11px] sm:text-xs text-slate-400 font-medium mt-0.5">
+                  <div className="text-[10px] sm:text-xs text-slate-400 font-medium mt-0.5">
                     نسبة النجاح
                   </div>
                 </div>

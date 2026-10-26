@@ -1,22 +1,22 @@
 import { Link } from "react-router-dom";
 import { TEACHER_INFO } from "../data/platformData";
-import { Heart, MessageCircle, Phone, Video, Send } from "lucide-react";
+import { Heart, MessageCircle } from "lucide-react";
 
 export default function Footer() {
   return (
     <footer className="footer">
       <div className="container">
         <div
+          className="footer-grid"
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
             gap: "2rem",
             paddingBottom: "2rem",
             borderBottom: "1px solid var(--border-subtle)",
           }}
         >
           {/* Col 1 */}
-          <div style={{ gridColumn: "span 2" }}>
+          <div className="footer-brand-col">
             <div
               style={{
                 display: "flex",
@@ -97,11 +97,6 @@ export default function Footer() {
                   مذكرات العميد PDF
                 </Link>
               </li>
-              <li>
-                <Link to="/profile" style={{ color: "var(--text-muted)" }}>
-                  بيانات الطالب
-                </Link>
-              </li>
             </ul>
           </div>
 
@@ -129,7 +124,8 @@ export default function Footer() {
             <a
               href={`https://wa.me/${TEACHER_INFO.contacts.whatsapp}`}
               target="_blank"
-              rel="noreferrer"
+              rel="noopener noreferrer"
+              aria-label={`التواصل عبر واتساب على الرقم +${TEACHER_INFO.contacts.whatsapp}`}
               style={{
                 display: "inline-flex",
                 alignItems: "center",
@@ -140,12 +136,13 @@ export default function Footer() {
               }}
             >
               <MessageCircle size={16} />
-              <span>+20 10 65040805(واتساب)</span>
+              <span dir="ltr">+{TEACHER_INFO.contacts.whatsapp} (واتساب)</span>
             </a>
           </div>
         </div>
 
         <div
+          className="footer-bottom-row"
           style={{
             paddingTop: "1.5rem",
             display: "flex",

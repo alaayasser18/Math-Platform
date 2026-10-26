@@ -10,7 +10,7 @@ export default function VideoModal({ isOpen, onClose, lesson, onOpenQuiz, onDown
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div 
-        className="modal-content w-full max-w-4xl p-4 sm:p-6 bg-slate-900 border border-indigo-500/30 rounded-3xl"
+        className="modal-content w-full max-w-4xl max-h-[92vh] overflow-y-auto p-4 sm:p-6 bg-slate-900 border border-indigo-500/30 rounded-2xl sm:rounded-3xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}

@@ -1,13 +1,26 @@
 import { useState } from "react";
-import { NavLink, Link } from "react-router-dom";
+import { NavLink, Link, useLocation } from "react-router-dom";
 import { useStudent } from "../context/useStudent";
 import { User, ShieldCheck, Menu, X, LogOut } from "lucide-react";
 
 export default function TopBar() {
   const { student, userRole, logout } = useStudent();
+  const { pathname } = useLocation();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const isTeacher = userRole === "teacher";
+  const homePath = isTeacher ? "/teacher-dashboard" : "/";
+  const isSectionActive = (target) => {
+    if (target === "/lessons") {
+      return pathname === target || pathname.startsWith("/watch/");
+    }
+    if (target === "/exams") {
+      return pathname === target || pathname.startsWith("/quiz/");
+    }
+    return pathname === target || (target !== "/" && pathname.startsWith(`${target}/`));
+  };
+  const getNavClassName = (target, className) =>
+    ({ isActive }) => `${className} ${isActive || isSectionActive(target) ? "active" : ""}`;
   const studentName = isTeacher
     ? "لوحة المعلم"
     : student?.name ||
@@ -29,7 +42,7 @@ export default function TopBar() {
       <div className="container topbar-inner">
         {/* Brand Logo & Title */}
         <Link
-          to="/"
+          to={homePath}
           className="brand-wrapper"
           onClick={() => setMobileMenuOpen(false)}
         >
@@ -57,11 +70,9 @@ export default function TopBar() {
           {isTeacher ? (
             <>
               <NavLink
-                to="/"
+                to={homePath}
                 end
-                className={({ isActive }) =>
-                  `nav-link ${isActive ? "active" : ""}`
-                }
+                className={getNavClassName(homePath, "nav-link")}
                 style={{
                   fontWeight: 800,
                   whiteSpace: "nowrap",
@@ -71,27 +82,21 @@ export default function TopBar() {
               </NavLink>
               <NavLink
                 to="/lessons"
-                className={({ isActive }) =>
-                  `nav-link ${isActive ? "active" : ""}`
-                }
+                className={getNavClassName('/lessons', "nav-link")}
                 style={{ whiteSpace: "nowrap" }}
               >
                 معاينة الدروس
               </NavLink>
               <NavLink
                 to="/exams"
-                className={({ isActive }) =>
-                  `nav-link ${isActive ? "active" : ""}`
-                }
+                className={getNavClassName('/exams', "nav-link")}
                 style={{ whiteSpace: "nowrap" }}
               >
                 معاينة الامتحانات
               </NavLink>
               <NavLink
                 to="/memos"
-                className={({ isActive }) =>
-                  `nav-link ${isActive ? "active" : ""}`
-                }
+                className={getNavClassName('/memos', "nav-link")}
                 style={{ whiteSpace: "nowrap" }}
               >
                 مذكرات PDF
@@ -102,36 +107,28 @@ export default function TopBar() {
               <NavLink
                 to="/"
                 end
-                className={({ isActive }) =>
-                  `nav-link ${isActive ? "active" : ""}`
-                }
+                className={getNavClassName('/', "nav-link")}
                 style={{ whiteSpace: "nowrap" }}
               >
                 الرئيسية
               </NavLink>
               <NavLink
                 to="/lessons"
-                className={({ isActive }) =>
-                  `nav-link ${isActive ? "active" : ""}`
-                }
+                className={getNavClassName('/lessons', "nav-link")}
                 style={{ whiteSpace: "nowrap" }}
               >
                 الدروس
               </NavLink>
               <NavLink
                 to="/exams"
-                className={({ isActive }) =>
-                  `nav-link ${isActive ? "active" : ""}`
-                }
+                className={getNavClassName('/exams', "nav-link")}
                 style={{ whiteSpace: "nowrap" }}
               >
                 الامتحانات
               </NavLink>
               <NavLink
                 to="/memos"
-                className={({ isActive }) =>
-                  `nav-link ${isActive ? "active" : ""}`
-                }
+                className={getNavClassName('/memos', "nav-link")}
                 style={{ whiteSpace: "nowrap" }}
               >
                 مذكرات PDF
@@ -204,12 +201,10 @@ export default function TopBar() {
           {isTeacher ? (
             <>
               <NavLink
-                to="/"
+                to={homePath}
                 end
                 onClick={() => setMobileMenuOpen(false)}
-                className={({ isActive }) =>
-                  `mobile-nav-link ${isActive ? "active" : ""}`
-                }
+                className={getNavClassName(homePath, "mobile-nav-link")}
                 style={{ color: "var(--cyan)" }}
               >
                 لوحة تحكم المستر 👨‍🏫
@@ -217,27 +212,21 @@ export default function TopBar() {
               <NavLink
                 to="/lessons"
                 onClick={() => setMobileMenuOpen(false)}
-                className={({ isActive }) =>
-                  `mobile-nav-link ${isActive ? "active" : ""}`
-                }
+                className={getNavClassName('/lessons', "mobile-nav-link")}
               >
                 معاينة الدروس
               </NavLink>
               <NavLink
                 to="/exams"
                 onClick={() => setMobileMenuOpen(false)}
-                className={({ isActive }) =>
-                  `mobile-nav-link ${isActive ? "active" : ""}`
-                }
+                className={getNavClassName('/exams', "mobile-nav-link")}
               >
                 معاينة الامتحانات
               </NavLink>
               <NavLink
                 to="/memos"
                 onClick={() => setMobileMenuOpen(false)}
-                className={({ isActive }) =>
-                  `mobile-nav-link ${isActive ? "active" : ""}`
-                }
+                className={getNavClassName('/memos', "mobile-nav-link")}
               >
                 مذكرات الـ PDF
               </NavLink>
@@ -248,36 +237,28 @@ export default function TopBar() {
                 to="/"
                 end
                 onClick={() => setMobileMenuOpen(false)}
-                className={({ isActive }) =>
-                  `mobile-nav-link ${isActive ? "active" : ""}`
-                }
+                className={getNavClassName('/', "mobile-nav-link")}
               >
                 الرئيسية
               </NavLink>
               <NavLink
                 to="/lessons"
                 onClick={() => setMobileMenuOpen(false)}
-                className={({ isActive }) =>
-                  `mobile-nav-link ${isActive ? "active" : ""}`
-                }
+                className={getNavClassName('/lessons', "mobile-nav-link")}
               >
                 الدروس والمحاضرات
               </NavLink>
               <NavLink
                 to="/exams"
                 onClick={() => setMobileMenuOpen(false)}
-                className={({ isActive }) =>
-                  `mobile-nav-link ${isActive ? "active" : ""}`
-                }
+                className={getNavClassName('/exams', "mobile-nav-link")}
               >
                 امتحانات التابلت
               </NavLink>
               <NavLink
                 to="/memos"
                 onClick={() => setMobileMenuOpen(false)}
-                className={({ isActive }) =>
-                  `mobile-nav-link ${isActive ? "active" : ""}`
-                }
+                className={getNavClassName('/memos', "mobile-nav-link")}
               >
                 مذكرات PDF
               </NavLink>

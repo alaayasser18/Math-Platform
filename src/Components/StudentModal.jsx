@@ -45,7 +45,7 @@ export default function StudentModal({ isOpen, onClose, student, onSaveStudent }
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div 
-        className="modal-content w-full max-w-lg p-6 sm:p-8 relative bg-slate-900 border border-indigo-500/30 rounded-3xl" 
+        className="modal-content w-full max-w-lg max-h-[92vh] overflow-y-auto p-4 sm:p-6 md:p-8 relative bg-slate-900 border border-indigo-500/30 rounded-2xl sm:rounded-3xl" 
         onClick={(e) => e.stopPropagation()}
       >
         {/* Close Button */}
@@ -102,7 +102,7 @@ export default function StudentModal({ isOpen, onClose, student, onSaveStudent }
                 <GraduationCap className="w-4 h-4 text-indigo-400" />
                 الصف الدراسي <span className="text-rose-400">*</span>
               </label>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {GRADES.map((g) => {
                   const isSelected = formData.grade === g.name;
                   return (

@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useStudent } from "../context/useStudent";
-import { GRADES, BRANCHES, LESSONS_DATA } from "../data/platformData";
+import { GRADES, BRANCHES } from "../data/platformData";
 
 export default function LessonSection({
   student: propStudent,
@@ -21,7 +21,7 @@ export default function LessonSection({
   const { student: ctxStudent, lessonsList, showToast } = useStudent();
   const student = propStudent || ctxStudent || {};
   const studentName = student?.name || "طالب متميز";
-  const studentGrade = student?.grade || "الصف الثالث الثانوي";
+  const studentGrade = student?.grade || "";
 
   // Start with the student's grade as the default selected filter
   const [selectedGrade, setSelectedGrade] = useState(student?.grade || "الكل");
@@ -29,7 +29,10 @@ export default function LessonSection({
   const [searchQuery, setSearchQuery] = useState("");
 
   const gradeOptions = ["الكل", ...GRADES.map((g) => g.name)];
-  const allLessons = lessonsList?.length > 0 ? lessonsList : LESSONS_DATA;
+  const allLessons = useMemo(
+    () => (Array.isArray(lessonsList) ? lessonsList : []),
+    [lessonsList],
+  );
 
   const filteredLessons = useMemo(() => {
     return allLessons.filter((lesson) => {

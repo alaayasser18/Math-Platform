@@ -1,32 +1,277 @@
-import { useState, useEffect } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useMemo, useState, useEffect } from "react";
+import { useParams, Link, useNavigate } from "react-router-dom";
 import { useStudent } from "../context/useStudent";
+import useUrlState from "../hooks/useUrlState";
 import {
   Timer,
   CheckCircle,
   AlertCircle,
   Trophy,
-  RotateCcw,
   ArrowRight,
   ArrowLeft,
+  FileQuestion,
+  Plus,
+  Clock,
+  CheckCircle2,
+  Trash2,
+  Edit3,
+  RefreshCw,
+  X,
+  AlertTriangle,
+  Play,
+  HelpCircle,
+  Eye,
 } from "lucide-react";
 import confetti from "canvas-confetti";
 
+function getNestedQuestionId(payload) {
+  let current = payload;
+  for (let depth = 0; current && depth < 6; depth += 1) {
+    if (current.id != null) return current.id;
+    current = current.question || current.data || current.result;
+  }
+  return null;
+}
+
+const EXAM_MANAGER_URL_SCHEMA = {
+  expandedExam: {
+    defaultValue: "",
+    normalize: (value) => value.length <= 100 ? value : null,
+  },
+};
+
 export default function ExamsPage() {
   const { id } = useParams();
-  const { student, showToast, lessonsList, userRole } = useStudent();
+  const navigate = useNavigate();
+  const {
+    student,
+    showToast,
+    lessonsList,
+    userRole,
+    studentExamsList,
+    isLoadingStudentExams,
+    fetchStudentExams,
+    getStudentExamAttempts,
+    adminExamsList,
+    isLoadingExams,
+    fetchAdminExams,
+    fetchAdminExamDetails,
+    createAdminExam,
+    updateAdminExam,
+    deleteAdminExam,
+    createAdminQuestion,
+    updateAdminQuestion,
+    deleteAdminQuestion,
+    createAdminOption,
+  } = useStudent();
+
   const isTeacher = userRole === "teacher";
-  const studentGrade = student?.grade || "الصف الثالث الثانوي";
+  const studentGrade = student?.grade || "";
+  const [attemptsByExam, setAttemptsByExam] = useState({});
+  const [loadingAttempts, setLoadingAttempts] = useState({});
 
-  // Find lesson matching ID or default to student's grade first quiz
-  const gradeLessons = (lessonsList || []).filter(
-    (l) => isTeacher || l.grade === studentGrade,
-  );
+  const loadAttempts = async (examId) => {
+    setLoadingAttempts((current) => ({ ...current, [examId]: true }));
+    try {
+      const attempts = await getStudentExamAttempts(examId);
+      setAttemptsByExam((current) => ({ ...current, [examId]: attempts }));
+    } catch (error) {
+      showToast(error?.message || "تعذر تحميل محاولات الاختبار", "error");
+    } finally {
+      setLoadingAttempts((current) => ({ ...current, [examId]: false }));
+    }
+  };
 
-  const lesson = id
-    ? (lessonsList || []).find((l) => l.id === parseInt(id))
-    : gradeLessons.find((l) => l.quiz && l.quiz.questions?.length > 0) ||
-      gradeLessons[0];
+  const routeInfo = useMemo(() => {
+    const gradeLessons = (lessonsList || []).filter(
+      (lesson) => isTeacher || lesson.grade === studentGrade,
+    );
+    const routeExam = !isTeacher
+      ? studentExamsList.find(
+          (exam) =>
+            String(exam.id || exam.exam_id) === String(id) ||
+            String(exam.lesson_id || exam.lesson?.id) === String(id),
+        )
+      : null;
+    const linkedLessonId = routeExam?.lesson_id || routeExam?.lesson?.id;
+    const matchedLesson = id
+      ? (lessonsList || []).find(
+          (lesson) =>
+            String(lesson.id) === String(id) ||
+            (linkedLessonId != null &&
+              String(lesson.id) === String(linkedLessonId)),
+        )
+      : gradeLessons.find(
+          (lesson) => lesson.quiz && lesson.quiz.questions?.length > 0,
+        ) || gradeLessons[0];
+    const lesson =
+      matchedLesson ||
+      (routeExam
+        ? {
+            ...(routeExam.lesson || {}),
+            id: linkedLessonId || routeExam.lesson?.id || routeExam.id || id,
+            title:
+              routeExam.lesson?.title ||
+              routeExam.lesson_title ||
+              routeExam.title ||
+              "",
+            grade:
+              routeExam.lesson?.grade?.name ||
+              routeExam.grade?.name ||
+              routeExam.grade_name ||
+              studentGrade,
+            branch: routeExam.lesson?.branch || routeExam.branch || "",
+          }
+        : null);
+    const resolvedExamId =
+      routeExam?.id ||
+      routeExam?.exam_id ||
+      lesson?.exam_id ||
+      lesson?.exam?.id ||
+      lesson?.exams?.[0]?.id ||
+      (isTeacher ? lesson?.id : null);
+
+    return { lesson, resolvedExamId };
+  }, [id, isTeacher, lessonsList, studentExamsList, studentGrade]);
+
+  // Teacher previewing an exam as a student
+  // If teacher and NOT taking/previewing a specific exam, show TeacherExamsManager
+  if (isTeacher && !id) {
+    return (
+      <TeacherExamsManager
+        adminExamsList={adminExamsList}
+        isLoadingExams={isLoadingExams}
+        fetchAdminExams={fetchAdminExams}
+        fetchAdminExamDetails={fetchAdminExamDetails}
+        createAdminExam={createAdminExam}
+        updateAdminExam={updateAdminExam}
+        deleteAdminExam={deleteAdminExam}
+        createAdminQuestion={createAdminQuestion}
+        updateAdminQuestion={updateAdminQuestion}
+        deleteAdminQuestion={deleteAdminQuestion}
+        createAdminOption={createAdminOption}
+        lessonsList={lessonsList}
+        showToast={showToast}
+        onPreviewAsStudent={(chosenLesson) => navigate(`/quiz/${chosenLesson.id}`)}
+      />
+    );
+  }
+
+  if (!isTeacher && !id) {
+    return (
+      <div className="container" style={{ paddingTop: "1.5rem", paddingBottom: "3rem" }}>
+        <div className="section-header">
+          <div>
+            <h1 className="section-title">امتحانات صفك</h1>
+            <p className="section-desc">الاختبارات المتاحة وحالة التقدم من الخادم</p>
+          </div>
+          <button
+            type="button"
+            className="btn-secondary"
+            disabled={isLoadingStudentExams}
+            onClick={fetchStudentExams}
+          >
+            <RefreshCw size={15} />
+            تحديث
+          </button>
+        </div>
+
+        {isLoadingStudentExams ? (
+          <div role="status" style={{ padding: "3rem 1rem", textAlign: "center", color: "var(--text-muted)" }}>
+            جارٍ تحميل الامتحانات من الخادم...
+          </div>
+        ) : studentExamsList.length === 0 ? (
+          <div className="feature-card" style={{ padding: "2rem", textAlign: "center" }}>
+            لا توجد امتحانات متاحة لهذا الحساب حالياً.
+          </div>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(min(260px, 100%), 1fr))", gap: "1rem" }}>
+            {studentExamsList.map((exam) => {
+              const examId = exam.id || exam.exam_id;
+              const isLocked =
+                exam.is_locked === true ||
+                exam.is_locked === 1 ||
+                exam.access_status === "locked" ||
+                exam.unlock_status === "locked" ||
+                exam.can_start === false ||
+                exam.is_unlocked === false ||
+                exam.is_unlocked === 0;
+              const attempts = attemptsByExam[examId];
+              return (
+                <article key={examId} className="feature-card" style={{ padding: "1.25rem" }}>
+                  <h2 style={{ margin: "0 0 6px", color: "#fff", fontSize: "1rem" }}>
+                    {exam.title || exam.name || "اختبار"}
+                  </h2>
+                  <p style={{ color: "var(--text-muted)", fontSize: "0.8rem", margin: "0 0 12px" }}>
+                    {exam.lesson?.title || exam.lesson_title || exam.lesson_name || "اختبار المنهج"}
+                  </p>
+                  {(exam.duration_minutes || exam.total_questions) && (
+                    <p style={{ color: "var(--text-muted)", fontSize: "0.75rem" }}>
+                      {exam.duration_minutes ? `${exam.duration_minutes} دقيقة` : ""}
+                      {exam.duration_minutes && exam.total_questions ? " · " : ""}
+                      {exam.total_questions ? `${exam.total_questions} سؤال` : ""}
+                    </p>
+                  )}
+                  {(exam.progress || exam.attempts_count != null) && (
+                    <p style={{ color: "var(--cyan)", fontSize: "0.75rem" }}>
+                      {exam.progress?.status || ""}
+                      {exam.attempts_count != null ? `المحاولات: ${exam.attempts_count}` : ""}
+                    </p>
+                  )}
+                  <div style={{ display: "flex", gap: "8px", marginTop: "1rem", flexWrap: "wrap" }}>
+                    {isLocked ? (
+                      <span className="badge-tag" style={{ color: "var(--amber)" }}>
+                        {exam.lock_reason || "مقفل حتى استكمال مشاهدة الدروس"}
+                      </span>
+                    ) : (
+                      <Link
+                        to={`/quiz/${examId}`}
+                        className="btn-primary"
+                        style={{ flex: 1, justifyContent: "center" }}
+                      >
+                        <Play size={15} />
+                        بدء الاختبار
+                      </Link>
+                    )}
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => loadAttempts(examId)}
+                      disabled={loadingAttempts[examId]}
+                    >
+                      {loadingAttempts[examId] ? "جارٍ التحميل..." : "محاولاتي"}
+                    </button>
+                  </div>
+                  {Array.isArray(attempts) && (
+                    <div style={{ marginTop: "12px", borderTop: "1px solid var(--border-subtle)", paddingTop: "10px" }}>
+                      {attempts.length ? attempts.map((attempt, index) => (
+                        <div key={attempt.id || attempt.attempt_id || index} style={{ display: "flex", justifyContent: "space-between", gap: "8px", color: "var(--text-muted)", fontSize: "0.75rem", padding: "4px 0" }}>
+                          <span>{attempt.created_at || attempt.submitted_at || `محاولة ${index + 1}`}</span>
+                          <span>{attempt.percentage ?? attempt.score ?? "—"}{attempt.percentage != null ? "%" : ""}</span>
+                        </div>
+                      )) : (
+                        <span style={{ color: "var(--text-muted)", fontSize: "0.75rem" }}>لا توجد محاولات سابقة.</span>
+                      )}
+                    </div>
+                  )}
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  const { lesson, resolvedExamId } = routeInfo;
+
+  if (!lesson && !isTeacher && id && isLoadingStudentExams) {
+    return (
+      <div className="container" role="status" style={{ padding: "5rem 1rem", textAlign: "center" }}>
+        جارٍ تحميل بيانات الاختبار من الخادم...
+      </div>
+    );
+  }
 
   if (!lesson) {
     return (
@@ -46,7 +291,7 @@ export default function ExamsPage() {
     );
   }
 
-  // Access check
+  // Access check for student
   if (
     !isTeacher &&
     studentGrade &&
@@ -111,18 +356,1641 @@ export default function ExamsPage() {
   }
 
   return (
-    <QuizView
-      key={`${lesson.id}-${lesson.exam_id || lesson.exam?.id || lesson.id}`}
-      lesson={lesson}
-      examId={
-        lesson.exam_id || lesson.exam?.id || lesson.exams?.[0]?.id || lesson.id
-      }
-      isTeacher={isTeacher}
-      student={student}
-      showToast={showToast}
-    />
+    <div className="container" style={{ paddingTop: "1rem", paddingBottom: "3rem" }}>
+      {isTeacher && id && (
+        <div style={{ marginBottom: "1rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <button
+            onClick={() => navigate("/exams")}
+            className="btn-secondary"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "8px",
+              padding: "8px 16px",
+              fontSize: "0.85rem",
+              borderColor: "rgba(6, 182, 212, 0.4)",
+              color: "var(--cyan)",
+            }}
+          >
+            <ArrowRight size={16} />
+            <span>العودة لإدارة بنك الامتحانات</span>
+          </button>
+          <span
+            style={{
+              fontSize: "0.8rem",
+              color: "var(--amber)",
+              background: "rgba(245, 158, 11, 0.15)",
+              padding: "4px 12px",
+              borderRadius: "999px",
+              border: "1px solid rgba(245, 158, 11, 0.3)",
+            }}
+          >
+            👁️ وضع معاينة المعلم (تجربة الامتحان)
+          </span>
+        </div>
+      )}
+
+      <QuizView
+        key={`${lesson.id}-${resolvedExamId || ""}`}
+        lesson={lesson}
+        examId={resolvedExamId}
+        isTeacher={isTeacher}
+        student={student}
+        showToast={showToast}
+      />
+    </div>
   );
 }
+
+/* =========================================================================
+   TEACHER EXAMS & QUESTION BANK MANAGER COMPONENT
+   ========================================================================= */
+
+function TeacherExamsManager({
+  adminExamsList,
+  isLoadingExams,
+  fetchAdminExams,
+  fetchAdminExamDetails,
+  createAdminExam,
+  updateAdminExam,
+  deleteAdminExam,
+  createAdminQuestion,
+  updateAdminQuestion,
+  deleteAdminQuestion,
+  createAdminOption,
+  lessonsList,
+  showToast,
+  onPreviewAsStudent,
+}) {
+  const [urlState, setUrlState] = useUrlState(EXAM_MANAGER_URL_SCHEMA);
+  const expandedExamId = urlState.expandedExam || null;
+  const setExpandedExamId = (examId) =>
+    setUrlState({ expandedExam: examId == null ? "" : String(examId) });
+  const [isAddExamOpen, setIsAddExamOpen] = useState(false);
+  const [editingExam, setEditingExam] = useState(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+
+  const [newExamData, setNewExamData] = useState({
+    lesson_id: "",
+    title: "",
+    description: "",
+    duration_minutes: 20,
+    passing_percentage: 60,
+  });
+
+  // Question Modal State (with Choices fields)
+  const [questionModal, setQuestionModal] = useState({
+    isOpen: false,
+    isEdit: false,
+    examId: null,
+    questionId: null,
+    question_text: "",
+    points: 1,
+    opt1: "",
+    opt2: "",
+    opt3: "",
+    opt4: "",
+    correctOption: 1,
+  });
+
+  // Delete Confirmation State
+  const [deleteConfirmation, setDeleteConfirmation] = useState(null);
+
+  useEffect(() => {
+    if (typeof fetchAdminExams === "function") {
+      fetchAdminExams();
+    }
+  }, [fetchAdminExams]);
+
+  const handleOpenAddExam = () => {
+    setEditingExam(null);
+    setNewExamData({
+      lesson_id: "",
+      title: "",
+      description: "",
+      duration_minutes: 20,
+      passing_percentage: 60,
+    });
+    setIsAddExamOpen(true);
+  };
+
+  const handleOpenEditExam = (exam) => {
+    setEditingExam(exam);
+    setNewExamData({
+      lesson_id: exam.lesson_id ?? "",
+      title: exam.title || "",
+      description: exam.description || "",
+      duration_minutes: exam.duration_minutes || 20,
+      passing_percentage: exam.passing_percentage || 60,
+    });
+    setIsAddExamOpen(true);
+  };
+
+  const handleSaveExam = async (e) => {
+    e.preventDefault();
+    if (!newExamData.title.trim()) {
+      showToast("يرجى كتابة عنوان الامتحان", "error");
+      return;
+    }
+
+    const duplicateExam = !editingExam && newExamData.lesson_id && adminExamsList.find(
+      (exam) => String(exam.lesson_id) === String(newExamData.lesson_id),
+    );
+    if (duplicateExam) {
+      showToast(
+        `تم إنشاء امتحان للدرس «${lessonsList.find((lesson) => String(lesson.id) === String(newExamData.lesson_id))?.title || duplicateExam.title}» بالفعل. يمكنك إضافة الأسئلة إلى الامتحان الموجود.`,
+        "error",
+      );
+      return;
+    }
+
+    setIsProcessing(true);
+    try {
+      const res = editingExam
+        ? await updateAdminExam(editingExam.id, newExamData)
+        : await createAdminExam(newExamData);
+
+      if (res?.success) {
+        setIsAddExamOpen(false);
+        setEditingExam(null);
+        showToast(editingExam ? "تم تحديث بيانات الامتحان بنجاح" : "تم إنشاء الامتحان بنجاح 🎉");
+        if (typeof fetchAdminExams === "function") {
+          await fetchAdminExams();
+        }
+      }
+    } catch (err) {
+      console.error(err);
+      showToast("حدث خطأ أثناء حفظ الامتحان", "error");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleOpenAddQuestion = (examId) => {
+    setQuestionModal({
+      isOpen: true,
+      isEdit: false,
+      examId,
+      questionId: null,
+      question_text: "",
+      points: 1,
+      opt1: "",
+      opt2: "",
+      opt3: "",
+      opt4: "",
+      correctOption: 1,
+    });
+  };
+
+  const handleSaveQuestion = async (e) => {
+    e.preventDefault();
+    if (!questionModal.question_text.trim()) {
+      showToast("يرجى كتابة نص السؤال أولاً", "error");
+      return;
+    }
+    if (!questionModal.opt1.trim() || !questionModal.opt2.trim()) {
+      showToast("يرجى كتابة خيارين على الأقل للسؤال", "error");
+      return;
+    }
+
+    const optionEntries = [
+      { label: "أ", text: questionModal.opt1 },
+      { label: "ب", text: questionModal.opt2 },
+      { label: "ج", text: questionModal.opt3 },
+      { label: "د", text: questionModal.opt4 },
+    ].filter(({ text }) => text.trim());
+    const seenOptions = new Map();
+    for (const option of optionEntries) {
+      const normalizedText = option.text
+        .normalize("NFC")
+        .trim()
+        .replace(/\s+/g, " ")
+        .toLocaleLowerCase();
+      if (seenOptions.has(normalizedText)) {
+        showToast(
+          `الاختيار (${option.label}) مكرر مع الاختيار (${seenOptions.get(normalizedText)}). غيّر نص الاختيار المكرر.`,
+          "error",
+        );
+        return;
+      }
+      seenOptions.set(normalizedText, option.label);
+    }
+
+    setIsProcessing(true);
+    try {
+      if (questionModal.isEdit) {
+        const updateResult = await updateAdminQuestion(questionModal.questionId, {
+          question_text: questionModal.question_text,
+          points: Number(questionModal.points) || 1,
+        });
+        if (!updateResult?.success) {
+          throw new Error(updateResult?.message || "فشل حفظ تعديلات السؤال.");
+        }
+      } else {
+        const qRes = await createAdminQuestion(questionModal.examId, {
+          question_text: questionModal.question_text,
+          points: Number(questionModal.points) || 1,
+        });
+
+        if (!qRes?.success) {
+          throw new Error(qRes?.message || "لم يتم حفظ السؤال.");
+        }
+
+        let newQuestionId = getNestedQuestionId(qRes?.data || qRes);
+
+        if (!newQuestionId) {
+          // Some API responses omit the created resource. Re-fetch the exam
+          // and recover its id from the question that was just submitted.
+          const examDetails = await fetchAdminExamDetails(questionModal.examId);
+          const refreshedExams = examDetails ? [] : await fetchAdminExams();
+          const currentExam = examDetails || refreshedExams?.find(
+            (exam) => String(exam.id) === String(questionModal.examId),
+          );
+          const savedQuestions =
+            currentExam?.questions || currentExam?.exam_questions || currentExam?.quiz?.questions || [];
+          const submittedQuestion = [...savedQuestions]
+            .reverse()
+            .find((question) =>
+              String(question.question_text || question.question || "").trim() ===
+              questionModal.question_text.trim(),
+            );
+          newQuestionId = getNestedQuestionId(submittedQuestion);
+          if (!newQuestionId) {
+            throw new Error("وصلت استجابة الخادم بدون معرّف السؤال، ولم يظهر السؤال بعد تحديث الامتحان.");
+          }
+        }
+
+        // If options were provided in the form, create them immediately!
+        if (newQuestionId) {
+          const rawOptions = [
+            {
+              text: questionModal.opt1,
+              is_correct: questionModal.correctOption === 1,
+            },
+            {
+              text: questionModal.opt2,
+              is_correct: questionModal.correctOption === 2,
+            },
+            {
+              text: questionModal.opt3,
+              is_correct: questionModal.correctOption === 3,
+            },
+            {
+              text: questionModal.opt4,
+              is_correct: questionModal.correctOption === 4,
+            },
+          ];
+
+          for (const opt of rawOptions) {
+            if (opt.text && opt.text.trim()) {
+              const optionResult = await createAdminOption(newQuestionId, {
+                option_text: opt.text.trim(),
+                is_correct: Boolean(opt.is_correct),
+              });
+              if (!optionResult?.success) {
+                throw new Error(optionResult?.message || "فشل حفظ أحد الاختيارات.");
+              }
+            }
+          }
+        }
+      }
+
+      setQuestionModal({
+        isOpen: false,
+        isEdit: false,
+        examId: null,
+        questionId: null,
+        question_text: "",
+        points: 1,
+        opt1: "",
+        opt2: "",
+        opt3: "",
+        opt4: "",
+        correctOption: 1,
+      });
+
+      if (typeof fetchAdminExamDetails === "function") {
+        const updatedExam = await fetchAdminExamDetails(questionModal.examId);
+        if (!updatedExam) await fetchAdminExams();
+      } else if (typeof fetchAdminExams === "function") {
+        await fetchAdminExams();
+      }
+      showToast("تم حفظ السؤال وخياراته بنجاح 🎉");
+    } catch (err) {
+      console.error(err);
+      showToast(err?.message || "حدث خطأ أثناء حفظ السؤال والخيارات", "error");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const confirmDeleteAction = async () => {
+    if (!deleteConfirmation) return;
+    setIsProcessing(true);
+    try {
+      if (deleteConfirmation.type === "exam") {
+        await deleteAdminExam(deleteConfirmation.id);
+        showToast("تم حذف الامتحان بنجاح");
+      } else if (deleteConfirmation.type === "question") {
+        await deleteAdminQuestion(deleteConfirmation.id);
+        showToast("تم حذف السؤال بنجاح");
+      }
+      setDeleteConfirmation(null);
+      if (typeof fetchAdminExams === "function") {
+        await fetchAdminExams();
+      }
+    } catch (err) {
+      console.error(err);
+      showToast("حدث خطأ أثناء عملية الحذف", "error");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  return (
+    <div
+      className="container"
+      style={{ paddingTop: "1.5rem", paddingBottom: "3rem" }}
+    >
+      {/* Header */}
+      <div className="section-header" style={{ alignItems: "flex-start", gap: "1.25rem" }}>
+        <div>
+          <div
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "6px",
+              fontSize: "0.75rem",
+              color: "var(--cyan)",
+              fontWeight: 700,
+              marginBottom: "6px",
+            }}
+          >
+            <FileQuestion size={15} />
+            <span>نظام بنك الأسئلة والاختبارات التفاعلية</span>
+          </div>
+          <h1 className="section-title">معاينة وإدارة الامتحانات وبنك الأسئلة</h1>
+          <p className="section-desc">
+            إنشاء وتعديل الامتحانات، ربطها بالمحاضرات، وإضافة أسئلة الاختيار من متعدد وتحديد الإجابات الصحيحة
+          </p>
+        </div>
+
+        {/* Action Buttons */}
+        <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
+          <button
+            onClick={handleOpenAddExam}
+            className="btn-primary"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "8px",
+              fontSize: "0.85rem",
+              padding: "9px 18px",
+              boxShadow: "0 4px 14px rgba(6, 182, 212, 0.35)",
+            }}
+          >
+            <Plus size={17} />
+            <span>إنشاء امتحان جديد</span>
+          </button>
+
+          <button
+            onClick={() => fetchAdminExams()}
+            className="btn-secondary"
+            title="تحديث قائمة الامتحانات"
+            style={{ padding: "8px 14px", fontSize: "0.85rem" }}
+            disabled={isLoadingExams}
+          >
+            <RefreshCw
+              size={15}
+              className={isLoadingExams ? "animate-spin" : ""}
+            />
+            <span style={{ marginRight: "6px" }}>تحديث</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Content */}
+      {isLoadingExams ? (
+        <div
+          style={{
+            textAlign: "center",
+            padding: "4rem",
+            color: "var(--cyan)",
+          }}
+        >
+          <RefreshCw
+            size={28}
+            className="animate-spin"
+            style={{ margin: "0 auto 12px" }}
+          />
+          <p style={{ fontWeight: 700 }}>جاري تحميل الامتحانات وبنك الأسئلة...</p>
+        </div>
+      ) : adminExamsList.length === 0 ? (
+        <div
+          style={{
+            textAlign: "center",
+            padding: "4rem 1rem",
+            background: "var(--bg-card)",
+            borderRadius: "var(--radius-lg)",
+            border: "1px solid var(--border-subtle)",
+          }}
+        >
+          <FileQuestion size={48} style={{ color: "var(--text-dim)", margin: "0 auto 1rem" }} />
+          <h3 style={{ color: "#fff", fontSize: "1.15rem", fontWeight: 800 }}>
+            لا توجد امتحانات مسجلة حالياً
+          </h3>
+          <p style={{ color: "var(--text-muted)", fontSize: "0.85rem", marginTop: "6px" }}>
+            اضغط على زر "إنشاء امتحان جديد" لإضافة أول امتحان وربطه بالمحاضرة وإضافة أسئلته
+          </p>
+          <button
+            onClick={handleOpenAddExam}
+            className="btn-primary"
+            style={{ marginTop: "1.25rem", fontSize: "0.85rem" }}
+          >
+            <Plus size={16} />
+            <span>إنشاء أول امتحان الآن</span>
+          </button>
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
+          {adminExamsList.map((exam) => {
+            const isExpanded = String(expandedExamId) === String(exam.id);
+            const questions =
+              exam.questions || exam.exam_questions || exam.quiz?.questions || [];
+            const linkedLesson = lessonsList.find(
+              (l) => String(l.id) === String(exam.lesson_id),
+            );
+
+            return (
+              <div
+                key={exam.id}
+                className="feature-card"
+                style={{
+                  padding: "1.5rem",
+                  border: isExpanded
+                    ? "1px solid var(--cyan)"
+                    : "1px solid var(--border-subtle)",
+                  transition: "all 0.2s ease",
+                  borderRadius: "16px",
+                  background: "var(--bg-card)",
+                }}
+              >
+                {/* Exam Header */}
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "flex-start",
+                    flexWrap: "wrap",
+                    gap: "1rem",
+                    paddingBottom: isExpanded ? "14px" : "0",
+                    borderBottom: isExpanded
+                      ? "1px solid rgba(255,255,255,0.08)"
+                      : "none",
+                  }}
+                >
+                  <div style={{ flex: 1, minWidth: "min(260px, 100%)" }}>
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "8px",
+                        flexWrap: "wrap",
+                        marginBottom: "8px",
+                      }}
+                    >
+                      <span
+                        className="badge-tag"
+                        style={{
+                          background:
+                            exam.is_active !== false
+                              ? "rgba(16, 185, 129, 0.15)"
+                              : "rgba(244, 63, 94, 0.15)",
+                          color:
+                            exam.is_active !== false
+                              ? "var(--emerald)"
+                              : "var(--rose)",
+                          borderColor:
+                            exam.is_active !== false
+                              ? "rgba(16, 185, 129, 0.3)"
+                              : "rgba(244, 63, 94, 0.3)",
+                        }}
+                      >
+                        {exam.is_active !== false ? "نشط ومتاح للطلاب" : "معطل"}
+                      </span>
+
+                      <span
+                        className="badge-tag"
+                        style={{ color: "var(--cyan)", background: "rgba(6, 182, 212, 0.12)" }}
+                      >
+                        {linkedLesson?.title || `المحاضرة #${exam.lesson_id}`}
+                      </span>
+
+                      <span
+                        style={{
+                          fontSize: "0.8rem",
+                          color: "var(--amber)",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: "4px",
+                        }}
+                      >
+                        <Clock size={13} />
+                        {exam.duration_minutes || 20} دقيقة
+                      </span>
+
+                      <span
+                        style={{
+                          fontSize: "0.8rem",
+                          color: "var(--emerald)",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: "4px",
+                        }}
+                      >
+                        <CheckCircle2 size={13} />
+                        نسبة النجاح: {exam.passing_percentage || 60}%
+                      </span>
+
+                      <span
+                        style={{
+                          fontSize: "0.8rem",
+                          color: "var(--purple)",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: "4px",
+                          fontWeight: 700,
+                        }}
+                      >
+                        <HelpCircle size={13} />
+                        {questions.length} سؤال
+                      </span>
+                    </div>
+
+                    <h3
+                      style={{
+                        fontSize: "1.15rem",
+                        fontWeight: 800,
+                        color: "#fff",
+                        margin: 0,
+                      }}
+                    >
+                      {exam.title}
+                    </h3>
+                    {exam.description && (
+                      <p
+                        style={{
+                          fontSize: "0.85rem",
+                          color: "var(--text-muted)",
+                          marginTop: "6px",
+                          lineHeight: 1.6,
+                        }}
+                      >
+                        {exam.description}
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Exam Actions */}
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "8px",
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    <button
+                      onClick={() =>
+                        setExpandedExamId(isExpanded ? null : exam.id)
+                      }
+                      className={isExpanded ? "btn-primary" : "btn-secondary"}
+                      style={{ fontSize: "0.8rem", padding: "7px 14px" }}
+                    >
+                      {isExpanded ? "إغلاق الأسئلة" : `إدارة الأسئلة (${questions.length})`}
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        const targetLesson = linkedLesson || {
+                          id: exam.lesson_id,
+                          title: exam.title,
+                          grade: "الصف الثالث الثانوي",
+                          quiz: {
+                            id: exam.id,
+                            title: exam.title,
+                            durationMinutes: exam.duration_minutes,
+                            passingScore: exam.passing_percentage,
+                            questions: exam.questions || [],
+                          },
+                        };
+                        onPreviewAsStudent(targetLesson);
+                      }}
+                      className="btn-secondary"
+                      style={{
+                        fontSize: "0.8rem",
+                        padding: "7px 12px",
+                        color: "var(--cyan)",
+                        borderColor: "rgba(6, 182, 212, 0.35)",
+                      }}
+                      title="تجربة حل الامتحان كطالب"
+                    >
+                      <Eye size={14} style={{ marginLeft: "4px" }} />
+                      <span>تجربة كطالب</span>
+                    </button>
+
+                    <button
+                      onClick={() => handleOpenEditExam(exam)}
+                      className="btn-secondary"
+                      style={{ fontSize: "0.8rem", padding: "7px 10px" }}
+                      title="تعديل بيانات الامتحان"
+                    >
+                      <Edit3 size={14} />
+                    </button>
+
+                    <button
+                      onClick={() =>
+                        setDeleteConfirmation({
+                          type: "exam",
+                          id: exam.id,
+                          title: exam.title,
+                        })
+                      }
+                      className="btn-secondary"
+                      style={{
+                        fontSize: "0.8rem",
+                        padding: "7px 10px",
+                        color: "#fb7185",
+                        borderColor: "rgba(244, 63, 94, 0.3)",
+                      }}
+                      title="حذف هذا الامتحان"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Expanded Questions Section */}
+                {isExpanded && (
+                  <div style={{ marginTop: "1.25rem" }}>
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        marginBottom: "1rem",
+                        flexWrap: "wrap",
+                        gap: "8px",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <HelpCircle size={16} style={{ color: "var(--cyan)" }} />
+                        <h4
+                          style={{
+                            fontSize: "0.95rem",
+                            fontWeight: 800,
+                            color: "#fff",
+                            margin: 0,
+                          }}
+                        >
+                          بنك أسئلة الامتحان ({questions.length})
+                        </h4>
+                      </div>
+
+                      <button
+                        onClick={() => handleOpenAddQuestion(exam.id)}
+                        className="btn-primary"
+                        style={{
+                          fontSize: "0.8rem",
+                          padding: "6px 14px",
+                          gap: "6px",
+                          display: "inline-flex",
+                          alignItems: "center",
+                        }}
+                      >
+                        <Plus size={15} />
+                        <span>إضافة سؤال مع اختياراته</span>
+                      </button>
+                    </div>
+
+                    {questions.length === 0 ? (
+                      <div
+                        style={{
+                          textAlign: "center",
+                          padding: "2rem",
+                          background: "rgba(255,255,255,0.02)",
+                          borderRadius: "12px",
+                          border: "1px dashed rgba(255,255,255,0.15)",
+                        }}
+                      >
+                        <p
+                          style={{
+                            color: "var(--text-muted)",
+                            fontSize: "0.85rem",
+                            margin: 0,
+                          }}
+                        >
+                          لا توجد أسئلة مضافة لهذا الامتحان بعد. اضغط على "+ إضافة سؤال مع اختياراته" للبدء.
+                        </p>
+                      </div>
+                    ) : (
+                      <div
+                        style={{
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: "1rem",
+                        }}
+                      >
+                        {questions.map((q, idx) => {
+                          const options = q.options || [];
+                          return (
+                            <div
+                              key={q.id || idx}
+                              style={{
+                                background: "rgba(15, 23, 42, 0.6)",
+                                border: "1px solid rgba(255,255,255,0.06)",
+                                borderRadius: "12px",
+                                padding: "1rem",
+                              }}
+                            >
+                              <div
+                                style={{
+                                  display: "flex",
+                                  justifyContent: "space-between",
+                                  alignItems: "flex-start",
+                                  gap: "8px",
+                                  marginBottom: "0.75rem",
+                                }}
+                              >
+                                <div style={{ display: "flex", gap: "10px", alignItems: "flex-start" }}>
+                                  <span
+                                    style={{
+                                      width: "24px",
+                                      height: "24px",
+                                      borderRadius: "6px",
+                                      background: "rgba(6, 182, 212, 0.2)",
+                                      color: "var(--cyan)",
+                                      fontWeight: 800,
+                                      fontSize: "0.75rem",
+                                      display: "flex",
+                                      alignItems: "center",
+                                      justifyContent: "center",
+                                      flexShrink: 0,
+                                    }}
+                                  >
+                                    {idx + 1}
+                                  </span>
+                                  <div>
+                                    <p
+                                      style={{
+                                        color: "#fff",
+                                        fontWeight: 700,
+                                        fontSize: "0.95rem",
+                                        margin: 0,
+                                        lineHeight: 1.5,
+                                      }}
+                                    >
+                                      {q.question_text || q.question}
+                                    </p>
+                                    <span
+                                      style={{
+                                        fontSize: "0.75rem",
+                                        color: "var(--text-muted)",
+                                        marginTop: "4px",
+                                        display: "inline-block",
+                                      }}
+                                    >
+                                      الدرجة: {q.points || 1} نقطة
+                                    </span>
+                                  </div>
+                                </div>
+
+                                <button
+                                  onClick={() =>
+                                    setDeleteConfirmation({
+                                      type: "question",
+                                      id: q.id,
+                                      title: q.question_text || q.question,
+                                    })
+                                  }
+                                  className="btn-secondary"
+                                  style={{
+                                    padding: "5px 8px",
+                                    color: "#fb7185",
+                                    borderColor: "rgba(244, 63, 94, 0.25)",
+                                  }}
+                                  title="حذف هذا السؤال"
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              </div>
+
+                              {/* Question Choices / Options Area */}
+                              <div style={{ marginTop: "0.75rem" }}>
+                                <span
+                                  style={{
+                                    fontSize: "0.72rem",
+                                    fontWeight: 700,
+                                    color: "var(--text-dim)",
+                                    marginBottom: "6px",
+                                    display: "block",
+                                  }}
+                                >
+                                  اختيارات السؤال:
+                                </span>
+                                <div
+                                  style={{
+                                    display: "grid",
+                                    gridTemplateColumns: "repeat(auto-fill, minmax(min(200px, 100%), 1fr))",
+                                    gap: "8px",
+                                  }}
+                                >
+                                  {options.map((opt, optIdx) => {
+                                    const optText =
+                                      typeof opt === "string"
+                                        ? opt
+                                        : opt.option_text || opt.text || "";
+                                    const isCorrect = Boolean(
+                                      typeof opt === "object" && opt.is_correct,
+                                    );
+
+                                    const optionLetters = ["أ", "ب", "جـ", "د", "هـ"];
+
+                                    return (
+                                      <div
+                                        key={opt.id || optIdx}
+                                        style={{
+                                          padding: "8px 12px",
+                                          borderRadius: "8px",
+                                          display: "flex",
+                                          alignItems: "center",
+                                          justifyContent: "space-between",
+                                          gap: "8px",
+                                          fontSize: "0.85rem",
+                                          background: isCorrect
+                                            ? "rgba(16, 185, 129, 0.15)"
+                                            : "rgba(255,255,255,0.03)",
+                                          border: isCorrect
+                                            ? "1px solid rgba(16, 185, 129, 0.4)"
+                                            : "1px solid rgba(255,255,255,0.06)",
+                                          color: isCorrect ? "#34d399" : "#e2e8f0",
+                                        }}
+                                      >
+                                        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                                          <span
+                                            style={{
+                                              width: "20px",
+                                              height: "20px",
+                                              borderRadius: "6px",
+                                              background: isCorrect
+                                                ? "rgba(16, 185, 129, 0.3)"
+                                                : "rgba(255,255,255,0.08)",
+                                              display: "grid",
+                                              placeItems: "center",
+                                              fontSize: "0.75rem",
+                                              fontWeight: 800,
+                                              color: isCorrect ? "#fff" : "var(--text-muted)",
+                                            }}
+                                          >
+                                            {optionLetters[optIdx] || optIdx + 1}
+                                          </span>
+                                          <span>{optText}</span>
+                                        </div>
+                                        {isCorrect && (
+                                          <span
+                                            style={{
+                                              fontSize: "0.7rem",
+                                              fontWeight: 800,
+                                              color: "var(--emerald)",
+                                              display: "flex",
+                                              alignItems: "center",
+                                              gap: "2px",
+                                              background: "rgba(16, 185, 129, 0.2)",
+                                              padding: "2px 6px",
+                                              borderRadius: "4px",
+                                            }}
+                                          >
+                                            <CheckCircle2 size={12} />
+                                            الإجابة الصحيحة
+                                          </span>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* MODAL: ADD / EDIT EXAM */}
+      {isAddExamOpen && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(3, 7, 18, 0.8)",
+            backdropFilter: "blur(8px)",
+            zIndex: 1000,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "1rem",
+            direction: "rtl",
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isProcessing) {
+              setIsAddExamOpen(false);
+            }
+          }}
+        >
+          <div
+            className="feature-card"
+            style={{
+              width: "100%",
+              maxWidth: "min(520px, 96vw)",
+              maxHeight: "92vh",
+              overflowY: "auto",
+              padding: "clamp(1rem, 4vw, 1.75rem)",
+              position: "relative",
+              border: "1px solid rgba(6, 182, 212, 0.3)",
+              background: "linear-gradient(145deg, #111827, #080d18)",
+              boxShadow: "0 24px 80px rgba(0,0,0,0.6)",
+              borderRadius: "18px",
+            }}
+          >
+            <button
+              onClick={() => setIsAddExamOpen(false)}
+              disabled={isProcessing}
+              style={{
+                position: "absolute",
+                top: "16px",
+                left: "16px",
+                color: "var(--text-muted)",
+                background: "transparent",
+                border: "none",
+                cursor: "pointer",
+              }}
+            >
+              <X size={20} />
+            </button>
+
+            <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "1.25rem" }}>
+              <div
+                style={{
+                  width: "40px",
+                  height: "40px",
+                  borderRadius: "12px",
+                  background: "rgba(6, 182, 212, 0.15)",
+                  color: "var(--cyan)",
+                  display: "grid",
+                  placeItems: "center",
+                }}
+              >
+                <FileQuestion size={22} />
+              </div>
+              <div>
+                <h2 style={{ fontSize: "1.2rem", fontWeight: 800, color: "#fff", margin: 0 }}>
+                  {editingExam ? "تعديل بيانات الامتحان" : "إنشاء امتحان جديد"}
+                </h2>
+                <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", margin: "4px 0 0" }}>
+                  قم بضبط المحاضرة المرتبطة ووقت الامتحان ونسبة النجاح
+                </p>
+              </div>
+            </div>
+
+            <form onSubmit={handleSaveExam} style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+              <div>
+                <label className="form-label" style={{ fontWeight: 700, marginBottom: "6px", display: "block" }}>
+                  عنوان الامتحان *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="مثال: امتحان شامل على تطبيقات التفاضل"
+                  value={newExamData.title}
+                  onChange={(e) =>
+                    setNewExamData({ ...newExamData, title: e.target.value })
+                  }
+                  className="form-input"
+                  style={{ width: "100%" }}
+                />
+              </div>
+
+              <div>
+                <label className="form-label" style={{ fontWeight: 700, marginBottom: "6px", display: "block" }}>
+                  ربط بالمحاضرة (اختياري)
+                </label>
+                <select
+                  value={newExamData.lesson_id}
+                  onChange={(e) =>
+                    setNewExamData({
+                      ...newExamData,
+                      lesson_id: e.target.value ? Number(e.target.value) : "",
+                    })
+                  }
+                  className="form-input"
+                  style={{ width: "100%" }}
+                >
+                  <option value="" disabled>
+                    بدون ربط بمحاضرة
+                  </option>
+                  {lessonsList.map((l) => (
+                    <option key={l.id} value={l.id}>
+                      {l.title} ({l.grade})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid-2col" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+                <div>
+                  <label className="form-label" style={{ fontWeight: 700, marginBottom: "6px", display: "block" }}>
+                    المدة بالدقائق
+                  </label>
+                  <input
+                    type="number"
+                    min="5"
+                    max="180"
+                    value={newExamData.duration_minutes}
+                    onChange={(e) =>
+                      setNewExamData({
+                        ...newExamData,
+                        duration_minutes: Number(e.target.value),
+                      })
+                    }
+                    className="form-input"
+                    style={{ width: "100%" }}
+                  />
+                </div>
+
+                <div>
+                  <label className="form-label" style={{ fontWeight: 700, marginBottom: "6px", display: "block" }}>
+                    نسبة النجاح (%)
+                  </label>
+                  <input
+                    type="number"
+                    min="10"
+                    max="100"
+                    value={newExamData.passing_percentage}
+                    onChange={(e) =>
+                      setNewExamData({
+                        ...newExamData,
+                        passing_percentage: Number(e.target.value),
+                      })
+                    }
+                    className="form-input"
+                    style={{ width: "100%" }}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="form-label" style={{ fontWeight: 700, marginBottom: "6px", display: "block" }}>
+                  وصف الامتحان (اختياري)
+                </label>
+                <textarea
+                  rows={2}
+                  placeholder="ملاحظات أو تنبيهات للطالب قبل بدء هذا الاختبار..."
+                  value={newExamData.description}
+                  onChange={(e) =>
+                    setNewExamData({
+                      ...newExamData,
+                      description: e.target.value,
+                    })
+                  }
+                  className="form-input"
+                  style={{ width: "100%", resize: "vertical" }}
+                />
+              </div>
+
+              <div style={{ display: "flex", gap: "0.75rem", marginTop: "1rem" }}>
+                <button
+                  type="submit"
+                  disabled={isProcessing}
+                  className="btn-primary"
+                  style={{ flex: 1, justifyContent: "center", padding: "11px" }}
+                >
+                  {isProcessing
+                    ? "جاري الحفظ..."
+                    : editingExam
+                      ? "حفظ التعديلات"
+                      : "إنشاء وحفظ الامتحان"}
+                </button>
+                <button
+                  type="button"
+                  disabled={isProcessing}
+                  onClick={() => setIsAddExamOpen(false)}
+                  className="btn-secondary"
+                  style={{ padding: "11px 20px" }}
+                >
+                  إلغاء
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: ADD / EDIT QUESTION WITH CHOICES (اختيارات السؤال) */}
+      {questionModal.isOpen && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(3, 7, 18, 0.8)",
+            backdropFilter: "blur(8px)",
+            zIndex: 1000,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "1rem",
+            direction: "rtl",
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isProcessing) {
+              setQuestionModal({ ...questionModal, isOpen: false });
+            }
+          }}
+        >
+          <div
+            className="feature-card"
+            style={{
+              width: "100%",
+              maxWidth: "min(580px, 96vw)",
+              maxHeight: "92vh",
+              overflowY: "auto",
+              overflowX: "hidden",
+              padding: "clamp(1rem, 4vw, 1.75rem)",
+              position: "relative",
+              border: "1px solid rgba(6, 182, 212, 0.3)",
+              background: "linear-gradient(145deg, #111827, #080d18)",
+              boxShadow: "0 24px 80px rgba(0,0,0,0.6)",
+              borderRadius: "18px",
+            }}
+          >
+            <button
+              onClick={() =>
+                setQuestionModal({ ...questionModal, isOpen: false })
+              }
+              disabled={isProcessing}
+              style={{
+                position: "absolute",
+                top: "16px",
+                left: "16px",
+                color: "var(--text-muted)",
+                background: "transparent",
+                border: "none",
+                cursor: "pointer",
+              }}
+            >
+              <X size={20} />
+            </button>
+
+            <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "1.25rem" }}>
+              <div
+                style={{
+                  width: "40px",
+                  height: "40px",
+                  borderRadius: "12px",
+                  background: "rgba(6, 182, 212, 0.15)",
+                  color: "var(--cyan)",
+                  display: "grid",
+                  placeItems: "center",
+                }}
+              >
+                <HelpCircle size={22} />
+              </div>
+              <div>
+                <h2 style={{ fontSize: "1.2rem", fontWeight: 800, color: "#fff", margin: 0 }}>
+                  إضافة سؤال وتعيين اختيارات الإجابة
+                </h2>
+                <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", margin: "4px 0 0" }}>
+                  أدخل نص السؤال، وضع اختيارات الإجابة (أ، ب، جـ، د)، وحدد الإجابة الصحيحة
+                </p>
+              </div>
+            </div>
+
+            <form onSubmit={handleSaveQuestion} style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+              <div>
+                <label className="form-label" style={{ fontWeight: 700, marginBottom: "6px", display: "block" }}>
+                  نص السؤال *
+                </label>
+                <textarea
+                  rows={3}
+                  required
+                  placeholder="مثال: إذا كانت د(س) = س³ - ٣س، فإن النقطة الحرجة للدالة تقع عند س = ..."
+                  value={questionModal.question_text}
+                  onChange={(e) =>
+                    setQuestionModal({
+                      ...questionModal,
+                      question_text: e.target.value,
+                    })
+                  }
+                  className="form-input"
+                  style={{ width: "100%", resize: "vertical" }}
+                />
+              </div>
+
+              <div>
+                <label className="form-label" style={{ fontWeight: 700, marginBottom: "6px", display: "block" }}>
+                  درجة السؤال (النقاط)
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  max="50"
+                  value={questionModal.points}
+                  onChange={(e) =>
+                    setQuestionModal({
+                      ...questionModal,
+                      points: Number(e.target.value),
+                    })
+                  }
+                  className="form-input"
+                  style={{ width: "100px" }}
+                />
+              </div>
+
+              {/* QUESTION CHOICES SECTION (اختيارات السؤال) */}
+              <div
+                style={{
+                  background: "rgba(15, 23, 42, 0.5)",
+                  borderRadius: "12px",
+                  border: "1px solid rgba(6, 182, 212, 0.2)",
+                  padding: "1rem",
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem" }}>
+                  <label className="form-label" style={{ fontWeight: 800, color: "var(--cyan)", margin: 0 }}>
+                    اختيارات السؤال وتحديد الإجابة الصحيحة *
+                  </label>
+                  <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                    اختر الدائرة للإجابة الصحيحة
+                  </span>
+                </div>
+
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+                  {/* OPTION 1 */}
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "10px",
+                      background:
+                        questionModal.correctOption === 1
+                          ? "rgba(16, 185, 129, 0.1)"
+                          : "transparent",
+                      padding: "4px 8px",
+                      borderRadius: "8px",
+                      border:
+                        questionModal.correctOption === 1
+                          ? "1px solid rgba(16, 185, 129, 0.3)"
+                          : "1px solid transparent",
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      id="opt-radio-1"
+                      name="correctOption"
+                      checked={questionModal.correctOption === 1}
+                      onChange={() =>
+                        setQuestionModal({ ...questionModal, correctOption: 1 })
+                      }
+                      style={{ cursor: "pointer", width: "18px", height: "18px" }}
+                    />
+                    <label
+                      htmlFor="opt-radio-1"
+                      style={{
+                        fontSize: "0.85rem",
+                        fontWeight: 700,
+                        color: questionModal.correctOption === 1 ? "var(--emerald)" : "var(--text-muted)",
+                        minWidth: "60px",
+                        cursor: "pointer",
+                      }}
+                    >
+                      الخيار (أ):
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="أدخل الاختيار الأول"
+                      value={questionModal.opt1}
+                      onChange={(e) =>
+                        setQuestionModal({
+                          ...questionModal,
+                          opt1: e.target.value,
+                        })
+                      }
+                      className="form-input"
+                      style={{ flex: 1 }}
+                    />
+                  </div>
+
+                  {/* OPTION 2 */}
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "10px",
+                      background:
+                        questionModal.correctOption === 2
+                          ? "rgba(16, 185, 129, 0.1)"
+                          : "transparent",
+                      padding: "4px 8px",
+                      borderRadius: "8px",
+                      border:
+                        questionModal.correctOption === 2
+                          ? "1px solid rgba(16, 185, 129, 0.3)"
+                          : "1px solid transparent",
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      id="opt-radio-2"
+                      name="correctOption"
+                      checked={questionModal.correctOption === 2}
+                      onChange={() =>
+                        setQuestionModal({ ...questionModal, correctOption: 2 })
+                      }
+                      style={{ cursor: "pointer", width: "18px", height: "18px" }}
+                    />
+                    <label
+                      htmlFor="opt-radio-2"
+                      style={{
+                        fontSize: "0.85rem",
+                        fontWeight: 700,
+                        color: questionModal.correctOption === 2 ? "var(--emerald)" : "var(--text-muted)",
+                        minWidth: "60px",
+                        cursor: "pointer",
+                      }}
+                    >
+                      الخيار (ب):
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="أدخل الاختيار الثاني"
+                      value={questionModal.opt2}
+                      onChange={(e) =>
+                        setQuestionModal({
+                          ...questionModal,
+                          opt2: e.target.value,
+                        })
+                      }
+                      className="form-input"
+                      style={{ flex: 1 }}
+                    />
+                  </div>
+
+                  {/* OPTION 3 */}
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "10px",
+                      background:
+                        questionModal.correctOption === 3
+                          ? "rgba(16, 185, 129, 0.1)"
+                          : "transparent",
+                      padding: "4px 8px",
+                      borderRadius: "8px",
+                      border:
+                        questionModal.correctOption === 3
+                          ? "1px solid rgba(16, 185, 129, 0.3)"
+                          : "1px solid transparent",
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      id="opt-radio-3"
+                      name="correctOption"
+                      checked={questionModal.correctOption === 3}
+                      onChange={() =>
+                        setQuestionModal({ ...questionModal, correctOption: 3 })
+                      }
+                      style={{ cursor: "pointer", width: "18px", height: "18px" }}
+                    />
+                    <label
+                      htmlFor="opt-radio-3"
+                      style={{
+                        fontSize: "0.85rem",
+                        fontWeight: 700,
+                        color: questionModal.correctOption === 3 ? "var(--emerald)" : "var(--text-muted)",
+                        minWidth: "60px",
+                        cursor: "pointer",
+                      }}
+                    >
+                      الخيار (جـ):
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="أدخل الاختيار الثالث (اختياري)"
+                      value={questionModal.opt3}
+                      onChange={(e) =>
+                        setQuestionModal({
+                          ...questionModal,
+                          opt3: e.target.value,
+                        })
+                      }
+                      className="form-input"
+                      style={{ flex: 1 }}
+                    />
+                  </div>
+
+                  {/* OPTION 4 */}
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "10px",
+                      background:
+                        questionModal.correctOption === 4
+                          ? "rgba(16, 185, 129, 0.1)"
+                          : "transparent",
+                      padding: "4px 8px",
+                      borderRadius: "8px",
+                      border:
+                        questionModal.correctOption === 4
+                          ? "1px solid rgba(16, 185, 129, 0.3)"
+                          : "1px solid transparent",
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      id="opt-radio-4"
+                      name="correctOption"
+                      checked={questionModal.correctOption === 4}
+                      onChange={() =>
+                        setQuestionModal({ ...questionModal, correctOption: 4 })
+                      }
+                      style={{ cursor: "pointer", width: "18px", height: "18px" }}
+                    />
+                    <label
+                      htmlFor="opt-radio-4"
+                      style={{
+                        fontSize: "0.85rem",
+                        fontWeight: 700,
+                        color: questionModal.correctOption === 4 ? "var(--emerald)" : "var(--text-muted)",
+                        minWidth: "60px",
+                        cursor: "pointer",
+                      }}
+                    >
+                      الخيار (د):
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="أدخل الاختيار الرابع (اختياري)"
+                      value={questionModal.opt4}
+                      onChange={(e) =>
+                        setQuestionModal({
+                          ...questionModal,
+                          opt4: e.target.value,
+                        })
+                      }
+                      className="form-input"
+                      style={{ flex: 1 }}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ display: "flex", gap: "0.75rem", marginTop: "1rem" }}>
+                <button
+                  type="submit"
+                  disabled={isProcessing}
+                  className="btn-primary"
+                  style={{ flex: 1, justifyContent: "center", padding: "11px" }}
+                >
+                  {isProcessing ? "جاري الحفظ..." : "حفظ السؤال والخيارات"}
+                </button>
+                <button
+                  type="button"
+                  disabled={isProcessing}
+                  onClick={() =>
+                    setQuestionModal({ ...questionModal, isOpen: false })
+                  }
+                  className="btn-secondary"
+                  style={{ padding: "11px 20px" }}
+                >
+                  إلغاء
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* CONFIRM DELETE MODAL */}
+      {deleteConfirmation && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(3, 7, 18, 0.8)",
+            backdropFilter: "blur(6px)",
+            zIndex: 1100,
+            display: "grid",
+            placeItems: "center",
+            padding: "1rem",
+            direction: "rtl",
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isProcessing) {
+              setDeleteConfirmation(null);
+            }
+          }}
+        >
+          <div
+            className="feature-card"
+            style={{
+              width: "min(100%, 420px)",
+              padding: "1.5rem",
+              borderRadius: "18px",
+              border: "1px solid rgba(244, 63, 94, 0.3)",
+              background: "linear-gradient(145deg, #111827, #080d18)",
+              boxShadow: "0 24px 80px rgba(0,0,0,0.5)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "1rem" }}>
+              <div
+                style={{
+                  width: 44,
+                  height: 44,
+                  borderRadius: 14,
+                  background: "rgba(244, 63, 94, 0.15)",
+                  color: "#fb7185",
+                  display: "grid",
+                  placeItems: "center",
+                }}
+              >
+                <AlertTriangle size={22} />
+              </div>
+              <div>
+                <h3 style={{ margin: 0, color: "#fff", fontSize: "1.1rem" }}>
+                  {deleteConfirmation.type === "exam" ? "تأكيد حذف الامتحان" : "تأكيد حذف السؤال"}
+                </h3>
+                <span style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>
+                  عملية الحذف لا يمكن التراجع عنها
+                </span>
+              </div>
+            </div>
+
+            <p style={{ color: "var(--text-muted)", fontSize: "0.9rem", lineHeight: 1.7, margin: "0 0 1.25rem" }}>
+              هل أنت متأكد من حذف:{" "}
+              <strong style={{ color: "#fff" }}>
+                [ {deleteConfirmation.title} ]
+              </strong>
+              ؟
+            </p>
+
+            <div style={{ display: "flex", gap: "10px" }}>
+              <button
+                type="button"
+                disabled={isProcessing}
+                onClick={confirmDeleteAction}
+                style={{
+                  flex: 1,
+                  padding: "10px",
+                  borderRadius: "10px",
+                  border: "1px solid rgba(244, 63, 94, 0.4)",
+                  background: "linear-gradient(135deg, #e11d48, #be123c)",
+                  color: "#fff",
+                  fontWeight: 700,
+                  cursor: "pointer",
+                }}
+              >
+                {isProcessing ? "جاري الحذف..." : "نعم، حذف نهائي"}
+              </button>
+              <button
+                type="button"
+                disabled={isProcessing}
+                onClick={() => setDeleteConfirmation(null)}
+                className="btn-secondary"
+                style={{ flex: 1, justifyContent: "center" }}
+              >
+                إلغاء
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* =========================================================================
+   QUIZ VIEW COMPONENT (FOR STUDENTS OR TEACHER TEST-DRIVE)
+   ========================================================================= */
 
 function normalizeExamQuestion(question) {
   const options = Array.isArray(question.options) ? question.options : [];
@@ -141,16 +2009,24 @@ function normalizeExamQuestion(question) {
         ? option
         : option.option_text || option.text || "",
     ),
-    optionIds: options.map((option, index) =>
-      typeof option === "string" ? index + 1 : option.id || index + 1,
+    optionIds: options.map((option) =>
+      typeof option === "string" ? null : option.id || option.option_id || null,
     ),
+    id: question.id || question.question_id || null,
     correctIndex,
   };
 }
 
 function QuizView({ lesson, examId, isTeacher, student, showToast }) {
-  const { startExamAttempt, submitExamAttempt, getStudentExam } = useStudent();
-  const [examData, setExamData] = useState(lesson?.quiz || null);
+  const {
+    startExamAttempt,
+    submitExamAttempt,
+    getStudentExam,
+    getStudentLessonQuizAnswers,
+  } = useStudent();
+  const [examData, setExamData] = useState(
+    isTeacher ? lesson?.quiz || null : null,
+  );
   const [examLoadState, setExamLoadState] = useState(
     isTeacher ? "ready" : "loading",
   );
@@ -183,21 +2059,21 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
       setExamLoadState("loading");
 
       try {
+        if (!examId) throw new Error("معرّف الاختبار غير متاح من الخادم");
         const response = await getStudentExam(examId);
         const exam =
-          response?.exam || response?.data?.exam || response?.data || response;
+          response?.exam ||
+          response?.data?.exam ||
+          response?.data?.data ||
+          response?.data ||
+          response;
 
+        if (!Array.isArray(exam?.questions) || exam.questions.length === 0) {
+          throw new Error("لم يُرجع الخادم أسئلة هذا الاختبار");
+        }
         if (!isMounted) return;
-
-        setExamData(
-          Array.isArray(exam?.questions) ? exam : lesson?.quiz || null,
-        );
-        setTimeLeft(
-          (exam?.duration_minutes ||
-            exam?.durationMinutes ||
-            lesson?.quiz?.durationMinutes ||
-            10) * 60,
-        );
+        setExamData(exam);
+        setTimeLeft((exam?.duration_minutes || exam?.durationMinutes || 10) * 60);
 
         const attempt = await startExamAttempt(examId);
         if (!attempt?.success && attempt?.success !== undefined) {
@@ -262,7 +2138,7 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
     let score = 0;
     questions.forEach((q, idx) => {
       if (selectedAnswers[idx] === q.correctIndex) {
-        score++;
+        score += 1;
       }
     });
     return score;
@@ -270,20 +2146,22 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
 
   const handleSubmit = async () => {
     if (!isTeacher && Object.keys(selectedAnswers).length < totalQuestions) {
-      showToast("أجيبي عن جميع الأسئلة قبل التسليم", "error");
+      showToast("أجب عن جميع الأسئلة قبل التسليم", "error");
       return;
     }
 
-    const score = calculateScore();
+    const score = isTeacher ? calculateScore() : null;
+    let submittedPercentage = null;
 
     if (!isTeacher) {
       try {
-        const answersPayload = questions.map((question, index) => ({
-          question_id: question.id || index + 1,
-          option_id:
-            question.optionIds[selectedAnswers[index]] ||
-            selectedAnswers[index] + 1,
-        }));
+        const answersPayload = questions.map((question, index) => {
+          const optionId = question.optionIds[selectedAnswers[index]];
+          if (!question.id || !optionId) {
+            throw new Error("تعذر إرسال إجابة دون معرّفات السؤال والاختيار من الخادم");
+          }
+          return { question_id: question.id, option_id: optionId };
+        });
         const response = await submitExamAttempt(examId, {
           attempt_id: attemptId,
           answers: answersPayload,
@@ -293,7 +2171,45 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
           throw new Error(response.message || "تعذر تسليم إجابات الاختبار");
         }
 
-        setServerResult(response?.result || response?.data || response || null);
+        let resultData =
+          response?.result ||
+          response?.data?.result ||
+          response?.data?.data ||
+          response?.data ||
+          response ||
+          null;
+        try {
+          const answerReview = await getStudentLessonQuizAnswers(
+            lesson.id,
+            attemptId,
+          );
+          if (answerReview?.data) {
+            resultData = { ...resultData, ...answerReview.data };
+          }
+        } catch (error) {
+          console.warn("Could not load submitted answer review:", error);
+        }
+        setServerResult(resultData);
+        const resultAttempt =
+          resultData?.attempt ||
+          resultData?.exam_attempt ||
+          resultData?.result ||
+          resultData;
+        const reportedPercentage = Number(
+          resultAttempt?.percentage ??
+            resultAttempt?.percentage_score ??
+            resultAttempt?.score_percentage,
+        );
+        const reportedScore = Number(
+          resultAttempt?.score ??
+            resultAttempt?.correct_answers ??
+            resultAttempt?.correctAnswers,
+        );
+        submittedPercentage = Number.isFinite(reportedPercentage)
+          ? reportedPercentage
+          : Number.isFinite(reportedScore)
+            ? Math.round((reportedScore / (totalQuestions || 1)) * 100)
+            : null;
       } catch (error) {
         showToast(error.message || "تعذر تسليم إجابات الاختبار", "error");
         return;
@@ -301,9 +2217,11 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
     }
 
     setIsSubmitted(true);
-    const percentage = hasAnswerKey
-      ? Math.round((score / (totalQuestions || 1)) * 100)
-      : null;
+    const percentage = isTeacher
+      ? hasAnswerKey
+        ? Math.round((score / (totalQuestions || 1)) * 100)
+        : null
+      : submittedPercentage;
 
     if (percentage >= 50) {
       try {
@@ -331,7 +2249,7 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
     return `${m}:${s < 10 ? "0" : ""}${s}`;
   };
 
-  const localScore = calculateScore();
+  const localScore = isTeacher ? calculateScore() : null;
   const reportedScore = Number(
     serverResult?.score ??
       serverResult?.correct_answers ??
@@ -339,63 +2257,183 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
   );
   const score = Number.isFinite(reportedScore)
     ? reportedScore
-    : hasAnswerKey
+    : isTeacher && hasAnswerKey
       ? localScore
       : null;
-  const reportedPercentage = Number(
-    serverResult?.percentage ??
-      serverResult?.score_percentage ??
-      serverResult?.scorePercentage,
-  );
-  const percentage = Number.isFinite(reportedPercentage)
-    ? reportedPercentage
-    : score === null
-      ? null
-      : Math.round((score / (totalQuestions || 1)) * 100);
+  const percentage =
+    typeof serverResult?.percentage === "number"
+      ? serverResult.percentage
+      : score !== null
+        ? Math.round((score / (totalQuestions || 1)) * 100)
+        : null;
+
+  if (examLoadState === "loading") {
+    return (
+      <div
+        className="container"
+        style={{ textAlign: "center", padding: "5rem 1rem" }}
+      >
+        <h2>جارٍ تجهيز الاختبار...</h2>
+        <p style={{ color: "var(--text-muted)", marginTop: "8px" }}>
+          يتم تجهيز الأسئلة وبدء الجلسة المؤمّنة للطالب
+        </p>
+      </div>
+    );
+  }
+
+  if (examLoadState === "locked") {
+    return (
+      <div
+        className="container"
+        style={{ textAlign: "center", padding: "5rem 1rem", maxWidth: "600px" }}
+      >
+        <div
+          style={{
+            background: "var(--bg-card)",
+            border: "1px solid rgba(244, 63, 94, 0.3)",
+            borderRadius: "var(--radius-xl)",
+            padding: "2.5rem 1.5rem",
+          }}
+        >
+          <div
+            style={{
+              width: "60px",
+              height: "60px",
+              borderRadius: "50%",
+              background: "rgba(244, 63, 94, 0.15)",
+              color: "var(--rose)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              margin: "0 auto 1rem",
+              fontSize: "1.8rem",
+            }}
+          >
+            🔒
+          </div>
+          <h2 style={{ fontSize: "1.3rem", fontWeight: 900, color: "#fff" }}>
+            هذا الاختبار مقفل حالياً
+          </h2>
+          <p
+            style={{
+              fontSize: "0.85rem",
+              color: "var(--text-muted)",
+              marginTop: "8px",
+              lineHeight: "1.6",
+            }}
+          >
+            {examLoadError ||
+              "يلزم إكمال مشاهدة الفيديو المطلوب بنسبة 80% على الأقل لفتح هذا الاختبار"}
+          </p>
+          <Link
+            to={`/watch/${lesson.id}`}
+            className="btn-primary"
+            style={{ marginTop: "1.5rem", display: "inline-flex" }}
+          >
+            الانتقال لمشاهدة شرح الدرس
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  if (examLoadState === "error") {
+    return (
+      <div
+        className="container"
+        style={{ textAlign: "center", padding: "5rem 1rem", maxWidth: "600px" }}
+      >
+        <div
+          style={{
+            background: "var(--bg-card)",
+            border: "1px solid var(--border-subtle)",
+            borderRadius: "var(--radius-xl)",
+            padding: "2.5rem 1.5rem",
+          }}
+        >
+          <h2 style={{ fontSize: "1.2rem", fontWeight: 800, color: "#fff" }}>
+            تعذر فتح الاختبار
+          </h2>
+          <p
+            style={{
+              fontSize: "0.85rem",
+              color: "var(--text-muted)",
+              marginTop: "8px",
+              lineHeight: "1.6",
+            }}
+          >
+            {examLoadError || "حدث خطأ غير متوقع أثناء تحميل بيانات الاختبار"}
+          </p>
+          <Link
+            to="/lessons"
+            className="btn-primary"
+            style={{ marginTop: "1.5rem", display: "inline-flex" }}
+          >
+            العودة لصفحة الدروس
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  if (!examData || totalQuestions === 0) {
+    return (
+      <div
+        className="container"
+        style={{ textAlign: "center", padding: "5rem 1rem" }}
+      >
+        <h2>لا توجد أسئلة مضافة لهذا الاختبار حالياً</h2>
+        <Link
+          to="/lessons"
+          className="btn-primary"
+          style={{ marginTop: "1rem" }}
+        >
+          العودة للدروس
+        </Link>
+      </div>
+    );
+  }
+
   const currentQ = questions[currentIdx];
-
-  if (examLoadState !== "ready") {
-    return (
-      <div
-        className="container"
-        style={{ paddingTop: "2rem", textAlign: "center" }}
-      >
-        <div className="form-card">
-          {examLoadState === "loading"
-            ? "جاري تحميل الاختبار..."
-            : examLoadState === "locked"
-              ? "هذا الاختبار مقفل أو غير متاح لاشتراكك."
-              : examLoadError || "تعذر تحميل الاختبار من الخادم."}
-        </div>
-      </div>
-    );
-  }
-
-  if (totalQuestions === 0) {
-    return (
-      <div
-        className="container"
-        style={{ paddingTop: "2rem", textAlign: "center" }}
-      >
-        <div className="form-card">
-          لا توجد أسئلة متاحة لهذا الاختبار حاليًا.
-        </div>
-      </div>
-    );
-  }
+  const optionLetters = ["أ", "ب", "جـ", "د"];
 
   return (
     <div
-      className="container"
-      style={{ paddingTop: "1.5rem", maxWidth: "850px" }}
+      style={{
+        maxWidth: "750px",
+        width: "100%",
+        margin: "0 auto",
+        boxSizing: "border-box",
+      }}
     >
-      {/* Header */}
-      <div className="section-header">
+      {/* Top Header & Timer */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: "1.5rem",
+          flexWrap: "wrap",
+          gap: "1rem",
+        }}
+      >
         <div>
-          <span className="badge-tag">امتحان إلكتروني بنظام التابلت</span>
+          <span
+            style={{
+              fontSize: "0.75rem",
+              color: "var(--cyan)",
+              fontWeight: 800,
+            }}
+          >
+            {lesson.branch} • {lesson.title}
+          </span>
           <h1
-            className="section-title"
-            style={{ fontSize: "1.4rem", marginTop: "6px" }}
+            style={{
+              fontSize: "1.35rem",
+              fontWeight: 900,
+              color: "#fff",
+              marginTop: "4px",
+            }}
           >
             {examData?.title || lesson?.quiz?.title || "اختبار الرياضيات"}
           </h1>
@@ -448,157 +2486,119 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              margin: "0 auto 1.25rem",
-              boxShadow: "0 0 30px rgba(6, 182, 212, 0.3)",
+              margin: "0 auto 1.5rem",
             }}
           >
-            {percentage !== null && percentage >= 50 ? (
-              <Trophy size={40} />
-            ) : (
-              <AlertCircle size={40} />
-            )}
+            <Trophy size={40} />
           </div>
 
-          <h2 style={{ fontSize: "1.6rem", fontWeight: 900, color: "#ffffff" }}>
-            {percentage === null
-              ? `تم تسليم إجاباتك يا ${student?.name || "طالب متميز"}`
-              : percentage >= 80
-                ? `ممتاز وتفوق مبهر يا ${student?.name || "بطل"}! 🌟`
-                : percentage >= 50
-                  ? `أحسنت يا ${student?.name || "بطل"}، نتيجة طيبة! 👍`
-                  : `فرصة أفضل في المرة القادمة يا ${student?.name || "بطل"} 💪`}
+          <h2 style={{ fontSize: "1.5rem", fontWeight: 900, color: "#fff" }}>
+            {percentage !== null
+              ? percentage >= 50
+                ? "مبروك! اجتزت الاختبار بنجاح 🎉"
+                : "حاول مرة أخرى لتحسين نتيجتك 💪"
+              : "تم إرسال إجابات الاختبار بنجاح"}
           </h2>
-
-          <p
-            style={{
-              fontSize: "0.95rem",
-              color: "var(--text-muted)",
-              marginTop: "8px",
-              marginBottom: "1.5rem",
-            }}
-          >
-            {percentage === null ? (
-              "تم إرسال إجاباتك إلى الخادم."
-            ) : (
-              <>
-                حصلت على{" "}
-                <strong style={{ color: "var(--cyan)", fontSize: "1.2rem" }}>
-                  {score}
-                </strong>{" "}
-                من إجمالي{" "}
-                <strong style={{ color: "#ffffff", fontSize: "1.2rem" }}>
-                  {totalQuestions}
-                </strong>{" "}
-                أسئلة ({percentage}%)
-              </>
-            )}
-          </p>
-
-          {/* Model Answers Review */}
-          {hasAnswerKey && (
-            <div
-              style={{
-                textAlign: "right",
-                background: "#090e1a",
-                padding: "1rem",
-                borderRadius: "var(--radius-md)",
-                border: "1px solid var(--border-subtle)",
-                marginBottom: "1.5rem",
-                maxHeight: "250px",
-                overflowY: "auto",
-              }}
-            >
-              <h4
-                style={{
-                  fontSize: "0.85rem",
-                  fontWeight: 800,
-                  color: "#ffffff",
-                  marginBottom: "0.75rem",
-                }}
-              >
-                نموذج الإجابات والتوضيح:
-              </h4>
-              {questions.map((q, idx) => {
-                const userAns = selectedAnswers[idx];
-                const isCorrect = userAns === q.correctIndex;
-                return (
-                  <div
-                    key={q.id}
-                    style={{
-                      padding: "8px 12px",
-                      borderBottom: "1px solid rgba(255,255,255,0.05)",
-                      fontSize: "0.8rem",
-                      color: "var(--text-muted)",
-                    }}
-                  >
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        color: "#ffffff",
-                        fontWeight: 700,
-                      }}
-                    >
-                      <span>
-                        {idx + 1}. {q.question}
-                      </span>
-                      <span
-                        style={{
-                          color: isCorrect ? "var(--emerald)" : "var(--rose)",
-                        }}
-                      >
-                        {isCorrect ? "✓ صحيح" : "✗ خطأ"}
-                      </span>
-                    </div>
-                    <div style={{ marginTop: "3px" }}>
-                      الإجابة النموذجية:{" "}
-                      <strong style={{ color: "var(--emerald)" }}>
-                        {q.options[q.correctIndex]}
-                      </strong>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
 
           <div
             style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: "1rem",
+              fontSize: "3rem",
+              fontWeight: 900,
+              color:
+                percentage !== null && percentage >= 50
+                  ? "var(--emerald)"
+                  : "var(--rose)",
+              margin: "1rem 0",
             }}
           >
-            <button
-              onClick={() => {
-                setSelectedAnswers({});
-                setIsSubmitted(false);
-                setCurrentIdx(0);
-                setTimeLeft(600);
-              }}
-              className="btn-secondary"
-            >
-              <RotateCcw size={16} />
-              <span>إعادة الاختبار</span>
-            </button>
+            {percentage !== null ? `${percentage}%` : "تم التسليم"}
+          </div>
+
+          <p
+            style={{
+              color: "var(--text-muted)",
+              fontSize: "0.9rem",
+              marginBottom: "2rem",
+            }}
+          >
+            {score !== null
+              ? `أجبت على ${score} من أصل ${totalQuestions} أسئلة بشكل صحيح.`
+              : "تم تسجيل إجاباتك في السيرفر بنجاح."}
+          </p>
+
+          <section className="exam-answer-review" aria-labelledby="exam-review-title">
+            <h3 id="exam-review-title">{"\u0645\u0631\u0627\u062c\u0639\u0629 \u0625\u062c\u0627\u0628\u0627\u062a\u0643"}</h3>
+            <div className="exam-answer-review__list">
+              {questions.map((question, index) => {
+                const correctIndex = question.correctIndex;
+                const hasCorrectOption = Number.isInteger(correctIndex) && correctIndex >= 0;
+                const selectedIndex = selectedAnswers[index];
+                const isCorrect = hasCorrectOption && selectedIndex === correctIndex;
+
+                return (
+                  <article className="exam-review-question" key={question.id || index}>
+                    <div className="exam-review-question__header">
+                      <h4>
+                        {"\u0627\u0644\u0633\u0624\u0627\u0644"} {index + 1}: {question.question}
+                      </h4>
+                      <span className={`exam-review-status ${!hasCorrectOption ? "is-pending" : isCorrect ? "is-correct" : "is-incorrect"}`}>
+                        {hasCorrectOption
+                          ? isCorrect
+                            ? "\u0625\u062c\u0627\u0628\u0629 \u0635\u062d\u064a\u062d\u0629"
+                            : "\u0625\u062c\u0627\u0628\u0629 \u063a\u064a\u0631 \u0635\u062d\u064a\u062d\u0629"
+                          : "\u0627\u0644\u0625\u062c\u0627\u0628\u0629 \u0627\u0644\u0646\u0645\u0648\u0630\u062c\u064a\u0629 \u063a\u064a\u0631 \u0645\u062a\u0627\u062d\u0629"}
+                      </span>
+                    </div>
+                    <div className="exam-review-options">
+                      {question.options.map((option, optionIndex) => {
+                        const isSelected = selectedIndex === optionIndex;
+                        const isCorrectOption = hasCorrectOption && correctIndex === optionIndex;
+                        const optionClass = isCorrectOption
+                          ? "is-correct"
+                          : isSelected
+                            ? "is-incorrect"
+                            : "";
+
+                        return (
+                          <div className={`exam-review-option ${optionClass}`} key={question.optionIds[optionIndex] || optionIndex}>
+                            <span>{option}</span>
+                            {isSelected && isCorrectOption && (
+                              <span className="exam-review-option__label">{"\u0625\u062c\u0627\u0628\u062a\u0643 \u0627\u0644\u0635\u062d\u064a\u062d\u0629"}</span>
+                            )}
+                            {isSelected && !isCorrectOption && (
+                              <span className="exam-review-option__label">{"\u0625\u062c\u0627\u0628\u062a\u0643"}</span>
+                            )}
+                            {isCorrectOption && !isSelected && (
+                              <span className="exam-review-option__label">{"\u0627\u0644\u0625\u062c\u0627\u0628\u0629 \u0627\u0644\u0635\u062d\u064a\u062d\u0629"}</span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+
+          <div className="exam-result-actions">
             <Link to="/lessons" className="btn-primary">
-              <span>العودة للدروس</span>
+              {"\u0627\u0644\u0639\u0648\u062f\u0629 \u0644\u0644\u062f\u0631\u0648\u0633"}
             </Link>
           </div>
         </div>
       ) : (
-        /* Active Question Screen */
-        <div className="form-card" style={{ maxWidth: "100%" }}>
-          {/* Progress Bar */}
-          <div style={{ marginBottom: "1.25rem" }}>
+        /* Questions Stepper & Current Question */
+        <div className="form-card" style={{ padding: "clamp(1rem, 4vw, 2rem)" }}>
+          {/* Progress Bar & Indicators */}
+          <div style={{ marginBottom: "1.75rem" }}>
             <div
               style={{
                 display: "flex",
                 justifyContent: "space-between",
                 fontSize: "0.8rem",
                 color: "var(--text-muted)",
-                marginBottom: "6px",
+                marginBottom: "8px",
               }}
             >
               <span>
@@ -611,73 +2611,63 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
             </div>
             <div
               style={{
-                width: "100%",
-                height: "8px",
-                background: "#090e1a",
-                borderRadius: "999px",
+                height: "6px",
+                background: "#1e293b",
+                borderRadius: "3px",
                 overflow: "hidden",
               }}
             >
               <div
                 style={{
-                  width: `${((currentIdx + 1) / totalQuestions) * 100}%`,
                   height: "100%",
+                  width: `${((currentIdx + 1) / totalQuestions) * 100}%`,
                   background:
-                    "linear-gradient(90deg, #4f46e5 0%, #06b6d4 100%)",
-                  transition: "width 0.25s ease",
+                    "linear-gradient(90deg, var(--indigo) 0%, var(--cyan) 100%)",
+                  transition: "width 0.3s ease",
                 }}
-              ></div>
+              />
             </div>
           </div>
 
-          {/* Question Prompt */}
-          <div
-            style={{
-              background: "#090e1a",
-              border: "1px solid var(--border-subtle)",
-              borderRadius: "var(--radius-md)",
-              padding: "1.25rem",
-              marginBottom: "1.25rem",
-            }}
-          >
+          {/* Question Text */}
+          <div style={{ marginBottom: "2rem" }}>
             <span
               style={{
-                fontSize: "0.7rem",
-                color: "var(--cyan)",
-                fontWeight: 700,
-                background: "rgba(6, 182, 212, 0.15)",
-                padding: "2px 8px",
-                borderRadius: "4px",
                 display: "inline-block",
-                marginBottom: "6px",
+                padding: "2px 8px",
+                background: "rgba(6, 182, 212, 0.15)",
+                color: "var(--cyan)",
+                borderRadius: "4px",
+                fontSize: "0.75rem",
+                fontWeight: 700,
+                marginBottom: "8px",
               }}
             >
-              مسألة رياضيات #{currentIdx + 1}
+              سؤال اختياري
             </span>
             <h3
               style={{
                 fontSize: "1.15rem",
                 fontWeight: 800,
-                color: "#ffffff",
-                lineHeight: "1.6",
+                color: "#fff",
+                lineHeight: 1.6,
               }}
             >
-              {currentQ?.question}
+              {currentQ.question}
             </h3>
           </div>
 
-          {/* Options */}
+          {/* Options List */}
           <div
             style={{
               display: "flex",
               flexDirection: "column",
               gap: "0.75rem",
-              marginBottom: "1.5rem",
+              marginBottom: "2.5rem",
             }}
           >
-            {currentQ?.options?.map((opt, optIdx) => {
+            {currentQ.options.map((opt, optIdx) => {
               const isSelected = selectedAnswers[currentIdx] === optIdx;
-              const optionLetters = ["أ", "ب", "جـ", "د"];
               return (
                 <button
                   key={optIdx}
@@ -686,15 +2676,14 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "space-between",
-                    padding: "14px 18px",
+                    padding: "1rem 1.25rem",
                     borderRadius: "var(--radius-md)",
-                    border: isSelected
-                      ? "1px solid var(--cyan)"
-                      : "1px solid var(--border-subtle)",
                     background: isSelected
-                      ? "rgba(6, 182, 212, 0.15)"
+                      ? "rgba(6, 182, 212, 0.12)"
                       : "rgba(15, 23, 42, 0.6)",
-                    color: isSelected ? "#ffffff" : "var(--text-main)",
+                    border: `1.5px solid ${isSelected ? "var(--cyan)" : "var(--border-subtle)"}`,
+                    color: isSelected ? "#fff" : "var(--text-muted)",
+                    cursor: "pointer",
                     textAlign: "right",
                     transition: "all 0.2s ease",
                     boxShadow: isSelected
@@ -739,12 +2728,15 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
 
           {/* Navigation Controls */}
           <div
+            className="quiz-nav-row"
             style={{
               display: "flex",
               alignItems: "center",
               justifyContent: "space-between",
               paddingTop: "1rem",
               borderTop: "1px solid var(--border-subtle)",
+              flexWrap: "wrap",
+              gap: "0.75rem",
             }}
           >
             <button
@@ -759,9 +2751,13 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
 
             {currentIdx < totalQuestions - 1 ? (
               <button
-                onClick={() =>
-                  setCurrentIdx((p) => Math.min(totalQuestions - 1, p + 1))
-                }
+                onClick={() => {
+                  if (!isTeacher && selectedAnswers[currentIdx] === undefined) {
+                    showToast("أجب عن هذا السؤال قبل الانتقال إلى السؤال التالي", "error");
+                    return;
+                  }
+                  setCurrentIdx((p) => Math.min(totalQuestions - 1, p + 1));
+                }}
                 className="btn-primary"
               >
                 <span>التالي</span>

@@ -82,7 +82,7 @@ function QuizModalContent({ onClose, lesson, student }) {
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div 
-        className="modal-content w-full max-w-2xl p-6 sm:p-8 bg-slate-900 border border-indigo-500/30 rounded-3xl"
+        className="modal-content w-full max-w-2xl max-h-[92vh] overflow-y-auto p-4 sm:p-6 md:p-8 bg-slate-900 border border-indigo-500/30 rounded-2xl sm:rounded-3xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}

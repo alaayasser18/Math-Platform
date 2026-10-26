@@ -1,7 +1,10 @@
 import { BookOpen, Download, CheckCircle2 } from 'lucide-react';
-import { MEMOS_DATA } from '../data/platformData';
+import { useStudent } from '../context/useStudent';
 
 export default function NotesSection({ onDownloadPdf }) {
+  const { memosList } = useStudent();
+  const memos = Array.isArray(memosList) ? memosList : [];
+
   return (
     <section id="notes-section" className="py-12">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -22,7 +25,7 @@ export default function NotesSection({ onDownloadPdf }) {
 
         {/* Memos Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-          {MEMOS_DATA.map((memo) => (
+          {memos.map((memo) => (
             <div
               key={memo.id}
               className="glass-panel p-5 bg-slate-900/80 border border-white/10 rounded-2xl flex flex-col justify-between group hover:border-purple-500/50 hover:shadow-2xl hover:shadow-purple-950/40 transition-all duration-300 hover:-translate-y-1.5"
@@ -31,7 +34,7 @@ export default function NotesSection({ onDownloadPdf }) {
                 {/* Book Cover Image */}
                 <div className="relative aspect-[3/4] rounded-xl overflow-hidden mb-4 bg-slate-950 border border-white/10 group-hover:border-purple-500/40 transition-colors">
                   <img
-                    src={memo.cover}
+                    src={memo.cover_image_url || memo.cover_image || ''}
                     alt={memo.title}
                     className="w-full h-full object-cover object-center group-hover:scale-105 transition-transform duration-500"
                   />
@@ -40,13 +43,13 @@ export default function NotesSection({ onDownloadPdf }) {
                   </div>
                   <div className="absolute bottom-2 left-2 right-2 px-2.5 py-1.5 rounded-lg bg-slate-950/90 backdrop-blur-md border border-white/10 flex items-center justify-between text-[11px] text-slate-300">
                     <span>{memo.pages} صفحة</span>
-                    <span className="text-purple-300 font-bold">{memo.fileSize}</span>
+                    <span className="text-purple-300 font-bold">{memo.file_size || '—'}</span>
                   </div>
                 </div>
 
                 {/* Grade Badge */}
                 <span className="text-[11px] font-bold px-2 py-0.5 rounded-md bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 inline-block mb-2">
-                  {memo.grade}
+                  {memo.grade?.name || memo.grade_name || memo.grade || '—'}
                 </span>
 
                 {/* Title */}
@@ -56,7 +59,7 @@ export default function NotesSection({ onDownloadPdf }) {
 
                 {/* Features List */}
                 <ul className="space-y-1.5 mb-5 text-right">
-                  {memo.features.map((feat, idx) => (
+                  {(Array.isArray(memo.features) ? memo.features : []).map((feat, idx) => (
                     <li key={idx} className="flex items-center gap-1.5 text-[11px] text-slate-400">
                       <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                       <span className="truncate">{feat}</span>
@@ -67,7 +70,7 @@ export default function NotesSection({ onDownloadPdf }) {
 
               {/* Download Button */}
               <button
-                onClick={() => onDownloadPdf({ title: memo.title, pdfFile: `${memo.title}.pdf` })}
+                onClick={() => onDownloadPdf?.(memo)}
                 className="w-full btn-primary py-2.5 text-xs rounded-xl font-bold flex items-center justify-center gap-2 cursor-pointer group-hover:bg-gradient-to-r group-hover:from-purple-600 group-hover:to-cyan-600"
               >
                 <Download className="w-4 h-4 text-cyan-300" />

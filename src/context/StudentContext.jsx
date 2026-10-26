@@ -1,10 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
-import {
-  MEMOS_DATA,
-  GRADES,
-  TEACHER_INFO,
-} from "../data/platformData";
+import { GRADES, TEACHER_INFO } from "../data/platformData";
 
 import {
   api,
@@ -28,14 +24,7 @@ export const StudentProvider = ({ children }) => {
     return localStorage.getItem("el_eamid_role") || "student";
   });
 
-  const [student, setStudent] = useState(() => {
-    try {
-      const savedStudent = localStorage.getItem("el_eamid_student");
-      return savedStudent ? JSON.parse(savedStudent) : null;
-    } catch {
-      return null;
-    }
-  });
+  const [student, setStudent] = useState(null);
 
   const [studentsList, setStudentsList] = useState([]);
 
@@ -68,16 +57,6 @@ export const StudentProvider = ({ children }) => {
   // ============================================================
 
   const [paginatedStudents, setPaginatedStudents] = useState([]);
-  const [locallyRemovedStudentIds, setLocallyRemovedStudentIds] = useState(() => {
-    try {
-      const savedIds = JSON.parse(
-        localStorage.getItem("el_eamid_locally_removed_students") || "[]",
-      );
-      return Array.isArray(savedIds) ? savedIds.map(String) : [];
-    } catch {
-      return [];
-    }
-  });
   const [studentsPagination, setStudentsPagination] = useState({
     current_page: 1,
     last_page: 1,
@@ -85,6 +64,8 @@ export const StudentProvider = ({ children }) => {
   });
   const [isLoadingStudents, setIsLoadingStudents] = useState(false);
   const [isLoadingLessons, setIsLoadingLessons] = useState(false);
+  const [studentExamsList, setStudentExamsList] = useState([]);
+  const [isLoadingStudentExams, setIsLoadingStudentExams] = useState(false);
 
   // ============================================================
   // LESSONS
@@ -96,15 +77,8 @@ export const StudentProvider = ({ children }) => {
   // MEMOS
   // ============================================================
 
-  const [memosList, setMemosList] = useState(() => {
-    try {
-      const savedMemos = localStorage.getItem("el_eamid_memos_list");
-
-      return savedMemos ? JSON.parse(savedMemos) : MEMOS_DATA;
-    } catch {
-      return MEMOS_DATA;
-    }
-  });
+  const [memosList, setMemosList] = useState([]);
+  const [isLoadingMemos, setIsLoadingMemos] = useState(false);
 
   // ============================================================
   // UI STATE
@@ -132,6 +106,7 @@ export const StudentProvider = ({ children }) => {
       localStorage.removeItem("mathplatform_offline_approved");
       localStorage.removeItem("mathplatform_offline_exams");
       localStorage.removeItem("el_eamid_students_list");
+      localStorage.removeItem("el_eamid_student");
 
       if (!hasSavedSession || !savedToken) {
         tokenStorage.clearTokens();
@@ -237,16 +212,18 @@ export const StudentProvider = ({ children }) => {
 
       if (result?.success) {
         setApprovedSubscriptions(result.data || []);
-      } else {
-        setApprovedSubscriptions([]);
+      } else if (result?.error) {
+        showToast(result.error, "error");
       }
+      return result;
     } catch (error) {
       console.error("Failed to fetch approved students:", error);
-      setApprovedSubscriptions([]);
+      showToast(error?.message || "Failed to fetch approved students", "error");
+      return { success: false, error: error?.message || "Request failed" };
     } finally {
       setApprovedLoading(false);
     }
-  }, []);
+  }, [showToast]);
 
   // ============================================================
   // FETCH STUDENT PROFILE (GET /api/v1/student/profile)
@@ -256,7 +233,7 @@ export const StudentProvider = ({ children }) => {
     const token = tokenStorage.getStudentToken();
 
     if (!token) {
-      return;
+      return { success: false, error: "جلسة الطالب غير متاحة" };
     }
 
     try {
@@ -273,7 +250,11 @@ export const StudentProvider = ({ children }) => {
             : null);
         const trustedDevice =
           profile.trusted_device || profile.device || profile.trustedDevice || null;
+        const profileName =
+          profileStudent.name ||
+          `${profileStudent.first_name || ""} ${profileStudent.last_name || ""}`.trim();
 
+        let updatedStudent;
         setStudent((prev) => {
           const rawSubscriptionCode =
             profileStudent.subscription_code || prev?.subscription_code;
@@ -285,9 +266,10 @@ export const StudentProvider = ({ children }) => {
                 subscription?.code ||
                 subscription?.subscription_code ||
                 "";
-          const updated = {
+          updatedStudent = {
             ...prev,
             ...profileStudent,
+            ...(profileName ? { name: profileName } : {}),
             subscription,
             code: subscriptionCode || prev?.code || "",
             subscription_code: subscriptionCode,
@@ -296,29 +278,26 @@ export const StudentProvider = ({ children }) => {
               typeof profile.grade === "string"
                 ? profile.grade
                 : profile.grade?.name ||
-                  getGradeNameById(
-                    profileStudent.grade_id || prev?.grade_id || 1,
-                  ) ||
-                  prev?.grade,
-            grade_id: profileStudent.grade_id || prev?.grade_id || 1,
+                  ((profileStudent.grade_id || prev?.grade_id)
+                    ? getGradeNameById(
+                        profileStudent.grade_id || prev?.grade_id,
+                      )
+                    : prev?.grade),
+            grade_id: profileStudent.grade_id || prev?.grade_id,
           };
-
-          try {
-            localStorage.setItem(
-              "el_eamid_student",
-              JSON.stringify(updated),
-            );
-          } catch {
-            // ignore
-          }
-
-          return updated;
+          return updatedStudent;
         });
+        return { success: true, data: updatedStudent || profile };
       }
+      const error = result?.error || result?.message || "تعذر تحميل بيانات الطالب";
+      showToast(error, "error");
+      return { success: false, error };
     } catch (error) {
       console.error("Failed to fetch student profile:", error);
+      showToast(error?.message || "تعذر تحميل بيانات الطالب", "error");
+      return { success: false, error: error?.message || "تعذر تحميل بيانات الطالب" };
     }
-  }, []);
+  }, [showToast]);
 
   // ============================================================
   // GET STUDENT DETAILS (GET /api/v1/admin/students/{id})
@@ -424,14 +403,8 @@ export const StudentProvider = ({ children }) => {
 
         localStorage.setItem("el_eamid_auth", "true");
         localStorage.setItem("el_eamid_role", "student");
-        localStorage.setItem("el_eamid_student", JSON.stringify(loggedStudent));
 
         showToast("تم تسجيل الدخول بنجاح");
-
-        // Immediately fetch latest backend profile, active subscription & trusted device
-        setTimeout(() => {
-          fetchStudentProfile();
-        }, 100);
 
         return {
           success: true,
@@ -500,8 +473,6 @@ export const StudentProvider = ({ children }) => {
     async (credentials) => {
       try {
         const result = await api.adminLogin(credentials);
-
-        console.log("Admin login API result:", result);
 
         if (!result?.success) {
           showToast(
@@ -640,41 +611,27 @@ export const StudentProvider = ({ children }) => {
     setIsLoadingStudents(true);
     try {
       const res = await api.getAllStudents(page);
-      if (res) {
-        const payload = res.data?.data ?? res.data;
-        const list = Array.isArray(payload)
-          ? payload
-          : Array.isArray(payload?.data)
-            ? payload.data
-            : Array.isArray(res.data)
-              ? res.data
-              : Array.isArray(res)
-                ? res
-                : [];
-        const visibleList = list.filter(
-          (item) =>
-            !locallyRemovedStudentIds.includes(
-              String(item.id || item.student_id),
-            ),
-        );
-        setPaginatedStudents(visibleList);
-        setStudentsPagination({
-          current_page: res.current_page || payload?.current_page || page,
-          last_page: res.last_page || payload?.last_page || 1,
-          total: Math.max(
-            0,
-            (res.total || payload?.total || list.length) -
-              locallyRemovedStudentIds.length,
-          ),
-        });
+      if (!res?.success) {
+        if (res?.error) showToast(res.error, "error");
         return res;
       }
+
+      const list = Array.isArray(res.data) ? res.data : [];
+      setPaginatedStudents(list);
+      setStudentsPagination({
+        current_page: res.current_page ?? page,
+        last_page: res.last_page ?? 1,
+        total: res.total ?? list.length,
+      });
+      return res;
     } catch (error) {
       console.error("Failed to fetch paginated students:", error);
+      showToast(error?.message || "Failed to fetch admin students", "error");
+      return { success: false, error: error?.message || "Request failed" };
     } finally {
       setIsLoadingStudents(false);
     }
-  }, [locallyRemovedStudentIds]);
+  }, [showToast]);
 
   // ============================================================
   // DEACTIVATE STUDENT
@@ -736,6 +693,112 @@ export const StudentProvider = ({ children }) => {
       }
     },
     [approvedSubscriptions, fetchApprovedStudents, fetchAdminStudents, showToast],
+  );
+
+  const deleteDeactivatedStudentRecord = useCallback(
+    async ({ studentId, subscriptionId }) => {
+      try {
+        const result = subscriptionId
+          ? await api.deleteDeactivatedSubscription(subscriptionId)
+          : await api.deleteDeactivatedStudent(studentId);
+
+        if (!result?.success) {
+          showToast(
+            result?.message || result?.error || "Failed to permanently delete the student",
+            "error",
+          );
+          return result;
+        }
+
+        setPaginatedStudents((current) =>
+          current.filter(
+            (student) =>
+              String(student.student_id || student.id) !== String(studentId),
+          ),
+        );
+        setStudentsPagination((current) => ({
+          ...current,
+          total: Math.max(0, current.total - 1),
+        }));
+
+        showToast("تم حذف الطالب والاشتراك نهائيًا");
+        await fetchApprovedStudents();
+        await fetchAdminStudents();
+        return result;
+      } catch (error) {
+        console.error("Delete deactivated student error:", error);
+        showToast(error?.message || "Failed to permanently delete the student", "error");
+        return { success: false, message: error?.message || "Delete failed" };
+      }
+    },
+    [fetchAdminStudents, fetchApprovedStudents, showToast],
+  );
+
+  const deactivateAndDeleteStudentRecord = useCallback(
+    async ({ studentId, subscriptionId }) => {
+      if (!subscriptionId) {
+        return {
+          success: false,
+          message: "A subscription ID is required to deactivate an active student",
+        };
+      }
+
+      let deactivated = false;
+      try {
+        const deactivation = await api.deactivateStudent(subscriptionId);
+        if (!deactivation?.success) {
+          showToast(
+            deactivation?.message ||
+              deactivation?.error ||
+              "\u0641\u0634\u0644 \u062a\u0639\u0637\u064a\u0644 \u0627\u0634\u062a\u0631\u0627\u0643 \u0627\u0644\u0637\u0627\u0644\u0628",
+            "error",
+          );
+          return deactivation;
+        }
+        deactivated = true;
+
+        const deletion = await api.deleteDeactivatedSubscription(subscriptionId);
+        if (!deletion?.success) {
+          showToast(
+            deletion?.message ||
+              deletion?.error ||
+              "\u062a\u0645 \u0627\u0644\u062a\u0639\u0637\u064a\u0644\u060c \u0644\u0643\u0646 \u062a\u0639\u0630\u0631 \u0627\u0644\u062d\u0630\u0641 \u0627\u0644\u0646\u0647\u0627\u0626\u064a",
+            "error",
+          );
+          await Promise.all([fetchApprovedStudents(), fetchAdminStudents()]);
+          return { ...deletion, success: false, deactivated: true };
+        }
+
+        setPaginatedStudents((current) =>
+          current.filter(
+            (student) =>
+              String(student.student_id || student.id) !== String(studentId),
+          ),
+        );
+        setStudentsPagination((current) => ({
+          ...current,
+          total: Math.max(0, current.total - 1),
+        }));
+        showToast("\u062a\u0645 \u062a\u0639\u0637\u064a\u0644 \u0627\u0644\u0627\u0634\u062a\u0631\u0627\u0643 \u0648\u062d\u0630\u0641 \u0627\u0644\u0637\u0627\u0644\u0628 \u0646\u0647\u0627\u0626\u064a\u064b\u0627");
+        await Promise.all([fetchApprovedStudents(), fetchAdminStudents()]);
+        return deletion;
+      } catch (error) {
+        console.error("Deactivate and delete student error:", error);
+        showToast(
+          error?.message || "\u062d\u062f\u062b \u062e\u0637\u0623 \u0623\u062b\u0646\u0627\u0621 \u062a\u0646\u0641\u064a\u0630 \u0627\u0644\u0639\u0645\u0644\u064a\u0629",
+          "error",
+        );
+        if (deactivated) {
+          await Promise.all([fetchApprovedStudents(), fetchAdminStudents()]);
+        }
+        return {
+          success: false,
+          deactivated,
+          message: error?.message || "Operation failed",
+        };
+      }
+    },
+    [fetchAdminStudents, fetchApprovedStudents, showToast],
   );
 
   // ============================================================
@@ -850,6 +913,24 @@ export const StudentProvider = ({ children }) => {
     }
   }, []);
 
+  const fetchAdminExamDetails = useCallback(async (examId) => {
+    try {
+      const response = await api.getAdminExamDetails(examId);
+      const exam = response?.exam || response?.data?.exam || response?.data || response;
+      if (!exam || String(exam.id) !== String(examId)) return null;
+
+      setAdminExamsList((current) =>
+        current.map((item) =>
+          String(item.id) === String(examId) ? { ...item, ...exam } : item,
+        ),
+      );
+      return exam;
+    } catch (error) {
+      console.error("Failed to fetch admin exam details:", error);
+      return null;
+    }
+  }, []);
+
   const createAdminExam = useCallback(
     async (payload) => {
       try {
@@ -859,8 +940,17 @@ export const StudentProvider = ({ children }) => {
         return { success: true, data: res?.data || res?.exam || res };
       } catch (error) {
         console.error("Create exam error:", error);
-        showToast(error.message || "فشل إنشاء الاختبار", "error");
-        return { success: false, message: error.message };
+        const serverMessage = [
+          error?.data?.message,
+          ...Object.values(error?.data?.errors || {}).flat(),
+        ].filter(Boolean).join(" ");
+        const duplicateExam = error?.status === 409 ||
+          /already\s+exists|duplicate|unique|exam.+exists|quiz.+exists/i.test(serverMessage);
+        const message = duplicateExam
+          ? "\u062a\u0645 \u0625\u0646\u0634\u0627\u0621 \u0627\u0645\u062a\u062d\u0627\u0646 \u0644\u0647\u0630\u0627 \u0627\u0644\u062f\u0631\u0633 \u0628\u0627\u0644\u0641\u0639\u0644. \u064a\u0645\u0643\u0646\u0643 \u0625\u0636\u0627\u0641\u0629 \u0627\u0644\u0623\u0633\u0626\u0644\u0629 \u0625\u0644\u0649 \u0627\u0644\u0627\u0645\u062a\u062d\u0627\u0646 \u0627\u0644\u0645\u0648\u062c\u0648\u062f."
+          : error.message || "\u0641\u0634\u0644 \u0625\u0646\u0634\u0627\u0621 \u0627\u0644\u0627\u0645\u062a\u062d\u0627\u0646";
+        showToast(message, "error");
+        return { success: false, message };
       }
     },
     [fetchAdminExams, showToast],
@@ -906,8 +996,8 @@ export const StudentProvider = ({ children }) => {
     async (examId, payload) => {
       try {
         const res = await api.createAdminQuestion(examId, payload);
-        showToast("تمت إضافة السؤال بنجاح");
-        await fetchAdminExams();
+        // Keep the returned API resource intact so callers can reliably read
+        // the created question id before creating its answer options.
         return { success: true, data: res?.data || res };
       } catch (error) {
         console.error("Create question error:", error);
@@ -954,8 +1044,6 @@ export const StudentProvider = ({ children }) => {
     async (questionId, payload) => {
       try {
         const res = await api.createAdminOption(questionId, payload);
-        showToast("تمت إضافة خيار الإجابة");
-        await fetchAdminExams();
         return { success: true, data: res?.data || res };
       } catch (error) {
         console.error("Create option error:", error);
@@ -1008,6 +1096,10 @@ export const StudentProvider = ({ children }) => {
       try {
         if (userRole === "teacher") {
           const remoteLessons = await api.getAdminLessons(gradeId);
+          if (remoteLessons === null) {
+            showToast("تعذر الاتصال بالخادم لتحميل الدروس", "error");
+            return null;
+          }
           if (Array.isArray(remoteLessons)) {
             setLessonsList(
               remoteLessons.filter((lesson) => lesson?.id).map((l, idx) => {
@@ -1025,21 +1117,17 @@ export const StudentProvider = ({ children }) => {
                   number: idx + 1,
                   title: l.title || "درس رياضيات",
                   branch: sectionName,
-                  grade: l.grade?.name || l.grade_name || getGradeNameById(gradeId || 1),
-                  gradeId: gradeId || 1,
+                  grade: l.grade?.name || l.grade_name || (gradeId ? getGradeNameById(gradeId) : ""),
+                  gradeId: gradeId || null,
                   description: l.description || "",
                   duration: video?.duration || l.duration || "",
                   videoUrl:
                     video?.video_url || video?.url || l.video_url || l.videoUrl || "",
-                  quiz: l.quiz || {
-                    title: `اختبار: ${l.title}`,
-                    questions: [],
-                  },
+                  quiz: l.quiz || null,
                 };
               }),
             );
-          } else {
-            setLessonsList([]);
+            return remoteLessons;
           }
         } else if (userRole === "student") {
           const studentLessons = await api.getStudentLessons();
@@ -1060,34 +1148,35 @@ export const StudentProvider = ({ children }) => {
                   number: idx + 1,
                   title: l.title || "درس رياضيات",
                   branch: sectionName,
-                  grade: l.grade?.name || l.grade_name || getGradeNameById(gradeId || 1),
-                  gradeId: gradeId || 1,
+                  grade: l.grade?.name || l.grade_name || (gradeId ? getGradeNameById(gradeId) : ""),
+                  gradeId: gradeId || null,
                   description: l.description || "",
                   duration: video?.duration || l.duration || "",
                   videoUrl:
                     video?.video_url || video?.url || l.video_url || l.videoUrl || "",
                   isCompleted: Boolean(l.is_completed),
                   progress: l.progress || 0,
-                  accessStatus: l.access_status || "accessible",
-                  quiz: l.quiz || {
-                    title: `اختبار: ${l.title}`,
-                    questions: [],
-                  },
+                  accessStatus: l.access_status || "",
+                  quiz: l.quiz || null,
                 };
               }),
             );
-          } else {
-            setLessonsList([]);
+            return studentLessons;
           }
         }
+        return null;
       } catch (err) {
         console.warn("Fetch lessons notice:", err);
-        setLessonsList([]);
+        showToast(
+          err?.message || "تعذر تحميل الدروس من الخادم",
+          "error",
+        );
+        return null;
       } finally {
         setIsLoadingLessons(false);
       }
     },
-    [userRole],
+    [userRole, showToast],
   );
 
   // ============================================================
@@ -1098,9 +1187,33 @@ export const StudentProvider = ({ children }) => {
     return await api.getStudentExam(examId);
   }, []);
 
+  const getStudentLessonDetails = useCallback(async (lessonId) => {
+    return await api.getStudentLesson(lessonId);
+  }, []);
+
+  const getStudentExamAttempts = useCallback(async (examId) => {
+    return await api.getStudentExamAttempts(examId);
+  }, []);
+
+  const getStudentLessonQuizAnswers = useCallback(
+    async (lessonId, attemptId) =>
+      api.getStudentLessonQuizAnswers(lessonId, attemptId),
+    [],
+  );
+
   const getStudentVideo = useCallback(async (videoId) => {
     return await api.getStudentVideo(videoId);
   }, []);
+
+  const downloadStudentMemo = useCallback(
+    async (memoId) => api.downloadStudentMemo(memoId),
+    [],
+  );
+
+  const downloadStudentMaterial = useCallback(
+    async (materialId) => api.downloadStudentMaterial(materialId),
+    [],
+  );
 
   // ============================================================
   // BACKWARD COMPATIBLE LOGIN
@@ -1164,6 +1277,9 @@ export const StudentProvider = ({ children }) => {
 
     setUserRole("student");
     setStudent(null);
+    setLessonsList([]);
+    setStudentExamsList([]);
+    setMemosList([]);
 
     showToast("تم تسجيل الخروج");
   }, [userRole, showToast]);
@@ -1174,8 +1290,6 @@ export const StudentProvider = ({ children }) => {
 
   const selectActiveStudent = useCallback((selectedStudent) => {
     setStudent(selectedStudent);
-
-    localStorage.setItem("el_eamid_student", JSON.stringify(selectedStudent));
   }, []);
 
   // ============================================================
@@ -1204,43 +1318,32 @@ export const StudentProvider = ({ children }) => {
           result?.data ||
           result ||
           {};
-        const localLesson = {
-          ...lessonData,
-          ...savedLesson,
-          id: savedLesson.id || Date.now(),
-          grade_id: gradeId,
-          gradeId,
-          videoUrl:
-            savedLesson.video_url ||
-            savedLesson.videoUrl ||
-            lessonData.videoUrl,
-        };
-
-        setLessonsList((prev) => {
-          const updated = [...prev, localLesson];
-          localStorage.setItem(
-            "el_eamid_lessons_list",
-            JSON.stringify(updated),
-          );
-          return updated;
-        });
-
+        const createdLesson = savedLesson?.lesson || savedLesson;
         await fetchLessons();
-        showToast(
-          result?.isOfflineMode
-            ? "تعذر الاتصال بالخادم؛ تم حفظ الدرس محليًا فقط"
-            : "تم إضافة الدرس بنجاح",
-          result?.isOfflineMode ? "error" : "success",
-        );
+        showToast("تمت إضافة الدرس بنجاح", "success");
 
         return {
           success: true,
-          data: localLesson,
-          isOfflineMode: result?.isOfflineMode,
+          data: createdLesson,
         };
       } catch (error) {
         console.error("Create lesson API error:", error);
         showToast(error.message || "فشل إضافة الدرس إلى الخادم", "error");
+        return { success: false, message: error.message };
+      }
+    },
+    [fetchLessons, showToast],
+  );
+
+  const saveAdminLessonQuiz = useCallback(
+    async (lessonId, payload) => {
+      try {
+        const data = await api.saveAdminLessonQuiz(lessonId, payload);
+        await fetchLessons();
+        showToast("تم حفظ اختبار الدرس بنجاح", "success");
+        return { success: true, data };
+      } catch (error) {
+        showToast(error.message || "تعذّر حفظ اختبار الدرس", "error");
         return { success: false, message: error.message };
       }
     },
@@ -1260,12 +1363,7 @@ export const StudentProvider = ({ children }) => {
         }
 
         setLessonsList((prev) => {
-          const updated = prev.filter((lesson) => lesson.id !== lessonId);
-          localStorage.setItem(
-            "el_eamid_lessons_list",
-            JSON.stringify(updated),
-          );
-          return updated;
+          return prev.filter((lesson) => String(lesson.id) !== String(lessonId));
         });
 
         await fetchLessons();
@@ -1290,36 +1388,81 @@ export const StudentProvider = ({ children }) => {
   // ============================================================
 
   const addQuestionToLessonQuiz = useCallback(
-    (lessonId, question) => {
-      setLessonsList((prev) => {
-        const updated = prev.map((lesson) => {
-          if (lesson.id !== lessonId) {
-            return lesson;
-          }
+    async (lessonId, question) => {
+      try {
+        const lesson = lessonsList.find(
+          (item) => String(item.id) === String(lessonId),
+        );
+        if (!lesson) throw new Error("الدرس المطلوب غير موجود في بيانات الخادم");
 
-          return {
-            ...lesson,
-            quiz: {
-              ...(lesson.quiz || {}),
-              questions: [
-                ...(lesson.quiz?.questions || []),
-                {
-                  id: Date.now(),
-                  ...question,
-                },
-              ],
+        const existingQuestions = (lesson.quiz?.questions || []).map(
+          (existing, questionIndex) => {
+            const options = existing.options || existing.choices || [];
+            const correctIndex = Number.isInteger(existing.correctIndex)
+              ? existing.correctIndex
+              : options.findIndex(
+                  (option) =>
+                    option?.is_correct ||
+                    option?.isCorrect ||
+                    option?.id === existing.correct_option_id,
+                );
+            return {
+              question_text:
+                existing.question_text || existing.question || existing.text || "",
+              points: Number(existing.points) || 1,
+              sort_order: existing.sort_order || questionIndex + 1,
+              options: options.map((option, optionIndex) => ({
+                option_text:
+                  typeof option === "string"
+                    ? option
+                    : option.option_text || option.text || "",
+                is_correct:
+                  typeof option === "object"
+                    ? Boolean(
+                        option.is_correct ||
+                          option.isCorrect ||
+                          option.id === existing.correct_option_id,
+                      )
+                    : optionIndex === correctIndex,
+                sort_order: option.sort_order || optionIndex + 1,
+              })),
+            };
+          },
+        );
+        const newOptions = (question.options || []).map((option, index) => ({
+          option_text:
+            typeof option === "string"
+              ? option
+              : option.option_text || option.text || "",
+          is_correct: index === question.correctIndex,
+          sort_order: index + 1,
+        }));
+
+        const result = await api.saveAdminLessonQuiz(lessonId, {
+          title: lesson.quiz?.title || `اختبار: ${lesson.title || ""}`,
+          description: lesson.quiz?.description || "",
+          duration_minutes:
+            lesson.quiz?.duration_minutes || lesson.quiz?.durationMinutes || 10,
+          passing_percentage: lesson.quiz?.passing_percentage || 60,
+          questions: [
+            ...existingQuestions,
+            {
+              question_text: String(question.question || "").trim(),
+              points: 1,
+              sort_order: existingQuestions.length + 1,
+              options: newOptions,
             },
-          };
+          ],
         });
-
-        localStorage.setItem("el_eamid_lessons_list", JSON.stringify(updated));
-
-        return updated;
-      });
-
-      showToast("تم إضافة السؤال");
+        await fetchLessons();
+        showToast("تم حفظ السؤال في الخادم");
+        return { success: true, data: result };
+      } catch (error) {
+        showToast(error?.message || "تعذر حفظ السؤال في الخادم", "error");
+        return { success: false, message: error?.message || "تعذر حفظ السؤال" };
+      }
     },
-    [showToast],
+    [fetchLessons, lessonsList, showToast],
   );
 
   // ============================================================
@@ -1327,32 +1470,18 @@ export const StudentProvider = ({ children }) => {
   // ============================================================
 
   const deleteQuestionFromQuiz = useCallback(
-    (lessonId, questionId) => {
-      setLessonsList((prev) => {
-        const updated = prev.map((lesson) => {
-          if (lesson.id !== lessonId) {
-            return lesson;
-          }
-
-          return {
-            ...lesson,
-            quiz: {
-              ...(lesson.quiz || {}),
-              questions: (lesson.quiz?.questions || []).filter(
-                (question) => question.id !== questionId,
-              ),
-            },
-          };
-        });
-
-        localStorage.setItem("el_eamid_lessons_list", JSON.stringify(updated));
-
-        return updated;
-      });
-
-      showToast("تم حذف السؤال");
+    async (lessonId, questionId) => {
+      try {
+        await api.deleteAdminQuestion(questionId);
+        await fetchLessons();
+        showToast("تم حذف السؤال من الخادم");
+        return { success: true };
+      } catch (error) {
+        showToast(error?.message || "تعذر حذف السؤال من الخادم", "error");
+        return { success: false, message: error?.message || "تعذر حذف السؤال" };
+      }
     },
-    [showToast],
+    [fetchLessons, showToast],
   );
 
   // ============================================================
@@ -1363,7 +1492,14 @@ export const StudentProvider = ({ children }) => {
     try {
       const res = await api.updateVideoProgress(lessonId, progressData);
 
-      if (progressData?.completion_percentage >= 90) {
+      if (!res?.success) return res;
+
+      const completionPercentage = Number(
+        res.data?.completion_percentage ??
+          res.data?.progress?.completion_percentage ??
+          progressData?.completion_percentage,
+      );
+      if (Number.isFinite(completionPercentage)) {
         setLessonsList((prev) => {
           const updated = prev.map((l) =>
             l.id === Number(lessonId) ||
@@ -1371,12 +1507,13 @@ export const StudentProvider = ({ children }) => {
             l.videoId === Number(lessonId) ||
             l.video?.id === Number(lessonId) ||
             l.videos?.some((video) => video.id === Number(lessonId))
-              ? { ...l, isCompleted: true, progress: 100 }
+              ? {
+                  ...l,
+                  isCompleted:
+                    completionPercentage >= 90 || Boolean(l.isCompleted),
+                  progress: completionPercentage,
+                }
               : l,
-          );
-          localStorage.setItem(
-            "el_eamid_lessons_list",
-            JSON.stringify(updated),
           );
           return updated;
         });
@@ -1392,6 +1529,21 @@ export const StudentProvider = ({ children }) => {
       };
     }
   }, []);
+
+  const fetchStudentExams = useCallback(async () => {
+    setIsLoadingStudentExams(true);
+    try {
+      const exams = await api.getStudentExams();
+      setStudentExamsList(exams);
+      return { success: true, data: exams };
+    } catch (error) {
+      setStudentExamsList([]);
+      showToast(error?.message || "تعذر تحميل اختبارات الطالب", "error");
+      return { success: false, error: error?.message || "تعذر تحميل الاختبارات" };
+    } finally {
+      setIsLoadingStudentExams(false);
+    }
+  }, [showToast]);
 
   // ============================================================
   // START EXAM
@@ -1427,73 +1579,123 @@ export const StudentProvider = ({ children }) => {
     }
   }, []);
 
+  const updateStudentProfile = useCallback(
+    async (payload) => {
+      try {
+        const result = await api.updateStudentProfile(payload);
+        const updatedProfile = result?.data?.student || result?.data?.user || result?.data;
+        if (updatedProfile && typeof updatedProfile === "object") {
+          setStudent((current) => ({ ...current, ...updatedProfile }));
+        }
+        await fetchStudentProfile();
+        showToast("تم تحديث بيانات الحساب");
+        return { success: true, data: updatedProfile || result?.data };
+      } catch (error) {
+        showToast(error?.message || "تعذر تحديث بيانات الحساب", "error");
+        return { success: false, error: error?.message || "تعذر تحديث البيانات" };
+      }
+    },
+    [fetchStudentProfile, showToast],
+  );
+
   // ============================================================
-  // MEMOS - ADD
+  // MEMOS - ADMIN API
   // ============================================================
+
+  const fetchStudentMemos = useCallback(async () => {
+    setIsLoadingMemos(true);
+    try {
+      const memos = await api.getStudentMemos();
+      setMemosList(memos);
+      return { success: true, data: memos };
+    } catch (error) {
+      setMemosList([]);
+      showToast(error?.message || "تعذر تحميل مذكرات الطالب", "error");
+      return { success: false, error: error?.message || "تعذر تحميل المذكرات" };
+    } finally {
+      setIsLoadingMemos(false);
+    }
+  }, [showToast]);
+
+  const fetchAdminMemos = useCallback(
+    async (gradeId = null) => {
+      setIsLoadingMemos(true);
+      try {
+        const response = await api.getAdminMemos(gradeId);
+        setMemosList(response);
+        return { success: true, data: response };
+      } catch (error) {
+        console.error("Fetch admin memos error:", error);
+        setMemosList([]);
+        showToast(error?.message || "تعذر تحميل المذكرات", "error");
+        return { success: false, message: error?.message || "فشل تحميل المذكرات" };
+      } finally {
+        setIsLoadingMemos(false);
+      }
+    },
+    [showToast],
+  );
+
+  const fetchAdminMemoDetails = useCallback(
+    async (memoId) => {
+      try {
+        return await api.getAdminMemoDetails(memoId);
+      } catch (error) {
+        console.error("Fetch admin memo details error:", error);
+        showToast(error?.message || "تعذر تحميل تفاصيل المذكرة", "error");
+        return null;
+      }
+    },
+    [showToast],
+  );
 
   const addMemo = useCallback(
-    (memoData) => {
-      const newMemo = {
-        id: Date.now(),
-        ...memoData,
-      };
-
-      setMemosList((prev) => {
-        const updated = [...prev, newMemo];
-
-        localStorage.setItem("el_eamid_memos_list", JSON.stringify(updated));
-
-        return updated;
-      });
-
-      showToast("تم إضافة المذكرة");
+    async (memoData) => {
+      try {
+        const createdMemo = await api.createAdminMemo(memoData);
+        await fetchAdminMemos();
+        showToast("تم إضافة المذكرة");
+        return { success: true, data: createdMemo };
+      } catch (error) {
+        console.error("Create admin memo error:", error);
+        showToast(error?.message || "فشل إضافة المذكرة", "error");
+        return { success: false, message: error?.message || "فشل إضافة المذكرة" };
+      }
     },
-    [showToast],
+    [fetchAdminMemos, showToast],
   );
-
-  // ============================================================
-  // MEMOS - UPDATE
-  // ============================================================
 
   const updateMemo = useCallback(
-    (memoId, updatedData) => {
-      setMemosList((prev) => {
-        const updated = prev.map((memo) =>
-          memo.id === memoId
-            ? {
-                ...memo,
-                ...updatedData,
-              }
-            : memo,
-        );
-
-        localStorage.setItem("el_eamid_memos_list", JSON.stringify(updated));
-
-        return updated;
-      });
-
-      showToast("تم تعديل المذكرة");
+    async (memoId, updatedData) => {
+      try {
+        const response = await api.updateAdminMemo(memoId, updatedData);
+        const updatedMemo = response?.memo || response;
+        await fetchAdminMemos();
+        showToast("تم تعديل المذكرة");
+        return { success: true, data: updatedMemo };
+      } catch (error) {
+        console.error("Update admin memo error:", error);
+        showToast(error?.message || "فشل تعديل المذكرة", "error");
+        return { success: false, message: error?.message || "فشل تعديل المذكرة" };
+      }
     },
-    [showToast],
+    [fetchAdminMemos, showToast],
   );
 
-  // ============================================================
-  // MEMOS - DELETE
-  // ============================================================
-
   const deleteMemo = useCallback(
-    (memoId) => {
-      setMemosList((prev) => {
-        const updated = prev.filter((memo) => memo.id !== memoId);
-
-        localStorage.setItem("el_eamid_memos_list", JSON.stringify(updated));
-
-        return updated;
-      });
-
-      showToast("تم حذف المذكرة");
+    async (memoId) => {
+      try {
+        await api.deleteAdminMemo(memoId);
+        await fetchAdminMemos();
+        showToast("تم حذف المذكرة");
+        return { success: true };
+      } catch (error) {
+        console.error("Delete admin memo error:", error);
+        showToast(error?.message || "فشل حذف المذكرة", "error");
+        return { success: false, message: error?.message || "فشل حذف المذكرة" };
+      }
     },
-    [showToast],
+    [fetchAdminMemos, showToast],
   );
 
   // ============================================================
@@ -1543,37 +1745,28 @@ export const StudentProvider = ({ children }) => {
   );
 
   const deleteStudent = useCallback(
-    (studentId) => {
-      setStudentsList((prev) => {
-        const updated = prev.filter((item) => item.id !== studentId);
+    async (studentId) => {
+      const result = await api.deleteDeactivatedStudent(studentId);
+      if (!result?.success) {
+        showToast(
+          result?.message || result?.error || "Failed to delete deactivated student",
+          "error",
+        );
+        return result;
+      }
 
+      setStudentsList((current) => {
+        const updated = current.filter(
+          (item) => String(item.id) !== String(studentId),
+        );
         localStorage.setItem("el_eamid_students_list", JSON.stringify(updated));
-
         return updated;
       });
-
-      setPaginatedStudents((prev) =>
-        prev.filter(
-          (item) => String(item.id || item.student_id) !== String(studentId),
-        ),
-      );
-      setLocallyRemovedStudentIds((prev) => {
-        const next = prev.includes(String(studentId))
-          ? prev
-          : [...prev, String(studentId)];
-        localStorage.setItem(
-          "el_eamid_locally_removed_students",
-          JSON.stringify(next),
-        );
-        return next;
-      });
-      setStudentsPagination((prev) => ({
-        ...prev,
-        total: Math.max(0, (prev.total || 0) - 1),
-      }));
-      showToast("\u062a\u0645\u062a \u0625\u0632\u0627\u0644\u0629 \u0627\u0644\u0637\u0627\u0644\u0628 \u0645\u0646 \u0627\u0644\u0633\u062c\u0644 \u0627\u0644\u0645\u062d\u0644\u064a. \u0627\u0644\u062d\u0630\u0641 \u0645\u0646 \u0642\u0627\u0639\u062f\u0629 \u0627\u0644\u0628\u064a\u0627\u0646\u0627\u062a \u063a\u064a\u0631 \u0645\u062a\u0627\u062d \u062d\u0627\u0644\u064a\u064b\u0627.");
+      await Promise.all([fetchApprovedStudents(), fetchAdminStudents()]);
+      showToast("\u062a\u0645 \u062d\u0630\u0641 \u0627\u0644\u0637\u0627\u0644\u0628 \u0645\u0646 \u0627\u0644\u062e\u0627\u062f\u0645 \u0628\u0646\u062c\u0627\u062d");
+      return result;
     },
-    [showToast],
+    [fetchAdminStudents, fetchApprovedStudents, showToast],
   );
 
   // ============================================================
@@ -1673,6 +1866,7 @@ export const StudentProvider = ({ children }) => {
       if (userRole === "student") {
         fetchStudentProfile();
         fetchLessons();
+        fetchStudentExams();
       }
     }, 0);
 
@@ -1686,10 +1880,12 @@ export const StudentProvider = ({ children }) => {
     fetchPendingRequests,
     fetchApprovedStudents,
     fetchAdminExams,
+    fetchAdminExamDetails,
     fetchSubscriptionCodes,
     fetchAdminStudents,
     fetchLessons,
     fetchStudentProfile,
+    fetchStudentExams,
   ]);
 
   // ============================================================
@@ -1725,6 +1921,7 @@ export const StudentProvider = ({ children }) => {
     adminExamsList,
     isLoadingExams,
     fetchAdminExams,
+    fetchAdminExamDetails,
     createAdminExam,
     updateAdminExam,
     deleteAdminExam,
@@ -1743,6 +1940,7 @@ export const StudentProvider = ({ children }) => {
 
     // Profile
     fetchStudentProfile,
+    updateStudentProfile,
 
     // UI
     toast,
@@ -1766,6 +1964,8 @@ export const StudentProvider = ({ children }) => {
     approveRequest,
     cancelRequest,
     deactivateStudent,
+    deleteDeactivatedStudentRecord,
+    deactivateAndDeleteStudentRecord,
     resetStudentDevice,
     approveActivationRequest: approveRequest,
     cancelActivationRequest: cancelRequest,
@@ -1777,8 +1977,17 @@ export const StudentProvider = ({ children }) => {
     setLessonsList,
     isLoadingLessons,
     fetchLessons,
+    studentExamsList,
+    isLoadingStudentExams,
+    fetchStudentExams,
+    getStudentExamAttempts,
+    getStudentLessonQuizAnswers,
+    getStudentLessonDetails,
+    downloadStudentMemo,
+    downloadStudentMaterial,
     addLesson,
     deleteLesson,
+    saveAdminLessonQuiz,
 
     // Quiz
     addQuestionToLessonQuiz,
@@ -1794,6 +2003,10 @@ export const StudentProvider = ({ children }) => {
     // Memos
     memosList,
     setMemosList,
+    isLoadingMemos,
+    fetchStudentMemos,
+    fetchAdminMemos,
+    fetchAdminMemoDetails,
     addMemo,
     updateMemo,
     deleteMemo,

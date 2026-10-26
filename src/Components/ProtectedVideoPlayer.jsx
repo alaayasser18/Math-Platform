@@ -903,6 +903,7 @@ export default function ProtectedVideoPlayer({
                     max={100}
                     value={isMuted ? 0 : volume}
                     onChange={handleVolumeChange}
+                    className="protected-player-volume-slider"
                     style={{
                       width: "65px",
                       height: "4px",

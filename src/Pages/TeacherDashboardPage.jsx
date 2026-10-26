@@ -1,5 +1,8 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { useStudent } from "../context/useStudent";
+import GradeFilter from "../Components/GradeFilter";
+import useUrlState from "../hooks/useUrlState";
 import { GRADES, BRANCHES } from "../data/platformData";
 import {
   UserPlus,
@@ -30,8 +33,42 @@ import {
   Smartphone,
   UploadCloud,
   FileText,
+  ChevronLeft,
+  UserX,
+  UserCheck,
+  ShieldAlert,
+  Filter,
+  SlidersHorizontal,
 } from "lucide-react";
+import StudentExamHistoryModal from "../Components/StudentExamHistoryModal";
 import { GRADE_ID_MAP, getGradeNameById } from "../services/api";
+import { getYouTubeVideoId } from "../utils/youtube";
+
+let youtubeApiPromise;
+
+function loadYouTubeIframeApi() {
+  if (window.YT?.Player) return Promise.resolve(window.YT);
+  if (!youtubeApiPromise) {
+    youtubeApiPromise = new Promise((resolve, reject) => {
+      const previousReady = window.onYouTubeIframeAPIReady;
+      window.onYouTubeIframeAPIReady = () => {
+        previousReady?.();
+        resolve(window.YT);
+      };
+      let script = document.querySelector('script[src="https://www.youtube.com/iframe_api"]');
+      if (!script) {
+        script = document.createElement("script");
+        script.src = "https://www.youtube.com/iframe_api";
+        script.onerror = reject;
+        document.head.appendChild(script);
+      }
+    }).catch((error) => {
+      youtubeApiPromise = null;
+      throw error;
+    });
+  }
+  return youtubeApiPromise;
+}
 
 function getSubscriptionCode(...values) {
   for (const value of values) {
@@ -160,9 +197,136 @@ function isDeactivatedStatus(status) {
   );
 }
 
+function findApprovedSubscriptionForStudent(student, approvedSubscriptions) {
+  const studentId = student?.student_id || student?.student?.id || student?.user?.id || student?.id;
+  const subscriptionId =
+    student?.subscription_id ||
+    student?.subscription?.id ||
+    student?.active_subscription?.id ||
+    student?.subscriptions?.[0]?.id;
+
+  return approvedSubscriptions.find((item) => {
+    const itemStudentId =
+      item.student?.id || item.user?.id || item.student_id || item.user_id;
+    const itemSubscriptionId =
+      item.subscription_id ||
+      item.subscription?.id ||
+      item.active_subscription?.id ||
+      item.subscriptions?.[0]?.id ||
+      item.id;
+
+    return (
+      (studentId != null && itemStudentId != null && String(itemStudentId) === String(studentId)) ||
+      (subscriptionId != null && itemSubscriptionId != null && String(itemSubscriptionId) === String(subscriptionId)) ||
+      (item.phone && student?.phone &&
+        String(item.phone).replace(/\D/g, "") === String(student.phone).replace(/\D/g, ""))
+    );
+  });
+}
+
+function getStudentSubscriptionId(student, approvedRecord) {
+  return (
+    student?.subscription_id ||
+    student?.subscription?.id ||
+    student?.active_subscription?.id ||
+    student?.subscriptions?.[0]?.id ||
+    approvedRecord?.subscription_id ||
+    approvedRecord?.subscription?.id ||
+    approvedRecord?.active_subscription?.id ||
+    approvedRecord?.subscriptions?.[0]?.id ||
+    approvedRecord?.id ||
+    null
+  );
+}
+
+function isStudentRecordActive(student, approvedRecord) {
+  const studentProfile = student?.student || student?.user || student;
+  const subscription = getSubscriptionRecord(approvedRecord || student);
+  const status = getSubscriptionStatus(approvedRecord, student);
+
+  return (
+    student?.is_active !== false &&
+    student?.isActive !== false &&
+    studentProfile?.is_active !== false &&
+    studentProfile?.isActive !== false &&
+    subscription?.is_active !== false &&
+    (!status || !isDeactivatedStatus(status))
+  );
+}
+
+function formatSubscriptionExpiry(value) {
+  if (!value) return "—";
+  const rawValue = String(value).trim();
+  const dateMatch = rawValue.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (dateMatch) return `${dateMatch[3]}/${dateMatch[2]}/${dateMatch[1]}`;
+
+  const parsedDate = new Date(rawValue);
+  if (Number.isNaN(parsedDate.getTime())) return rawValue;
+  return new Intl.DateTimeFormat("ar-EG", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(parsedDate);
+}
+
+const dashboardTabs = new Set([
+  "requests",
+  "approved",
+  "students",
+  "codes",
+  "lessons",
+  "quizzes",
+  "memos",
+]);
+const gradeNames = new Set([BRANCHES[0], ...GRADES.map((grade) => grade.name)]);
+const codeGradeIds = new Set(
+  GRADES.map((grade) => String(grade.numericId || GRADE_ID_MAP[grade.id] || 1)),
+);
+const DASHBOARD_URL_SCHEMA = {
+  tab: {
+    defaultValue: "requests",
+    normalize: (value) => dashboardTabs.has(value) ? value : null,
+  },
+  search: { defaultValue: "", normalize: (value) => value.slice(0, 120) },
+  grade: {
+    defaultValue: BRANCHES[0],
+    normalize: (value) => gradeNames.has(value) ? value : null,
+  },
+  approvedGrade: {
+    defaultValue: BRANCHES[0],
+    normalize: (value) => gradeNames.has(value) ? value : null,
+  },
+  approvedStatus: {
+    defaultValue: "all",
+    normalize: (value) => ["all", "active", "deactivated"].includes(value) ? value : null,
+  },
+  studentsStatus: {
+    defaultValue: "all",
+    normalize: (value) => ["all", "active", "deactivated"].includes(value) ? value : null,
+  },
+  codesStatus: {
+    defaultValue: "all",
+    normalize: (value) => ["all", "active", "deactivated"].includes(value) ? value : null,
+  },
+  requestsSearch: { defaultValue: "", normalize: (value) => value.slice(0, 120) },
+  requestsGrade: {
+    defaultValue: BRANCHES[0],
+    normalize: (value) => gradeNames.has(value) ? value : null,
+  },
+  codesGrade: {
+    defaultValue: "1",
+    normalize: (value) => codeGradeIds.has(value) ? value : null,
+  },
+  codesSearch: { defaultValue: "", normalize: (value) => value.slice(0, 120) },
+  page: {
+    defaultValue: "1",
+    normalize: (value) => /^\d+$/.test(value) && Number(value) > 0 && Number(value) <= 500 ? String(Number(value)) : null,
+  },
+};
+
 export default function TeacherDashboardPage() {
+  const [urlState, setUrlState] = useUrlState(DASHBOARD_URL_SCHEMA);
   const {
-    studentsList,
     lessonsList,
     memosList,
     pendingRequests,
@@ -174,17 +338,17 @@ export default function TeacherDashboardPage() {
     approveActivationRequest,
     cancelActivationRequest,
     deactivateStudentSubscription,
+    deactivateAndDeleteStudentRecord,
+    deleteDeactivatedStudentRecord,
     resetTrustedDevice,
     createStudentByAdmin,
     updateStudentByAdmin,
     addLesson,
     deleteLesson,
     isLoadingLessons,
-    fetchLessons,
     addQuestionToLessonQuiz,
     addMemo,
     deleteMemo,
-    deleteStudentByTeacher,
     showToast,
     // OpenAPI 3.0.0 Connected Endpoints
     adminExamsList,
@@ -209,20 +373,79 @@ export default function TeacherDashboardPage() {
     getStudentDetails,
   } = useStudent();
 
-  // Active Main Tab: 'requests' | 'approved' | 'students' | 'lessons' | 'quizzes' | 'codes' | 'memos'
-  const [activeTab, setActiveTab] = useState("requests");
-  const [searchQuery, setSearchQuery] = useState("");
-  const [gradeFilter, setGradeFilter] = useState("الكل");
+  const navigate = useNavigate();
+  // Active Main Tab: 'requests' | 'approved' | 'students' | 'codes'
+  const requestedTab = urlState.tab;
+
+  useEffect(() => {
+    if (requestedTab === "lessons") {
+      navigate("/lessons", { replace: true });
+    } else if (requestedTab === "quizzes") {
+      navigate("/exams", { replace: true });
+    } else if (requestedTab === "memos") {
+      navigate("/memos", { replace: true });
+    }
+  }, [requestedTab, navigate]);
+
+  const activeTab = ["approved", "students", "codes"].includes(requestedTab)
+    ? requestedTab
+    : "requests";
+  const setActiveTab = (tab) => setUrlState({ tab });
+  const searchQuery = urlState.search;
+  const gradeFilter = urlState.grade;
+  const approvedGradeFilter = urlState.approvedGrade;
+  const approvedStatus = urlState.approvedStatus;
+  const studentsStatus = urlState.studentsStatus;
+  const codesStatus = urlState.codesStatus;
+  const requestsSearch = urlState.requestsSearch;
+  const requestsGrade = urlState.requestsGrade;
+  const selectedCodesGrade = Number(urlState.codesGrade);
+  const codesSearchQuery = urlState.codesSearch;
+  const currentStudentsPage = Number(urlState.page);
+
+  const setSearchQuery = (value, options = {}) =>
+    setUrlState({ search: value, page: "1" }, options);
+  const setGradeFilter = (value) =>
+    setUrlState({ grade: value, page: "1" });
+  const setApprovedGradeFilter = (value) =>
+    setUrlState({ approvedGrade: value });
+  const setApprovedStatus = (value) =>
+    setUrlState({ approvedStatus: value });
+  const setStudentsStatus = (value) =>
+    setUrlState({ studentsStatus: value, page: "1" });
+  const setCodesStatus = (value) =>
+    setUrlState({ codesStatus: value });
+  const setRequestsSearch = (value, options = {}) =>
+    setUrlState({ requestsSearch: value }, options);
+  const setRequestsGrade = (value) =>
+    setUrlState({ requestsGrade: value });
+  const setSelectedCodesGrade = (value) =>
+    setUrlState({ codesGrade: String(value) });
+  const setCodesSearchQuery = (value, options = {}) =>
+    setUrlState({ codesSearch: value }, options);
+
+  useEffect(() => {
+    if (activeTab === "codes") fetchSubscriptionCodes(selectedCodesGrade);
+  }, [activeTab, fetchSubscriptionCodes, selectedCodesGrade]);
+
+  useEffect(() => {
+    if (
+      activeTab === "students" &&
+      currentStudentsPage !== studentsPagination.current_page
+    ) {
+      fetchAdminStudents(currentStudentsPage);
+    }
+  }, [
+    activeTab,
+    currentStudentsPage,
+    fetchAdminStudents,
+    studentsPagination.current_page,
+  ]);
   const [copiedCode, setCopiedCode] = useState(null);
   const [isProcessingAction, setIsProcessingAction] = useState(false);
   const [deactivationTarget, setDeactivationTarget] = useState(null);
-  const [deleteConfirmationStudent, setDeleteConfirmationStudent] =
-    useState(null);
 
   // --- Subscription Codes State (GET /api/v1/admin/subscription-codes) ---
-  const [selectedCodesGrade, setSelectedCodesGrade] = useState(1);
-  const [codesSearchQuery, setCodesSearchQuery] = useState("");
-
   // --- Admin Exams State (OpenAPI 3.0.0 Admin Exams) ---
   const [isAddExamOpen, setIsAddExamOpen] = useState(false);
   const [newExamData, setNewExamData] = useState({
@@ -267,11 +490,83 @@ export default function TeacherDashboardPage() {
     branch: BRANCHES[1] || "التفاضل والتكامل",
     grade: GRADES[0].name,
     gradeId: GRADES[0].id,
-    duration: "45 دقيقة",
+    duration: "",
     videoUrl: "",
     pdfFile: "مذكرة_الشرح.pdf",
     description: "",
+    quizQuestion: "",
+    quizOption1: "",
+    quizOption2: "",
+    quizOption3: "",
+    quizOption4: "",
+    quizCorrectOption: 1,
   });
+  const [lessonDurationStatus, setLessonDurationStatus] = useState("");
+
+  useEffect(() => {
+    if (!isAddLessonOpen || !newLessonData.videoUrl.trim()) return undefined;
+
+    const videoUrl = newLessonData.videoUrl.trim();
+    const youtubeId = getYouTubeVideoId(videoUrl);
+    let cancelled = false;
+    let player;
+    let metadataVideo;
+    let durationTimer;
+
+    const saveDuration = (seconds) => {
+      if (cancelled || !Number.isFinite(seconds) || seconds <= 0) return;
+      const minutes = Math.ceil(seconds / 60);
+      setNewLessonData((current) => ({ ...current, duration: `${minutes} دقيقة` }));
+      setLessonDurationStatus("تم تحديد مدة الفيديو تلقائيًا");
+    };
+
+    if (youtubeId) {
+      loadYouTubeIframeApi()
+        .then((YT) => {
+          if (cancelled) return;
+          setLessonDurationStatus("جارٍ قراءة مدة الفيديو من YouTube...");
+          const container = document.createElement("div");
+          container.style.cssText = "position:fixed;left:-10000px;top:0;width:320px;height:180px";
+          document.body.appendChild(container);
+          player = new YT.Player(container, {
+            videoId: youtubeId,
+            events: {
+              onReady: (event) => {
+                const readDuration = () => saveDuration(event.target.getDuration());
+                readDuration();
+                durationTimer = window.setInterval(readDuration, 500);
+                window.setTimeout(() => {
+                  window.clearInterval(durationTimer);
+                  if (!cancelled) setLessonDurationStatus((status) =>
+                    status === "تم تحديد مدة الفيديو تلقائيًا" ? status : "تعذر قراءة المدة؛ تأكدي أن الفيديو متاح",
+                  );
+                }, 8000);
+              },
+              onError: () => {
+                if (!cancelled) setLessonDurationStatus("تعذر قراءة مدة هذا الفيديو");
+              },
+            },
+          });
+        })
+        .catch(() => {
+          if (!cancelled) setLessonDurationStatus("تعذر الاتصال بـ YouTube لقراءة المدة");
+        });
+    } else if (/\.mp4(?:$|[?#])/i.test(videoUrl)) {
+      metadataVideo = document.createElement("video");
+      metadataVideo.preload = "metadata";
+      metadataVideo.onloadedmetadata = () => saveDuration(metadataVideo.duration);
+      metadataVideo.onerror = () => setLessonDurationStatus("تعذر قراءة مدة ملف الفيديو");
+      metadataVideo.src = videoUrl;
+    }
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(durationTimer);
+      metadataVideo?.removeAttribute("src");
+      metadataVideo?.load();
+      player?.destroy();
+    };
+  }, [isAddLessonOpen, newLessonData.videoUrl]);
 
   // 2. Add Quiz Question Modal
   const [isAddQuestionOpen, setIsAddQuestionOpen] = useState(false);
@@ -303,6 +598,7 @@ export default function TeacherDashboardPage() {
   const [viewingStudent, setViewingStudent] = useState(null);
   const [editingStudent, setEditingStudent] = useState(null);
   const [isAddStudentOpen, setIsAddStudentOpen] = useState(false);
+  const [examHistoryStudent, setExamHistoryStudent] = useState(null);
   const getStudentDates = () => {
     const startDate = new Date();
     const endDate = new Date(startDate);
@@ -333,6 +629,9 @@ export default function TeacherDashboardPage() {
           setViewingStudent((prev) => ({
             ...prev,
             ...detail,
+            code: detail.code || detail.subscription_code || prev?.code,
+            subscription_code: detail.subscription_code || detail.code || prev?.subscription_code,
+            grade: getArabicGradeName(detail.grade || prev?.grade, detail.grade_id || prev?.grade_id),
             subscription:
               res.data?.subscription ||
               detail.subscription ||
@@ -351,6 +650,23 @@ export default function TeacherDashboardPage() {
       }
     } catch {
       setViewingStudent((prev) => ({ ...prev, isLoadingDetails: false }));
+    }
+  };
+
+  const handleOpenStudentExamHistory = async (std) => {
+    setExamHistoryStudent({ ...std, isLoadingDetails: true });
+    try {
+      const res = await getStudentDetails(std.id);
+      const detail = res?.data?.student || res?.data;
+      setExamHistoryStudent((prev) =>
+        String(prev?.id) === String(std.id)
+          ? { ...prev, ...(res?.success && detail ? detail : {}), isLoadingDetails: false }
+          : prev,
+      );
+    } catch {
+      setExamHistoryStudent((prev) =>
+        String(prev?.id) === String(std.id) ? { ...prev, isLoadingDetails: false } : prev,
+      );
     }
   };
 
@@ -388,31 +704,59 @@ export default function TeacherDashboardPage() {
     return result;
   };
 
-  const handleDeactivateStudentRow = async (std) => {
-    const subscription = approvedSubscriptions.find(
-      (item) => String(item.student?.id || item.student_id) === String(std.id),
+  const handleDeactivateAndDeleteStudentRow = async (std, subscriptionIdOverride) => {
+    const approvedRecord = findApprovedSubscriptionForStudent(
+      std,
+      approvedSubscriptions,
     );
+    const studentId = std.student_id || std.student?.id || std.user?.id || std.id;
     const subscriptionId =
-      std.subscription_id ||
-      std.subscription?.id ||
-      std.active_subscription?.id ||
-      std.subscription_code?.id ||
-      subscription?.subscription_id ||
-      subscription?.subscription_code?.id ||
-      subscription?.id;
+      subscriptionIdOverride || getStudentSubscriptionId(std, approvedRecord);
 
     if (!subscriptionId) {
-      showToast("تعذر العثور على معرّف اشتراك الطالب", "error");
-      return;
+      showToast(
+        "\u062a\u0639\u0630\u0631 \u0627\u0644\u0639\u062b\u0648\u0631 \u0639\u0644\u0649 \u0645\u0639\u0631\u0651\u0641 \u0627\u0634\u062a\u0631\u0627\u0643 \u0627\u0644\u0637\u0627\u0644\u0628",
+        "error",
+      );
+      return { success: false };
     }
 
     setIsProcessingAction(true);
-    const result = await deactivateStudentSubscription(subscriptionId);
-    setIsProcessingAction(false);
-    return result;
+    try {
+      return await deactivateAndDeleteStudentRecord({ studentId, subscriptionId });
+    } finally {
+      setIsProcessingAction(false);
+    }
+  };
+
+  const handleDeleteDeactivatedStudentRow = async (std, subscriptionIdOverride) => {
+    const approvedRecord = findApprovedSubscriptionForStudent(
+      std,
+      approvedSubscriptions,
+    );
+    const studentId = std.student_id || std.student?.id || std.user?.id || std.id;
+    const subscriptionId =
+      subscriptionIdOverride || getStudentSubscriptionId(std, approvedRecord);
+
+    if (!studentId && !subscriptionId) {
+      showToast("تعذر العثور على معرّف الطالب أو الاشتراك", "error");
+      return { success: false };
+    }
+
+    setIsProcessingAction(true);
+    try {
+      return await deleteDeactivatedStudentRecord({ studentId, subscriptionId });
+    } finally {
+      setIsProcessingAction(false);
+    }
   };
 
   const openStudentDeactivationConfirmation = (student) => {
+    const approvedRecord = findApprovedSubscriptionForStudent(
+      student,
+      approvedSubscriptions,
+    );
+    const isActive = isStudentRecordActive(student, approvedRecord);
     const studentName =
       `${student?.first_name || ""} ${student?.last_name || ""}`.trim() ||
       student?.name ||
@@ -424,8 +768,9 @@ export default function TeacherDashboardPage() {
       student?.code,
     );
     setDeactivationTarget({
-      type: "student",
+      type: isActive ? "student" : "delete-student",
       student,
+      subscriptionId: getStudentSubscriptionId(student, approvedRecord),
       studentName,
       subscriptionCode,
     });
@@ -433,14 +778,29 @@ export default function TeacherDashboardPage() {
 
   const confirmDeactivation = async () => {
     if (!deactivationTarget || isProcessingAction) return;
+    let result;
     try {
       if (deactivationTarget.type === "student") {
-        await handleDeactivateStudentRow(deactivationTarget.student);
+        result = await handleDeactivateAndDeleteStudentRow(
+          deactivationTarget.student,
+          deactivationTarget.subscriptionId,
+        );
+        if (result?.deactivated && !result.success) {
+          // The backend deactivated the subscription but rejected its deletion.
+          setDeactivationTarget((current) =>
+            current ? { ...current, type: "delete-student" } : current,
+          );
+        }
+      } else if (deactivationTarget.type === "delete-student") {
+        result = await handleDeleteDeactivatedStudentRow(
+          deactivationTarget.student,
+          deactivationTarget.subscriptionId,
+        );
       } else {
-        await handleDeactivate(deactivationTarget.subscriptionId);
+        result = await handleDeactivate(deactivationTarget.subscriptionId);
       }
     } finally {
-      setDeactivationTarget(null);
+      if (result?.success) setDeactivationTarget(null);
     }
   };
 
@@ -452,9 +812,10 @@ export default function TeacherDashboardPage() {
       std.subscription_id ||
       std.subscription?.id ||
       std.active_subscription?.id ||
-      std.subscription_code?.id ||
       subscription?.subscription_id ||
-      subscription?.subscription_code?.id ||
+      subscription?.subscription?.id ||
+      subscription?.active_subscription?.id ||
+      subscription?.subscriptions?.[0]?.id ||
       subscription?.id;
 
     if (!subscriptionId) {
@@ -470,19 +831,20 @@ export default function TeacherDashboardPage() {
     }
   };
 
-  const handleDeleteStudentRecord = (std) => {
-    setDeleteConfirmationStudent(std);
-  };
-
-  const confirmDeleteStudentRecord = () => {
-    if (!deleteConfirmationStudent) return;
-    deleteStudentByTeacher(deleteConfirmationStudent.id);
-    setDeleteConfirmationStudent(null);
-  };
-
   const handleSaveLesson = async (e) => {
     e.preventDefault();
     if (!newLessonData.title.trim()) return;
+    const answerOptions = [1, 2, 3, 4].map((number) =>
+      String(newLessonData[`quizOption${number}`] || "").trim(),
+    );
+    if (!newLessonData.quizQuestion.trim() || answerOptions.some((option) => !option)) {
+      showToast("أضيفي السؤال واكتبي الاختيارات الأربعة.", "error");
+      return;
+    }
+    if (!newLessonData.duration) {
+      showToast("استني لحد ما نقرأ مدة الفيديو من الرابط، أو تأكدي إن الرابط متاح.", "error");
+      return;
+    }
     const grade = GRADES.find((item) => item.name === newLessonData.grade);
     setIsProcessingAction(true);
     const result = await addLesson({
@@ -492,26 +854,66 @@ export default function TeacherDashboardPage() {
     setIsProcessingAction(false);
 
     if (result?.success) {
+      const lessonId = Number(result.data?.id);
+      if (lessonId && !result.isOfflineMode) {
+        const examResult = await createAdminExam({
+          lesson_id: lessonId,
+          title: `اختبار محاضرة: ${newLessonData.title.trim()}`,
+          duration_minutes: 10,
+          passing_percentage: 0,
+        });
+        const exam = examResult?.data?.exam || examResult?.data?.data || examResult?.data;
+        const examId = Number(exam?.id);
+        if (examResult?.success && examId) {
+          const questionResult = await createAdminQuestion(examId, {
+            question_text: newLessonData.quizQuestion.trim(),
+            points: 1,
+          });
+          const question = questionResult?.data?.question || questionResult?.data?.data || questionResult?.data;
+          const questionId = Number(question?.id);
+          if (questionResult?.success && questionId) {
+            for (let index = 0; index < answerOptions.length; index += 1) {
+              const optionResult = await createAdminOption(questionId, {
+                option_text: answerOptions[index],
+                is_correct: newLessonData.quizCorrectOption === index + 1,
+              });
+              if (!optionResult?.success) break;
+            }
+          }
+        }
+      } else if (result.isOfflineMode) {
+        showToast("تم حفظ المحاضرة محليًا، وسيتطلب ربط السؤال اتصالًا بالخادم.", "error");
+      }
       setIsAddLessonOpen(false);
       setNewLessonData({
         title: "",
         branch: BRANCHES[1] || "التفاضل والتكامل",
         grade: GRADES[0].name,
         gradeId: GRADES[0].id,
-        duration: "45 دقيقة",
+        duration: "",
         videoUrl: "",
         pdfFile: "مذكرة_الشرح.pdf",
         description: "",
+        quizQuestion: "",
+        quizOption1: "",
+        quizOption2: "",
+        quizOption3: "",
+        quizOption4: "",
+        quizCorrectOption: 1,
       });
     }
   };
 
-  const handleSaveQuestion = (e) => {
+  const handleSaveQuestion = async (e) => {
     e.preventDefault();
     if (
       !newQuestionData.question.trim() ||
-      !newQuestionData.opt1.trim() ||
-      !newQuestionData.opt2.trim()
+      ![
+        newQuestionData.opt1,
+        newQuestionData.opt2,
+        newQuestionData.opt3,
+        newQuestionData.opt4,
+      ].every((option) => option.trim())
     )
       return;
     const qObj = {
@@ -519,13 +921,19 @@ export default function TeacherDashboardPage() {
       options: [
         newQuestionData.opt1,
         newQuestionData.opt2,
-        newQuestionData.opt3 || "جـ",
-        newQuestionData.opt4 || "د",
+        newQuestionData.opt3,
+        newQuestionData.opt4,
       ],
       correctIndex: parseInt(newQuestionData.correctIndex),
       explanation: newQuestionData.explanation,
     };
-    addQuestionToLessonQuiz(parseInt(selectedLessonForQuiz), qObj);
+    setIsProcessingAction(true);
+    const result = await addQuestionToLessonQuiz(
+      parseInt(selectedLessonForQuiz),
+      qObj,
+    );
+    setIsProcessingAction(false);
+    if (!result?.success) return;
     setIsAddQuestionOpen(false);
     setNewQuestionData({
       question: "",
@@ -713,11 +1121,157 @@ export default function TeacherDashboardPage() {
     setEditingStudent(null);
   };
 
-  // Filtered lists for Students Roster (Directly from live API)
-  const baseStudentsList = paginatedStudents || [];
+  // Helper to check if an approved subscription item is active
+  const getApprovedItemActiveState = (item) => {
+    const studentObj = item.student || item.user || item;
+    const subObj =
+      item.subscription ||
+      item.active_subscription ||
+      item.subscriptions?.[0] ||
+      item;
+    const statusVal = getSubscriptionStatus(subObj, item, studentObj) || "active";
+    const isDeactivated =
+      isDeactivatedStatus(statusVal) ||
+      subObj.is_active === false ||
+      item.is_active === false;
+    return !isDeactivated;
+  };
+
+  // Helper to check if a code item is inactive
+  const getCodeItemInactiveState = (item) => {
+    const subscriptionCode = getSubscriptionCode(
+      item.subscription_code,
+      item.subscription,
+      item,
+    );
+    const linkedApprovedRecord = approvedSubscriptions.find((record) => {
+      const recordCode = getSubscriptionCode(
+        record.subscription_code,
+        record.subscription,
+        record.active_subscription,
+        record.subscriptions?.[0],
+        record,
+      );
+      const recordStudentId =
+        record.student?.id || record.user?.id || record.student_id || record.user_id;
+      const codeStudentId =
+        item.student?.id || item.user?.id || item.student_id || item.user_id;
+      const recordStudent = record.student || record.user || record;
+      const recordStudentName =
+        `${record.first_name || recordStudent.first_name || ""} ${record.last_name || recordStudent.last_name || ""}`.trim() ||
+        record.student_name ||
+        record.name ||
+        recordStudent.name ||
+        "";
+      const codeStudentName =
+        item.student_name ||
+        item.student?.name ||
+        item.user?.name ||
+        item.name ||
+        "";
+      const namesMatch =
+        recordStudentName.trim().replace(/\s+/g, " ").toLowerCase() ===
+        codeStudentName.trim().replace(/\s+/g, " ").toLowerCase();
+      return (
+        (recordCode && recordCode === subscriptionCode) ||
+        (recordStudentId != null &&
+          codeStudentId != null &&
+          String(recordStudentId) === String(codeStudentId)) ||
+        (recordStudentName && codeStudentName && namesMatch)
+      );
+    });
+    const linkedSubscription = getSubscriptionRecord(linkedApprovedRecord);
+    const codeSubscription = getSubscriptionRecord(item);
+    const inactiveStatuses = [
+      "inactive",
+      "cancelled",
+      "canceled",
+      "deactivated",
+      "disabled",
+      "expired",
+    ];
+    const statusCandidates = [
+      getSubscriptionStatus(
+        linkedApprovedRecord,
+        linkedSubscription,
+        linkedApprovedRecord?.student,
+      ),
+      linkedSubscription?.status,
+      linkedApprovedRecord?.subscription_status,
+      linkedApprovedRecord?.subscriptionStatus,
+      linkedApprovedRecord?.status,
+      codeSubscription?.status,
+      item.subscription_status,
+      item.subscriptionStatus,
+      item.status,
+      linkedSubscription?.is_active === false ||
+      linkedApprovedRecord?.is_active === false ||
+      codeSubscription?.is_active === false ||
+      item.is_active === false
+        ? "inactive"
+        : linkedSubscription?.is_active === true ||
+            linkedApprovedRecord?.is_active === true ||
+            codeSubscription?.is_active === true ||
+            item.is_active === true
+          ? "active"
+          : "",
+    ]
+      .filter(Boolean)
+      .map((status) => String(status).toLowerCase());
+    const linkedStatus =
+      statusCandidates.find((status) => inactiveStatuses.includes(status)) ||
+      statusCandidates[0] ||
+      "";
+    return inactiveStatuses.includes(linkedStatus);
+  };
+
+  // Stats for Approved Subscriptions
+  const approvedStats = useMemo(() => {
+    let active = 0;
+    let deactivated = 0;
+    for (const item of approvedSubscriptions) {
+      if (getApprovedItemActiveState(item)) active++;
+      else deactivated++;
+    }
+    return { total: approvedSubscriptions.length, active, deactivated };
+  }, [approvedSubscriptions]);
+
+  // Stats for Students Roster (loaded page)
+  const studentsStats = useMemo(() => {
+    const roster = Array.isArray(paginatedStudents) ? paginatedStudents : [];
+    let active = 0;
+    let deactivated = 0;
+    for (const std of roster) {
+      const studentSubscription = findApprovedSubscriptionForStudent(
+        std,
+        approvedSubscriptions,
+      );
+      if (isStudentRecordActive(std, studentSubscription)) active++;
+      else deactivated++;
+    }
+    return { total: roster.length, active, deactivated };
+  }, [paginatedStudents, approvedSubscriptions]);
+
+  // Stats for Codes
+  const codesStats = useMemo(() => {
+    let active = 0;
+    let deactivated = 0;
+    for (const item of subscriptionCodesList || []) {
+      if (getCodeItemInactiveState(item)) deactivated++;
+      else active++;
+    }
+    return { total: (subscriptionCodesList || []).length, active, deactivated };
+  }, [subscriptionCodesList, approvedSubscriptions]);
+
   const filteredStudents = useMemo(() => {
-    return baseStudentsList.filter((std) => {
+    // The roster comes only from the paginated admin students endpoint.
+    const roster = Array.isArray(paginatedStudents) ? paginatedStudents : [];
+    return roster.filter((std) => {
       const studentObj = std.student || std.user || std;
+      const studentSubscription = findApprovedSubscriptionForStudent(
+        std,
+        approvedSubscriptions,
+      );
       const stdName =
         `${std.first_name || studentObj.first_name || ""} ${std.last_name || studentObj.last_name || ""}`.trim() ||
         std.name ||
@@ -727,7 +1281,7 @@ export default function TeacherDashboardPage() {
         std.grade || studentObj.grade,
         std.grade_id || studentObj.grade_id,
       );
-      const matchesGrade = gradeFilter === "الكل" || stdGrade === gradeFilter;
+      const matchesGrade = gradeFilter === BRANCHES[0] || stdGrade === gradeFilter;
       const matchesSearch =
         !searchQuery ||
         stdName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -740,10 +1294,25 @@ export default function TeacherDashboardPage() {
           .includes(searchQuery.toLowerCase()) ||
         getSubscriptionCode(std.code)
           .toLowerCase()
+          .includes(searchQuery.toLowerCase()) ||
+        getSubscriptionCode(
+          studentSubscription?.subscription_code,
+          studentSubscription?.code,
+          studentSubscription?.subscription,
+        )
+          .toLowerCase()
           .includes(searchQuery.toLowerCase());
-      return matchesGrade && matchesSearch;
+
+      const isActive = isStudentRecordActive(std, studentSubscription);
+      const matchesStatus =
+        studentsStatus === "all" ||
+        (studentsStatus === "active" && isActive) ||
+        (studentsStatus === "deactivated" && !isActive);
+
+      return matchesGrade && matchesSearch && matchesStatus;
     });
-  }, [baseStudentsList, gradeFilter, searchQuery]);
+  }, [approvedSubscriptions, gradeFilter, paginatedStudents, searchQuery, studentsStatus]);
+  const studentsTotalCount = studentsPagination.total || filteredStudents.length;
 
   // Filtered Approved Subscriptions
   const filteredApproved = useMemo(() => {
@@ -762,15 +1331,75 @@ export default function TeacherDashboardPage() {
         sub.subscription,
       );
       const phone = sub.phone || studentObj.phone || "";
+      const studentGrade = getArabicGradeName(
+        sub.grade || studentObj.grade,
+        sub.grade_id || studentObj.grade_id,
+      );
+      const matchesGrade =
+        approvedGradeFilter === BRANCHES[0] || studentGrade === approvedGradeFilter;
 
       const matchesSearch =
         !searchQuery ||
         studentName.toLowerCase().includes(searchQuery.toLowerCase()) ||
         subCode.toLowerCase().includes(searchQuery.toLowerCase()) ||
         phone.includes(searchQuery);
-      return matchesSearch;
+
+      const isActive = getApprovedItemActiveState(sub);
+      const matchesStatus =
+        approvedStatus === "all" ||
+        (approvedStatus === "active" && isActive) ||
+        (approvedStatus === "deactivated" && !isActive);
+
+      return matchesGrade && matchesSearch && matchesStatus;
     });
-  }, [approvedSubscriptions, searchQuery]);
+  }, [approvedSubscriptions, approvedGradeFilter, searchQuery, approvedStatus]);
+
+  // Filtered Pending Requests
+  const filteredPendingRequests = useMemo(() => {
+    return (pendingRequests || []).filter((req) => {
+      const studentObj = req.student || req.user || req;
+      const firstName = req.first_name || studentObj.first_name || "";
+      const lastName = req.last_name || studentObj.last_name || "";
+      const fullName = `${firstName} ${lastName}`.trim() || req.name || studentObj.name || "";
+      const phone = req.phone || studentObj.phone || "";
+      const parentPhone = req.parent_phone || req.parentPhone || studentObj.parent_phone || studentObj.parentPhone || "";
+      const gradeId = req.grade_id || studentObj.grade_id || req.grade?.id || studentObj.grade?.id || 1;
+      const gradeTitle = req.grade?.name || studentObj.grade?.name || req.grade_name || studentObj.grade_name || getGradeNameById(gradeId);
+
+      const q = (requestsSearch || "").trim().toLowerCase();
+      const matchesSearch =
+        !q ||
+        fullName.toLowerCase().includes(q) ||
+        phone.includes(q) ||
+        parentPhone.includes(q);
+      const matchesGrade = requestsGrade === BRANCHES[0] || gradeTitle === requestsGrade;
+
+      return matchesSearch && matchesGrade;
+    });
+  }, [pendingRequests, requestsSearch, requestsGrade]);
+
+  // Filtered Subscription Codes
+  const filteredCodes = useMemo(() => {
+    return (subscriptionCodesList || []).filter((item) => {
+      const isInactive = getCodeItemInactiveState(item);
+      const matchesStatus =
+        codesStatus === "all" ||
+        (codesStatus === "active" && !isInactive) ||
+        (codesStatus === "deactivated" && isInactive);
+
+      if (!matchesStatus) return false;
+
+      if (!codesSearchQuery.trim()) return true;
+      const q = codesSearchQuery.toLowerCase();
+      const name = (item.student_name || "").toLowerCase();
+      const code = getSubscriptionCode(
+        item.subscription_code,
+        item.subscription,
+        item,
+      ).toLowerCase();
+      return name.includes(q) || code.includes(q);
+    });
+  }, [subscriptionCodesList, codesSearchQuery, codesStatus, approvedSubscriptions]);
 
   const completedLessons = viewingStudent?.completedLessons ?? 0;
   const totalLessons = lessonsList.length;
@@ -879,7 +1508,9 @@ export default function TeacherDashboardPage() {
                   id="deactivation-dialog-title"
                   style={{ margin: "2px 0 8px", color: "#fff", fontSize: "1.15rem" }}
                 >
-                  تأكيد تعطيل الاشتراك
+                  {deactivationTarget.type === "delete-student"
+                    ? "\u062a\u0623\u0643\u064a\u062f \u0627\u0644\u062d\u0630\u0641 \u0627\u0644\u0646\u0647\u0627\u0626\u064a"
+                    : "\u062a\u0623\u0643\u064a\u062f \u0627\u0644\u062a\u0639\u0637\u064a\u0644 \u0648\u0627\u0644\u062d\u0630\u0641 \u0627\u0644\u0646\u0647\u0627\u0626\u064a"}
                 </h2>
                 <p
                   style={{
@@ -889,8 +1520,19 @@ export default function TeacherDashboardPage() {
                     fontSize: "0.9rem",
                   }}
                 >
-                  هل تريد تعطيل اشتراك {deactivationTarget.studentName}؟ سيؤدي
-                  ذلك إلى منع استخدام الاشتراك.
+                  {deactivationTarget.type === "delete-student" ? (
+                    <>
+                      {"\u0633\u064a\u062a\u0645 \u062d\u0630\u0641 \u0627\u0644\u0637\u0627\u0644\u0628 "}
+                      <strong style={{ color: "#fff" }}>{deactivationTarget.studentName}</strong>
+                      {" \u0648\u0627\u0634\u062a\u0631\u0627\u0643\u0647 \u0646\u0647\u0627\u0626\u064a\u064b\u0627. \u0644\u0646 \u064a\u0645\u0643\u0646 \u0627\u0644\u062a\u0631\u0627\u062c\u0639 \u0639\u0646 \u0647\u0630\u0627 \u0627\u0644\u0625\u062c\u0631\u0627\u0621."}
+                    </>
+                  ) : (
+                    <>
+                      {"\u0633\u064a\u062a\u0645 \u0623\u0648\u0644\u064b\u0627 \u062a\u0639\u0637\u064a\u0644 \u0627\u0634\u062a\u0631\u0627\u0643 "}
+                      <strong style={{ color: "#fff" }}>{deactivationTarget.studentName}</strong>
+                      {" \u062b\u0645 \u062d\u0630\u0641 \u0627\u0644\u0637\u0627\u0644\u0628 \u0648\u0627\u0644\u0627\u0634\u062a\u0631\u0627\u0643 \u0646\u0647\u0627\u0626\u064a\u064b\u0627. \u0644\u0646 \u064a\u0645\u0643\u0646 \u0627\u0644\u062a\u0631\u0627\u062c\u0639 \u0639\u0646 \u0647\u0630\u0627 \u0627\u0644\u0625\u062c\u0631\u0627\u0621."}
+                    </>
+                  )}
                 </p>
               </div>
               <button
@@ -946,129 +1588,36 @@ export default function TeacherDashboardPage() {
                   opacity: isProcessingAction ? 0.7 : 1,
                 }}
               >
-                {isProcessingAction ? "جارٍ التعطيل..." : "تأكيد التعطيل"}
+                {isProcessingAction
+                  ? deactivationTarget.type === "delete-student"
+                    ? "\u062c\u0627\u0631\u064d \u0627\u0644\u062d\u0630\u0641 \u0627\u0644\u0646\u0647\u0627\u0626\u064a..."
+                    : "\u062c\u0627\u0631\u064d \u0627\u0644\u062a\u0639\u0637\u064a\u0644 \u062b\u0645 \u0627\u0644\u062d\u0630\u0641..."
+                  : deactivationTarget.type === "delete-student"
+                    ? "\u062d\u0630\u0641 \u0646\u0647\u0627\u0626\u064a"
+                    : "\u062a\u0639\u0637\u064a\u0644 \u062b\u0645 \u062d\u0630\u0641 \u0646\u0647\u0627\u0626\u064a"}
               </button>
             </div>
           </section>
         </div>
         </>
       )}
-      {deleteConfirmationStudent && (
-        <>
-          <style>{`
-            @keyframes deactivateBackdropIn { from { opacity: 0; } to { opacity: 1; } }
-            @keyframes deactivateDialogIn { from { opacity: 0; transform: translateY(10px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
-            .student-delete-dialog { animation: deactivateDialogIn 220ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
-            .student-delete-dialog button { transition: transform 160ms ease, filter 160ms ease, box-shadow 160ms ease; }
-            .student-delete-dialog button:not(:disabled):hover { transform: translateY(-2px); filter: brightness(1.12); box-shadow: 0 6px 18px rgba(0,0,0,0.2); }
-            .student-delete-dialog button:not(:disabled):active { transform: translateY(0) scale(0.98); }
-            @media (prefers-reduced-motion: reduce) { .student-delete-dialog, .student-delete-dialog button { animation: none; transition: none; } }
-          `}</style>
-          <div
-            role="presentation"
-            onMouseDown={(event) => {
-              if (event.target === event.currentTarget) {
-                setDeleteConfirmationStudent(null);
-              }
-            }}
-            style={{
-              position: "fixed",
-              inset: 0,
-              zIndex: 3001,
-              display: "grid",
-              placeItems: "center",
-              padding: "1rem",
-              background: "rgba(3, 7, 18, 0.78)",
-              backdropFilter: "blur(6px)",
-              animation: "deactivateBackdropIn 180ms ease-out both",
-            }}
-          >
-            <section
-              className="student-delete-dialog"
-              role="dialog"
-              aria-modal="true"
-              aria-labelledby="student-delete-dialog-title"
-              style={{
-                width: "min(100%, 440px)",
-                padding: "1.5rem",
-                borderRadius: "18px",
-                border: "1px solid rgba(244, 63, 94, 0.3)",
-                background: "linear-gradient(145deg, #111827, #080d18)",
-                boxShadow: "0 24px 80px rgba(0,0,0,0.5)",
-                direction: "rtl",
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <span
-                  aria-hidden="true"
-                  style={{
-                    width: 44,
-                    height: 44,
-                    flexShrink: 0,
-                    display: "grid",
-                    placeItems: "center",
-                    borderRadius: 14,
-                    color: "#fb7185",
-                    background: "rgba(244, 63, 94, 0.12)",
-                  }}
-                >
-                  <Trash2 size={21} />
-                </span>
-                <div>
-                  <h2
-                    id="student-delete-dialog-title"
-                    style={{ margin: "0 0 6px", color: "#fff", fontSize: "1.1rem" }}
-                  >
-                    تأكيد إزالة الطالب
-                  </h2>
-                  <strong style={{ color: "#e2e8f0", fontSize: "0.9rem" }}>
-                    {`${deleteConfirmationStudent.first_name || ""} ${deleteConfirmationStudent.last_name || ""}`.trim() || deleteConfirmationStudent.name || "الطالب"}
-                  </strong>
-                </div>
-              </div>
-              <p
-                style={{
-                  margin: "1rem 0 1.25rem",
-                  color: "var(--text-muted)",
-                  lineHeight: 1.8,
-                  fontSize: "0.88rem",
-                }}
-              >
-                سيتم إزالة الطالب من قائمة السجل المحلي فقط. لن يُحذف من قاعدة
-                البيانات لأن endpoint الحذف غير متاح حاليًا.
-              </p>
-              <div style={{ display: "flex", gap: 10 }}>
-                <button
-                  type="button"
-                  onClick={() => setDeleteConfirmationStudent(null)}
-                  className="btn-secondary"
-                  style={{ flex: 1, justifyContent: "center", padding: 10 }}
-                >
-                  إلغاء
-                </button>
-                <button
-                  type="button"
-                  onClick={confirmDeleteStudentRecord}
-                  className="btn-secondary"
-                  style={{
-                    flex: 1,
-                    justifyContent: "center",
-                    padding: 10,
-                    color: "#fff",
-                    background: "linear-gradient(135deg, #e11d48, #be123c)",
-                    borderColor: "rgba(251, 113, 133, 0.45)",
-                  }}
-                >
-                  إزالة من السجل
-                </button>
-              </div>
-            </section>
-          </div>
-        </>
-      )}
-
-      {/* Top Header */}
-      <div className="section-header" style={{ marginBottom: "1.5rem" }}>
+      {/* Professional Executive Header */}
+      <div
+        className="feature-card"
+        style={{
+          padding: "1.5rem 2rem",
+          marginBottom: "1.5rem",
+          background: "linear-gradient(135deg, rgba(15, 23, 42, 0.95) 0%, rgba(30, 41, 59, 0.75) 100%)",
+          border: "1px solid rgba(6, 182, 212, 0.25)",
+          borderRadius: "20px",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          flexWrap: "wrap",
+          gap: "1.25rem",
+          boxShadow: "0 10px 30px rgba(0,0,0,0.25)",
+        }}
+      >
         <div>
           <div
             style={{
@@ -1077,109 +1626,275 @@ export default function TeacherDashboardPage() {
               gap: "6px",
               fontSize: "0.75rem",
               color: "var(--cyan)",
-              fontWeight: 700,
-              marginBottom: "6px",
+              fontWeight: 800,
+              background: "rgba(6, 182, 212, 0.12)",
+              padding: "4px 12px",
+              borderRadius: "999px",
+              border: "1px solid rgba(6, 182, 212, 0.25)",
+              marginBottom: "8px",
             }}
           >
-            <ShieldCheck size={16} />
-            <span>لوحة الإدارة والتحكم الشاملة بالمنصة • API v1</span>
+            <ShieldCheck size={14} />
+            <span>منصة العميد في الرياضيات • لوحة تحكم المعلم</span>
           </div>
-          <h1 className="section-title">لوحة تحكم مستر / محمد عبد الخالق 👨‍🏫</h1>
-          <p className="section-desc">
-            إدارة طلبات التفعيل، أكواد الاشتراكات، المحاضرات، بنك الأسئلة،
-            ومذكرات العميد PDF
+          <h1 style={{ fontSize: "1.55rem", fontWeight: 900, color: "#fff", margin: "0 0 6px" }}>
+            لوحة الإدارة والتحكم الأكاديمي 👨‍🏫
+          </h1>
+          <p style={{ fontSize: "0.86rem", color: "var(--text-muted)", margin: 0, lineHeight: 1.6 }}>
+            متابعة فورية لطلبات تفعيل الطلاب، الاشتراكات السارية، والأكواد المصدرة
           </p>
         </div>
 
         {/* Action Controls */}
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "8px",
-            flexWrap: "wrap",
-          }}
-        >
+        <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
           <button
             onClick={() => {
               fetchPendingRequests();
               fetchApprovedStudents();
-              showToast("تم تحديث البيانات من السيرفر بنجاح 🔄");
+              showToast("تم تحديث ومزامنة البيانات من السيرفر بنجاح 🔄");
             }}
             className="btn-secondary"
-            style={{ fontSize: "0.8rem", padding: "8px 14px" }}
-            title="مزامنة وتحديث البيانات من الباك إند"
+            style={{ fontSize: "0.84rem", padding: "10px 16px", gap: "8px" }}
+            title="مزامنة فورية مع السيرفر"
           >
-            <RefreshCw size={14} />
+            <RefreshCw size={15} />
             <span>تحديث البيانات</span>
           </button>
 
-          {activeTab === "lessons" && (
-            <button
-              onClick={() => setIsAddLessonOpen(true)}
-              className="btn-primary"
-              style={{ fontSize: "0.85rem" }}
-            >
-              <Plus size={16} />
-              <span>{"\u0625\u0636\u0627\u0641\u0629 \u0645\u062d\u0627\u0636\u0631\u0629 \u062c\u062f\u064a\u062f\u0629"}</span>
-            </button>
-          )}
-          {activeTab === "quizzes" && (
-            <button
-              onClick={() => {
-                if (lessonsList.length === 0) {
-                  showToast("يُرجى إضافة محاضرة أولًا لربط الامتحان بها.", "error");
-                  return;
-                }
-                setEditingExam(null);
-                setNewExamData({
-                  lesson_id: lessonsList[0].id,
-                  title: "",
-                  description: "",
-                  duration_minutes: 20,
-                  passing_percentage: 60,
-                });
-                setIsAddExamOpen(true);
-              }}
-              className="btn-primary"
-              style={{ fontSize: "0.85rem" }}
-            >
-              <Plus size={16} />
-              <span>إنشاء امتحان وربطه بمحاضرة</span>
-            </button>
-          )}
-          {activeTab === "memos" && (
-            <button
-              onClick={() => setIsAddMemoOpen(true)}
-              className="btn-primary"
-              style={{ fontSize: "0.85rem" }}
-            >
-              <Plus size={16} />
-              <span>رفع مذكرة PDF</span>
-            </button>
-          )}
-          {(activeTab === "students" || activeTab === "approved") && (
-            <button
-              onClick={() => setIsAddStudentOpen(true)}
-              className="btn-primary"
-              style={{ fontSize: "0.85rem" }}
-            >
-              <UserPlus size={16} />
-              <span>إنشاء كود طالب يدوياً</span>
-            </button>
-          )}
+          <button
+            onClick={() => setIsAddStudentOpen(true)}
+            className="btn-primary"
+            style={{
+              fontSize: "0.85rem",
+              padding: "10px 18px",
+              gap: "8px",
+              boxShadow: "0 4px 16px rgba(6, 182, 212, 0.35)",
+            }}
+          >
+            <UserPlus size={16} />
+            <span>إنشاء كود طالب جديد</span>
+          </button>
         </div>
       </div>
 
-      {/* Main Navigation Tabs */}
+      {/* KPI Stats Overview Cards (4 Interactive Metrics) */}
       <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+          gap: "1rem",
+          marginBottom: "1.5rem",
+        }}
+      >
+        {/* KPI 1: Pending */}
+        <div
+          onClick={() => setActiveTab("requests")}
+          className="feature-card"
+          style={{
+            padding: "1.25rem",
+            cursor: "pointer",
+            borderRadius: "16px",
+            border: activeTab === "requests" ? "1.5px solid var(--amber)" : "1px solid rgba(245, 158, 11, 0.2)",
+            background: activeTab === "requests" ? "rgba(245, 158, 11, 0.08)" : "rgba(15, 23, 42, 0.6)",
+            transition: "all 0.2s ease",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+            <span style={{ fontSize: "0.82rem", fontWeight: 700, color: "var(--text-muted)" }}>
+              طلبات التفعيل المعلقة
+            </span>
+            <span style={{ width: 34, height: 34, borderRadius: 10, background: "rgba(245, 158, 11, 0.15)", color: "var(--amber)", display: "grid", placeItems: "center" }}>
+              <Clock size={17} />
+            </span>
+          </div>
+          <div style={{ fontSize: "1.75rem", fontWeight: 900, color: "#fff" }}>
+            {pendingRequests.length}
+          </div>
+          <div style={{ fontSize: "0.75rem", color: pendingRequests.length > 0 ? "var(--amber)" : "var(--text-dim)", marginTop: "4px", fontWeight: 600 }}>
+            {pendingRequests.length > 0 ? "● بحاجة للمراجعة والاعتماد" : "لا توجد طلبات جديدة"}
+          </div>
+        </div>
+
+        {/* KPI 2: Approved */}
+        <div
+          onClick={() => setActiveTab("approved")}
+          className="feature-card"
+          style={{
+            padding: "1.25rem",
+            cursor: "pointer",
+            borderRadius: "16px",
+            border: activeTab === "approved" ? "1.5px solid var(--emerald)" : "1px solid rgba(16, 185, 129, 0.2)",
+            background: activeTab === "approved" ? "rgba(16, 185, 129, 0.08)" : "rgba(15, 23, 42, 0.6)",
+            transition: "all 0.2s ease",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+            <span style={{ fontSize: "0.82rem", fontWeight: 700, color: "var(--text-muted)" }}>
+              الاشتراكات المعتمدة
+            </span>
+            <span style={{ width: 34, height: 34, borderRadius: 10, background: "rgba(16, 185, 129, 0.15)", color: "var(--emerald)", display: "grid", placeItems: "center" }}>
+              <Key size={17} />
+            </span>
+          </div>
+          <div style={{ fontSize: "1.75rem", fontWeight: 900, color: "#fff" }}>
+            {approvedSubscriptions.length}
+          </div>
+          <div style={{ fontSize: "0.75rem", color: "var(--emerald)", marginTop: "4px", fontWeight: 600 }}>
+            ● اشتراكات سارية ومفعلة للأجهزة
+          </div>
+        </div>
+
+        {/* KPI 3: Total Students */}
+        <div
+          onClick={() => setActiveTab("students")}
+          className="feature-card"
+          style={{
+            padding: "1.25rem",
+            cursor: "pointer",
+            borderRadius: "16px",
+            border: activeTab === "students" ? "1.5px solid var(--cyan)" : "1px solid rgba(6, 182, 212, 0.2)",
+            background: activeTab === "students" ? "rgba(6, 182, 212, 0.08)" : "rgba(15, 23, 42, 0.6)",
+            transition: "all 0.2s ease",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+            <span style={{ fontSize: "0.82rem", fontWeight: 700, color: "var(--text-muted)" }}>
+              سجل الطلاب الشامل
+            </span>
+            <span style={{ width: 34, height: 34, borderRadius: 10, background: "rgba(6, 182, 212, 0.15)", color: "var(--cyan)", display: "grid", placeItems: "center" }}>
+              <Users size={17} />
+            </span>
+          </div>
+          <div style={{ fontSize: "1.75rem", fontWeight: 900, color: "#fff" }}>
+            {studentsTotalCount}
+          </div>
+          <div style={{ fontSize: "0.75rem", color: "var(--cyan)", marginTop: "4px", fontWeight: 600 }}>
+            ● إجمالي طلاب الصفوف المسجلين
+          </div>
+        </div>
+
+        {/* KPI 4: Codes */}
+        <div
+          onClick={() => setActiveTab("codes")}
+          className="feature-card"
+          style={{
+            padding: "1.25rem",
+            cursor: "pointer",
+            borderRadius: "16px",
+            border: activeTab === "codes" ? "1.5px solid var(--purple)" : "1px solid rgba(168, 85, 247, 0.2)",
+            background: activeTab === "codes" ? "rgba(168, 85, 247, 0.08)" : "rgba(15, 23, 42, 0.6)",
+            transition: "all 0.2s ease",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+            <span style={{ fontSize: "0.82rem", fontWeight: 700, color: "var(--text-muted)" }}>
+              أكواد الاشتراكات
+            </span>
+            <span style={{ width: 34, height: 34, borderRadius: 10, background: "rgba(168, 85, 247, 0.15)", color: "var(--purple)", display: "grid", placeItems: "center" }}>
+              <ShieldCheck size={17} />
+            </span>
+          </div>
+          <div style={{ fontSize: "1.75rem", fontWeight: 900, color: "#fff" }}>
+            {subscriptionCodesList.length > 0 ? subscriptionCodesList.length : "توليد"}
+          </div>
+          <div style={{ fontSize: "0.75rem", color: "var(--purple)", marginTop: "4px", fontWeight: 600 }}>
+            ● إدارة وتوليد الأكواد حسب الصف
+          </div>
+        </div>
+      </div>
+
+      {/* Dedicated Content Portals Ribbon */}
+      <div
+        className="portals-ribbon"
+        style={{
+          background: "linear-gradient(90deg, rgba(15, 23, 42, 0.8) 0%, rgba(30, 41, 59, 0.6) 100%)",
+          border: "1px solid rgba(255, 255, 255, 0.08)",
+          borderRadius: "16px",
+          padding: "1rem 1.25rem",
+          marginBottom: "1.75rem",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          flexWrap: "wrap",
+          gap: "1rem",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <span style={{ color: "var(--cyan)", fontWeight: 800, fontSize: "0.88rem" }}>
+            بوابات المحتوى التعليمي:
+          </span>
+          <span style={{ color: "var(--text-muted)", fontSize: "0.8rem" }}>
+            صفحات مخصصة ومستقلة لمعاينة وإدارة المحاضرات، بنك الأسئلة، والمذكرات
+          </span>
+        </div>
+
+        <div className="portals-ribbon-links" style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+          <Link
+            to="/lessons"
+            className="btn-secondary"
+            style={{
+              padding: "7px 14px",
+              fontSize: "0.82rem",
+              color: "var(--cyan)",
+              borderColor: "rgba(6, 182, 212, 0.35)",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "6px",
+              textDecoration: "none",
+            }}
+          >
+            <Video size={14} />
+            <span>معاينة ورفع الدروس ({lessonsList.length}) ↗</span>
+          </Link>
+
+          <Link
+            to="/exams"
+            className="btn-secondary"
+            style={{
+              padding: "7px 14px",
+              fontSize: "0.82rem",
+              color: "var(--amber)",
+              borderColor: "rgba(245, 158, 11, 0.35)",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "6px",
+              textDecoration: "none",
+            }}
+          >
+            <FileQuestion size={14} />
+            <span>معاينة وبنك الأسئلة ({adminExamsList.length}) ↗</span>
+          </Link>
+
+          <Link
+            to="/memos"
+            className="btn-secondary"
+            style={{
+              padding: "7px 14px",
+              fontSize: "0.82rem",
+              color: "var(--purple)",
+              borderColor: "rgba(168, 85, 247, 0.35)",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "6px",
+              textDecoration: "none",
+            }}
+          >
+            <BookOpen size={14} />
+            <span>مذكرات PDF ({memosList.length}) ↗</span>
+          </Link>
+        </div>
+      </div>
+
+      {/* Main Administrative Tabs Bar (Exactly 4 focused tabs) */}
+      <div
+        className="teacher-admin-tabs"
         style={{
           display: "flex",
           gap: "0.6rem",
           flexWrap: "wrap",
-          overflowX: "visible",
-          paddingBottom: 0,
           marginBottom: "1.5rem",
+          borderBottom: "1px solid rgba(255, 255, 255, 0.08)",
+          paddingBottom: "1rem",
         }}
       >
         {/* TAB 1: PENDING ACTIVATION REQUESTS (Backend API) */}
@@ -1190,8 +1905,8 @@ export default function TeacherDashboardPage() {
             display: "flex",
             alignItems: "center",
             gap: "8px",
-            padding: "10px 16px",
-            fontSize: "0.85rem",
+            padding: "10px 18px",
+            fontSize: "0.88rem",
             position: "relative",
           }}
         >
@@ -1204,7 +1919,7 @@ export default function TeacherDashboardPage() {
                 color: "#000",
                 fontWeight: 900,
                 borderRadius: "20px",
-                padding: "1px 8px",
+                padding: "2px 8px",
                 fontSize: "0.72rem",
               }}
             >
@@ -1221,11 +1936,11 @@ export default function TeacherDashboardPage() {
             display: "flex",
             alignItems: "center",
             gap: "8px",
-            padding: "10px 16px",
-            fontSize: "0.85rem",
+            padding: "10px 18px",
+            fontSize: "0.88rem",
           }}
         >
-          <Key size={16} style={{ color: "var(--cyan)" }} />
+          <Key size={16} style={{ color: "var(--emerald)" }} />
           <span>
             الاشتراكات المعتمدة والأكواد ({approvedSubscriptions.length})
           </span>
@@ -1233,96 +1948,36 @@ export default function TeacherDashboardPage() {
 
         {/* TAB 3: ALL STUDENTS ROSTER */}
         <button
-          onClick={() => {
-            setActiveTab("students");
-            fetchAdminStudents(1);
-          }}
+          onClick={() => setActiveTab("students")}
           className={`tab-btn ${activeTab === "students" ? "active" : ""}`}
           style={{
             display: "flex",
             alignItems: "center",
             gap: "8px",
-            padding: "10px 16px",
-            fontSize: "0.85rem",
+            padding: "10px 18px",
+            fontSize: "0.88rem",
           }}
         >
-          <Users size={16} />
+          <Users size={16} style={{ color: "var(--cyan)" }} />
           <span>
-            سجل الطلاب ({studentsPagination?.total || baseStudentsList.length})
+            سجل الطلاب الشامل ({studentsTotalCount})
           </span>
         </button>
 
-        {/* TAB 4: LESSONS */}
+        {/* TAB 4: SUBSCRIPTION CODES (GET /api/v1/admin/subscription-codes) */}
         <button
-          onClick={() => {
-            setActiveTab("lessons");
-            fetchLessons();
-          }}
-          className={`tab-btn ${activeTab === "lessons" ? "active" : ""}`}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "8px",
-            padding: "10px 16px",
-            fontSize: "0.85rem",
-          }}
-        >
-          <Video size={16} />
-          <span>المحاضرات ({lessonsList.length})</span>
-        </button>
-
-        {/* TAB 5: QUIZZES / EXAMS */}
-        <button
-          onClick={() => {
-            setActiveTab("quizzes");
-            fetchAdminExams();
-          }}
-          className={`tab-btn ${activeTab === "quizzes" ? "active" : ""}`}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "8px",
-            padding: "10px 16px",
-            fontSize: "0.85rem",
-          }}
-        >
-          <FileQuestion size={16} />
-          <span>الاختبارات والأسئلة ({adminExamsList.length || 0})</span>
-        </button>
-
-        {/* TAB 6: SUBSCRIPTION CODES (GET /api/v1/admin/subscription-codes) */}
-        <button
-          onClick={() => {
-            setActiveTab("codes");
-            fetchSubscriptionCodes(selectedCodesGrade);
-          }}
+          onClick={() => setActiveTab("codes")}
           className={`tab-btn ${activeTab === "codes" ? "active" : ""}`}
           style={{
             display: "flex",
             alignItems: "center",
             gap: "8px",
-            padding: "10px 16px",
-            fontSize: "0.85rem",
+            padding: "10px 18px",
+            fontSize: "0.88rem",
           }}
         >
-          <Key size={16} style={{ color: "var(--amber)" }} />
+          <ShieldCheck size={16} style={{ color: "var(--purple)" }} />
           <span>أكواد الاشتراكات حسب الصف</span>
-        </button>
-
-        {/* TAB 7: MEMOS */}
-        <button
-          onClick={() => setActiveTab("memos")}
-          className={`tab-btn ${activeTab === "memos" ? "active" : ""}`}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "8px",
-            padding: "10px 16px",
-            fontSize: "0.85rem",
-          }}
-        >
-          <BookOpen size={16} />
-          <span>مذكرات PDF ({memosList.length})</span>
         </button>
       </div>
 
@@ -1331,6 +1986,7 @@ export default function TeacherDashboardPage() {
       {/* ==================================================================== */}
       {activeTab === "requests" && (
         <div>
+          {/* Header */}
           <div
             style={{
               display: "flex",
@@ -1344,36 +2000,104 @@ export default function TeacherDashboardPage() {
             <div>
               <h3
                 style={{
-                  fontSize: "1.1rem",
-                  fontWeight: 800,
+                  fontSize: "1.15rem",
+                  fontWeight: 900,
                   color: "#fff",
                   display: "flex",
                   alignItems: "center",
                   gap: "8px",
                 }}
-              >{"\u0637\u0644\u0628\u0627\u062a \u0627\u0644\u0637\u0644\u0627\u0628 \u0627\u0644\u062c\u062f\u064a\u062f\u0629 \u0628\u0627\u0646\u062a\u0638\u0627\u0631 \u0627\u0644\u0645\u0648\u0627\u0641\u0642\u0629 \u0648\u0627\u0644\u062a\u0641\u0639\u064a\u0644"}</h3>
+              >
+                <Clock size={19} style={{ color: "var(--amber)" }} />
+                <span>طلبات الطلاب الجديدة بانتظار الموافقة والتفعيل</span>
+                <span
+                  style={{
+                    fontSize: "0.75rem",
+                    fontWeight: 800,
+                    padding: "2px 10px",
+                    borderRadius: "999px",
+                    background: "rgba(245, 158, 11, 0.15)",
+                    color: "var(--amber)",
+                    border: "1px solid rgba(245, 158, 11, 0.3)",
+                  }}
+                >
+                  {pendingRequests.length} طلب
+                </span>
+              </h3>
               <p
                 style={{
-                  fontSize: "0.8rem",
+                  fontSize: "0.82rem",
                   color: "var(--text-muted)",
-                  marginTop: "3px",
+                  marginTop: "4px",
                 }}
               >
-                بمجرد النقر على "قبول وتفعيل الكود"، سيتم اعتماد الطالب وتوليد
-                كود اشتراك رسمي له للولوج للمنصة
+                بمجرد النقر على "قبول"، سيتم اعتماد الطالب وتوليد كود اشتراك رسمي له للولوج للمنصة مباشرة
               </p>
+            </div>
+          </div>
+
+          {/* Modern Filter Bar for Requests */}
+          <div className="modern-filter-bar">
+            <div className="modern-filter-row">
+              <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap", flex: "1 1 auto" }}>
+                <div className="modern-search-box">
+                  <span className="modern-search-icon">
+                    <Search size={15} />
+                  </span>
+                  <input
+                    type="text"
+                    placeholder="بحث في الطلبات بالاسم أو الهاتف..."
+                    value={requestsSearch}
+                    onChange={(e) => setRequestsSearch(e.target.value, { replace: true })}
+                    className="modern-search-input"
+                  />
+                  {requestsSearch && (
+                    <button
+                      type="button"
+                      onClick={() => setRequestsSearch("")}
+                      className="modern-search-clear"
+                      title="مسح البحث"
+                    >
+                      <X size={13} />
+                    </button>
+                  )}
+                </div>
+
+                <GradeFilter
+                  value={requestsGrade}
+                  onChange={setRequestsGrade}
+                  includeAll
+                  showLabel={false}
+                />
+              </div>
+
+              {(requestsSearch || requestsGrade !== BRANCHES[0]) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRequestsSearch("");
+                    setRequestsGrade(BRANCHES[0]);
+                  }}
+                  className="btn-secondary"
+                  style={{ fontSize: "0.78rem", padding: "6px 12px", gap: "6px" }}
+                >
+                  <RotateCcw size={13} />
+                  <span>إعادة تعيين الفلاتر</span>
+                </button>
+              )}
             </div>
           </div>
 
           {isLoadingRequests ? (
             <div
               style={{
-                padding: "3rem",
+                padding: "3.5rem",
                 textAlign: "center",
                 color: "var(--text-muted)",
               }}
             >
-              جاري تحميل طلبات التفعيل من السيرفر...
+              <RefreshCw size={24} className="animate-spin" style={{ margin: "0 auto 10px", color: "var(--amber)" }} />
+              <p>جاري تحميل طلبات التفعيل من السيرفر...</p>
             </div>
           ) : pendingRequests.length === 0 ? (
             <div
@@ -1382,15 +2106,17 @@ export default function TeacherDashboardPage() {
                 maxWidth: "100%",
                 textAlign: "center",
                 padding: "3.5rem 1rem",
-                background: "#090e1a",
+                background: "linear-gradient(145deg, rgba(15, 23, 42, 0.9), rgba(10, 15, 28, 0.95))",
+                border: "1px solid rgba(16, 185, 129, 0.2)",
+                borderRadius: "18px",
               }}
             >
               <div
                 style={{
-                  width: "56px",
-                  height: "56px",
+                  width: "58px",
+                  height: "58px",
                   borderRadius: "50%",
-                  background: "rgba(16, 185, 129, 0.12)",
+                  background: "rgba(16, 185, 129, 0.15)",
                   color: "var(--emerald)",
                   display: "flex",
                   alignItems: "center",
@@ -1403,237 +2129,189 @@ export default function TeacherDashboardPage() {
               <h4
                 style={{
                   fontSize: "1.1rem",
-                  fontWeight: 800,
+                  fontWeight: 900,
                   color: "#fff",
                   marginBottom: "6px",
                 }}
               >
                 لا توجد طلبات تفعيل معلقة حالياً
               </h4>
-              <p style={{ fontSize: "0.82rem", color: "var(--text-muted)" }}>
-                جميع طلبات اشتراك الطلاب تم البت فيها والموافقة عليها بنجاح.
+              <p style={{ fontSize: "0.84rem", color: "var(--text-muted)", margin: 0 }}>
+                جميع طلبات اشتراك الطلاب تم البت فيها والموافقة عليها بنجاح 🎉
               </p>
             </div>
-          ) : (
+          ) : filteredPendingRequests.length === 0 ? (
             <div
+              className="form-card"
               style={{
-                background: "var(--bg-card)",
-                border: "1px solid var(--border-subtle)",
-                borderRadius: "var(--radius-lg)",
-                overflowX: "auto",
+                maxWidth: "100%",
+                textAlign: "center",
+                padding: "3rem 1rem",
+                background: "rgba(15, 23, 42, 0.8)",
+                borderRadius: "18px",
               }}
             >
-              <table
-                style={{
-                  width: "100%",
-                  borderCollapse: "collapse",
-                  textAlign: "right",
-                  fontSize: "0.85rem",
+              <p style={{ color: "var(--text-muted)", marginBottom: "1rem" }}>
+                لا توجد طلبات مطابقة للبحث أو التصفية المختارة
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setRequestsSearch("");
+                  setRequestsGrade(BRANCHES[0]);
                 }}
+                className="btn-secondary"
+                style={{ fontSize: "0.8rem", padding: "6px 14px", margin: "0 auto" }}
               >
+                إظهار جميع الطلبات المعلقة
+              </button>
+            </div>
+          ) : (
+            <div className="modern-table-container">
+              <div className="modern-table-scroll">
+                <table className="modern-table">
+                  <thead>
+                    <tr>
+                      <th style={{ width: "26%" }}>اسم الطالب</th>
+                      <th style={{ width: "16%" }}>الصف الدراسي</th>
+                      <th style={{ width: "16%" }}>هاتف الطالب</th>
+                      <th style={{ width: "16%" }}>هاتف ولي الأمر</th>
+                      <th style={{ width: "12%" }}>تاريخ التقديم</th>
+                      <th style={{ width: "14%", textAlign: "center" }}>قرار المعلم</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredPendingRequests.map((req) => {
+                      const studentObj = req.student || req.user || req;
+                      const firstName = req.first_name || studentObj.first_name || "";
+                      const lastName = req.last_name || studentObj.last_name || "";
+                      const studentFullName =
+                        `${firstName} ${lastName}`.trim() ||
+                        req.name ||
+                        studentObj.name ||
+                        "طالب جديد";
 
-                <thead>
-                  <tr
-                    style={{
-                      background: "#090e1a",
-                      borderBottom: "1px solid var(--border-subtle)",
-                      color: "var(--text-muted)",
-                    }}
-                  >
-                    <th style={{ padding: "14px 16px" }}>اسم الطالب</th>
-                    <th style={{ padding: "14px 16px" }}>الصف الدراسي</th>
-                    <th style={{ padding: "14px 16px" }}>هاتف الطالب</th>
-                    <th style={{ padding: "14px 16px" }}>هاتف ولي الأمر</th>
-                    <th style={{ padding: "14px 16px" }}>تاريخ التقديم</th>
-                    <th style={{ padding: "14px 16px", textAlign: "center" }}>
-                      قرار المعلم
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pendingRequests.map((req) => {
-                    const studentObj = req.student || req.user || req;
-                    const firstName =
-                      req.first_name || studentObj.first_name || "";
-                    const lastName =
-                      req.last_name || studentObj.last_name || "";
-                    const studentFullName =
-                      `${firstName} ${lastName}`.trim() ||
-                      req.name ||
-                      studentObj.name ||
-                      "طالب جديد";
+                      const gradeId =
+                        req.grade_id ||
+                        studentObj.grade_id ||
+                        req.grade?.id ||
+                        studentObj.grade?.id ||
+                        1;
 
-                    const gradeId =
-                      req.grade_id ||
-                      studentObj.grade_id ||
-                      req.grade?.id ||
-                      studentObj.grade?.id ||
-                      1;
+                      const gradeTitle =
+                        req.grade?.name ||
+                        studentObj.grade?.name ||
+                        req.grade_name ||
+                        studentObj.grade_name ||
+                        getGradeNameById(gradeId);
 
-                    const gradeTitle =
-                      req.grade?.name ||
-                      studentObj.grade?.name ||
-                      req.grade_name ||
-                      studentObj.grade_name ||
-                      getGradeNameById(gradeId);
+                      const studentPhone = req.phone || studentObj.phone || "—";
+                      const parentPhone =
+                        req.parent_phone ||
+                        req.parentPhone ||
+                        studentObj.parent_phone ||
+                        studentObj.parentPhone ||
+                        "—";
 
-                    const studentPhone =
-                      req.phone || studentObj.phone || "—";
-                    const parentPhone =
-                      req.parent_phone ||
-                      req.parentPhone ||
-                      studentObj.parent_phone ||
-                      studentObj.parentPhone ||
-                      "—";
-
-                    return (
-                      <tr
-                        key={req.id}
-                        style={{
-                          borderBottom: "1px solid rgba(255,255,255,0.05)",
-                        }}
-                      >
-                        <td style={{ padding: "14px 16px" }}>
-                          <div
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: "8px",
-                            }}
-                          >
-                            <div
-                              style={{
-                                width: "34px",
-                                height: "34px",
-                                borderRadius: "10px",
-                                background:
-                                  "linear-gradient(135deg, #f59e0b, #d97706)",
-                                color: "#fff",
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                fontWeight: 900,
-                              }}
-                            >
-                              {studentFullName.charAt(0)}
-                            </div>
-                            <div>
-                              <div style={{ fontWeight: 800, color: "#fff" }}>
-                                {studentFullName}
-                              </div>
-                              <span
+                      return (
+                        <tr key={req.id}>
+                          <td>
+                            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                              <div
                                 style={{
-                                  fontSize: "0.68rem",
-                                  color: "#f59e0b",
+                                  width: "36px",
+                                  height: "36px",
+                                  borderRadius: "11px",
+                                  background: "linear-gradient(135deg, #f59e0b, #d97706)",
+                                  color: "#fff",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  fontWeight: 900,
+                                  fontSize: "0.85rem",
+                                  flexShrink: 0,
+                                  boxShadow: "0 3px 10px rgba(245, 158, 11, 0.25)",
                                 }}
                               >
-                                طلب قيد المراجعة
-                              </span>
+                                {studentFullName.charAt(0)}
+                              </div>
+                              <div>
+                                <div style={{ fontWeight: 800, color: "#fff", fontSize: "0.88rem" }}>
+                                  {studentFullName}
+                                </div>
+                                <span style={{ fontSize: "0.7rem", color: "#f59e0b", fontWeight: 700 }}>
+                                  طلب قيد المراجعة
+                                </span>
+                              </div>
                             </div>
-                          </div>
-                        </td>
-                        <td style={{ padding: "14px 16px" }}>
-                          <span className="badge-tag">{gradeTitle}</span>
-                        </td>
-                        <td
-                          style={{
-                            padding: "14px 16px",
-                            direction: "ltr",
-                            textAlign: "right",
-                            color: "var(--text-main)",
-                            fontFamily: "monospace",
-                            fontSize: "0.85rem",
-                          }}
-                        >
-                          {studentPhone}
-                        </td>
-                        <td
-                          style={{
-                            padding: "14px 16px",
-                            direction: "ltr",
-                            textAlign: "right",
-                            color: "var(--text-muted)",
-                            fontFamily: "monospace",
-                            fontSize: "0.85rem",
-                          }}
-                        >
-                          {parentPhone}
-                        </td>
-                        <td
-                          style={{
-                            padding: "14px 16px",
-                            color: "var(--text-muted)",
-                            fontSize: "0.78rem",
-                          }}
-                        >
-                          {req.created_at
-                            ? new Date(req.created_at).toLocaleDateString(
-                                "ar-EG",
-                              )
-                            : "اليوم"}
-                        </td>
-                        <td
-                          style={{ padding: "14px 16px", textAlign: "center" }}
-                        >
-                          <div
-                            style={{
-                              display: "inline-flex",
-                              alignItems: "center",
-                              gap: "6px",
-                              flexWrap: "wrap",
-                              justifyContent: "center",
-                            }}
-                          >
-                            <button
-                              onClick={() =>
-                                handleApproveRequest(
-                                  req.subscription_id ||
-                                    req.id ||
-                                    req.subscription?.id,
-                                )
-                              }
-                              disabled={isProcessingAction}
-                              className="btn-primary"
-                              style={{
-                                padding: "7px 12px",
-                                fontSize: "0.78rem",
-                                background:
-                                  "linear-gradient(135deg, #10b981 0%, #059669 100%)",
-                                boxShadow: "0 0 12px rgba(16, 185, 129, 0.3)",
-                              }}
-                              title="قبول طلب التفعيل وتوليد كود الاشتراك"
-                            >
-                              <Check size={14} />
-                              <span>قبول</span>
-                            </button>
-                            <button
-                              onClick={() =>
-                                handleRejectRequest(
-                                  req.subscription_id ||
-                                    req.id ||
-                                    req.subscription?.id,
-                                )
-                              }
-                              disabled={isProcessingAction}
-                              className="btn-secondary"
-                              style={{
-                                padding: "7px 12px",
-                                fontSize: "0.78rem",
-                                color: "#fda4af",
-                                borderColor: "rgba(244,63,94,0.4)",
-                              }}
-                              title="إلغاء / رفض طلب التفعيل"
-                            >
-                              <XCircle size={14} />
-                              <span>إلغاء / رفض</span>
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                          </td>
+                          <td>
+                            <span className="badge-tag">{gradeTitle}</span>
+                          </td>
+                          <td style={{ direction: "ltr", textAlign: "right", color: "var(--text-main)", fontFamily: "monospace", fontSize: "0.85rem" }}>
+                            {studentPhone}
+                          </td>
+                          <td style={{ direction: "ltr", textAlign: "right", color: "var(--text-muted)", fontFamily: "monospace", fontSize: "0.85rem" }}>
+                            {parentPhone}
+                          </td>
+                          <td style={{ color: "var(--text-muted)", fontSize: "0.8rem", whiteSpace: "nowrap" }}>
+                            {req.created_at ? new Date(req.created_at).toLocaleDateString("ar-EG") : "اليوم"}
+                          </td>
+                          <td style={{ textAlign: "center" }}>
+                            <div style={{ display: "inline-flex", alignItems: "center", gap: "8px", justifyContent: "center" }}>
+                              <button
+                                onClick={() =>
+                                  handleApproveRequest(
+                                    req.subscription_id || req.id || req.subscription?.id,
+                                  )
+                                }
+                                disabled={isProcessingAction}
+                                className="btn-primary"
+                                style={{
+                                  padding: "6px 14px",
+                                  fontSize: "0.78rem",
+                                  background: "linear-gradient(135deg, #10b981 0%, #059669 100%)",
+                                  boxShadow: "0 2px 12px rgba(16, 185, 129, 0.35)",
+                                  gap: "5px",
+                                }}
+                                title="قبول طلب التفعيل وتوليد كود الاشتراك"
+                              >
+                                <Check size={14} />
+                                <span>قبول</span>
+                              </button>
+                              <button
+                                onClick={() =>
+                                  handleRejectRequest(
+                                    req.subscription_id || req.id || req.subscription?.id,
+                                  )
+                                }
+                                disabled={isProcessingAction}
+                                className="btn-secondary"
+                                style={{
+                                  padding: "6px 12px",
+                                  fontSize: "0.78rem",
+                                  color: "#fda4af",
+                                  borderColor: "rgba(244, 63, 94, 0.35)",
+                                  gap: "5px",
+                                }}
+                                title="إلغاء / رفض طلب التفعيل"
+                              >
+                                <XCircle size={14} />
+                                <span>رفض</span>
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div className="modern-table-footer">
+                <span>
+                  عرض <strong>{filteredPendingRequests.length}</strong> من إجمالي <strong>{pendingRequests.length}</strong> طلب معلق
+                </span>
+              </div>
             </div>
           )}
         </div>
@@ -1644,6 +2322,7 @@ export default function TeacherDashboardPage() {
       {/* ==================================================================== */}
       {activeTab === "approved" && (
         <div>
+          {/* Header */}
           <div
             style={{
               display: "flex",
@@ -1656,57 +2335,154 @@ export default function TeacherDashboardPage() {
           >
             <div>
               <h3
-                style={{ fontSize: "1.1rem", fontWeight: 800, color: "#fff" }}
+                style={{
+                  fontSize: "1.15rem",
+                  fontWeight: 900,
+                  color: "#fff",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                }}
               >
-                قائمة الطلاب المعتمدين وأكواد الاشتراك الفعالة
+                <Key size={19} style={{ color: "var(--emerald)" }} />
+                <span>قائمة الطلاب المعتمدين وأكواد الاشتراك الفعالة</span>
+                <span
+                  style={{
+                    fontSize: "0.75rem",
+                    fontWeight: 800,
+                    padding: "2px 10px",
+                    borderRadius: "999px",
+                    background: "rgba(16, 185, 129, 0.15)",
+                    color: "var(--emerald)",
+                    border: "1px solid rgba(16, 185, 129, 0.3)",
+                  }}
+                >
+                  {approvedStats.total} اشتراك
+                </span>
               </h3>
               <p
                 style={{
-                  fontSize: "0.8rem",
+                  fontSize: "0.82rem",
                   color: "var(--text-muted)",
-                  marginTop: "3px",
+                  marginTop: "4px",
                 }}
               >
-                يمكنك نسخ كود الاشتراك للطالب أو تعطيل الاشتراك عند الحاجة لمنعه
-                من تسجيل الدخول
+                استعراض ومتابعة اشتراكات الطلاب، نسخ أكواد الدخول، وتصفية أو تعطيل الحسابات عند الحاجة
               </p>
             </div>
+          </div>
 
-            <div style={{ position: "relative", width: "280px" }}>
-              <input
-                type="text"
-                placeholder="بحث بالاسم أو الكود أو الهاتف..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="form-input"
-                style={{
-                  paddingLeft: "1rem",
-                  paddingRight: "2.5rem",
-                  fontSize: "0.85rem",
-                }}
+          {/* Professional Filter Bar */}
+          <div className="modern-filter-bar">
+            {/* Row 1: Search & Grade */}
+            <div className="modern-filter-row">
+              <div className="modern-search-box">
+                <span className="modern-search-icon">
+                  <Search size={15} />
+                </span>
+                <input
+                  type="text"
+                  placeholder="بحث بالاسم أو الكود أو الهاتف..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value, { replace: true })}
+                  className="modern-search-input"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery("")}
+                    className="modern-search-clear"
+                    title="مسح البحث"
+                  >
+                    <X size={13} />
+                  </button>
+                )}
+              </div>
+
+              {/* Status Segmented Filter */}
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                <div className="status-filter-group" role="group" aria-label="تصفية حسب الحالة">
+                  <button
+                    type="button"
+                    onClick={() => setApprovedStatus("all")}
+                    className={`status-filter-btn ${approvedStatus === "all" ? "is-active" : ""}`}
+                  >
+                    <span>الكل</span>
+                    <span className="status-filter-count">{approvedStats.total}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setApprovedStatus("active")}
+                    className={`status-filter-btn ${approvedStatus === "active" ? "is-active" : ""}`}
+                  >
+                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--emerald)" }} />
+                    <span>النشطين</span>
+                    <span className="status-filter-count">{approvedStats.active}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setApprovedStatus("deactivated")}
+                    className={`status-filter-btn is-deactivated ${approvedStatus === "deactivated" ? "is-active" : ""}`}
+                  >
+                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--rose)" }} />
+                    <span>المعطلين</span>
+                    <span className="status-filter-count">{approvedStats.deactivated}</span>
+                  </button>
+                </div>
+
+                {/* Quick Deactivated Shortcut Button */}
+                <button
+                  type="button"
+                  onClick={() => setApprovedStatus(approvedStatus === "deactivated" ? "all" : "deactivated")}
+                  className={`btn-quick-deactivated ${approvedStatus === "deactivated" ? "is-active" : ""}`}
+                  title={approvedStatus === "deactivated" ? "إظهار جميع الاشتراكات" : "تصفية وعرض الاشتراكات المعطلة فقط"}
+                >
+                  <UserX size={15} />
+                  <span>{approvedStatus === "deactivated" ? "إلغاء فلتر المعطلين" : "عرض المعطلين فقط"}</span>
+                  <span className="badge-pill">{approvedStats.deactivated}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Row 2: Grade Pills & Reset Action */}
+            <div className="modern-filter-row" style={{ paddingTop: "0.25rem", borderTop: "1px solid rgba(148, 163, 184, 0.08)" }}>
+              <GradeFilter
+                value={approvedGradeFilter}
+                onChange={setApprovedGradeFilter}
+                includeAll
+                showLabel={true}
               />
-              <Search
-                size={15}
-                style={{
-                  position: "absolute",
-                  right: "12px",
-                  top: "50%",
-                  transform: "translateY(-50%)",
-                  color: "var(--text-dim)",
-                }}
-              />
+
+              {(searchQuery || approvedGradeFilter !== BRANCHES[0] || approvedStatus !== "all") && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchQuery("");
+                    setApprovedGradeFilter(BRANCHES[0]);
+                    setApprovedStatus("all");
+                  }}
+                  className="btn-secondary"
+                  style={{ fontSize: "0.78rem", padding: "6px 14px", gap: "6px" }}
+                >
+                  <RotateCcw size={13} />
+                  <span>إعادة تعيين الفلاتر</span>
+                </button>
+              )}
             </div>
           </div>
 
           {isLoadingApproved ? (
             <div
               style={{
-                padding: "3rem",
+                padding: "3.5rem",
                 textAlign: "center",
                 color: "var(--text-muted)",
               }}
             >
-              جاري تحميل الاشتراكات المعتمدة...
+              <RefreshCw size={24} className="animate-spin" style={{ margin: "0 auto 10px", color: "var(--emerald)" }} />
+              <p>جاري تحميل الاشتراكات المعتمدة...</p>
             </div>
           ) : filteredApproved.length === 0 ? (
             <div
@@ -1715,322 +2491,388 @@ export default function TeacherDashboardPage() {
                 maxWidth: "100%",
                 textAlign: "center",
                 padding: "3.5rem 1rem",
+                background: "linear-gradient(145deg, rgba(15, 23, 42, 0.9), rgba(10, 15, 28, 0.95))",
+                border: "1px solid rgba(148, 163, 184, 0.14)",
+                borderRadius: "18px",
               }}
             >
-              <p style={{ color: "var(--text-muted)" }}>
-                لا توجد اشتراكات مطابقة لبحثك
-              </p>
-            </div>
-          ) : (
-            <div
-              style={{
-                background: "var(--bg-card)",
-                border: "1px solid var(--border-subtle)",
-                borderRadius: "var(--radius-lg)",
-                overflowX: "auto",
-              }}
-            >
-              <table
-                style={{
-                  width: "100%",
-                  minWidth: "1000px",
-                  tableLayout: "fixed",
-                  borderCollapse: "collapse",
-                  textAlign: "right",
-                  fontSize: "0.85rem",
-                }}
-              >
-                <colgroup>
-                  <col style={{ width: "13%" }} />
-                  <col style={{ width: "12%" }} />
-                  <col style={{ width: "17%" }} />
-                  <col style={{ width: "14%" }} />
-                  <col style={{ width: "15%" }} />
-                  <col style={{ width: "11%" }} />
-                  <col style={{ width: "18%" }} />
-                </colgroup>
-                <thead>
-                  <tr
+              {approvedStatus === "deactivated" ? (
+                <>
+                  <div
                     style={{
-                      background: "#090e1a",
-                      borderBottom: "1px solid var(--border-subtle)",
-                      color: "var(--text-muted)",
+                      width: "56px",
+                      height: "56px",
+                      borderRadius: "50%",
+                      background: "rgba(16, 185, 129, 0.12)",
+                      color: "var(--emerald)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      margin: "0 auto 12px",
                     }}
                   >
-                    <th style={{ padding: "14px 12px", whiteSpace: "nowrap" }}>{"\u0627\u0633\u0645 \u0627\u0644\u0637\u0627\u0644\u0628"}</th>
-                    <th style={{ padding: "14px 12px", whiteSpace: "nowrap" }}>{"\u0627\u0644\u0635\u0641"}</th>
-                    <th style={{ padding: "14px 12px", whiteSpace: "nowrap" }}>{"\u0643\u0648\u062f \u0627\u0644\u0627\u0634\u062a\u0631\u0627\u0643"}</th>
-                    <th style={{ padding: "14px 12px", whiteSpace: "nowrap" }}>{"\u062d\u0627\u0644\u0629 \u0627\u0644\u0627\u0634\u062a\u0631\u0627\u0643"}</th>
-                    <th style={{ padding: "14px 12px", whiteSpace: "nowrap" }}>{"\u062a\u0627\u0631\u064a\u062e \u0627\u0644\u0627\u0646\u062a\u0647\u0627\u0621"}</th>
-                    <th style={{ padding: "14px 12px", whiteSpace: "nowrap" }}>{"\u0627\u0644\u0647\u0627\u062a\u0641"}</th>
-                    <th style={{ padding: "14px 10px", textAlign: "center", whiteSpace: "nowrap" }}>{"\u0627\u0644\u0625\u062c\u0631\u0627\u0621\u0627\u062a"}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredApproved.map((item) => {
-                    const studentObj = item.student || item.user || item;
-                    const subObj =
-                      item.subscription ||
-                      item.active_subscription ||
-                      item.subscriptions?.[0] ||
-                      item;
+                    <CheckCircle2 size={30} />
+                  </div>
+                  <h4 style={{ color: "#fff", fontSize: "1.05rem", fontWeight: 900, marginBottom: "6px" }}>
+                    لا توجد اشتراكات معطلة حالياً ✨
+                  </h4>
+                  <p style={{ color: "var(--text-muted)", fontSize: "0.84rem", margin: "0 0 1rem" }}>
+                    جميع الاشتراكات المعتمدة في هذا القسم نشطة وسارية الصلاحية
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setApprovedStatus("all")}
+                    className="btn-secondary"
+                    style={{ fontSize: "0.8rem", padding: "7px 16px", margin: "0 auto" }}
+                  >
+                    عرض جميع الاشتراكات
+                  </button>
+                </>
+              ) : (
+                <>
+                  <p style={{ color: "var(--text-muted)", marginBottom: "1rem" }}>
+                    لا توجد اشتراكات مطابقة لمعايير البحث والتصفية المحددة
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearchQuery("");
+                      setApprovedGradeFilter(BRANCHES[0]);
+                      setApprovedStatus("all");
+                    }}
+                    className="btn-secondary"
+                    style={{ fontSize: "0.8rem", padding: "7px 16px", margin: "0 auto" }}
+                  >
+                    إعادة ضبط الفلاتر
+                  </button>
+                </>
+              )}
+            </div>
+          ) : (
+            <div className="modern-table-container">
+              <div className="modern-table-scroll">
+                <table className="modern-table">
+                  <thead>
+                    <tr>
+                      <th style={{ width: "22%" }}>اسم الطالب</th>
+                      <th style={{ width: "13%", textAlign: "center" }}>الصف الدراسي</th>
+                      <th style={{ width: "18%", textAlign: "center" }}>كود الاشتراك</th>
+                      <th style={{ width: "13%", textAlign: "center" }}>حالة الاشتراك</th>
+                      <th style={{ width: "12%", textAlign: "center" }}>تاريخ البداية</th>
+                      <th style={{ width: "12%" }}>الهاتف</th>
+                      <th style={{ width: "14%", textAlign: "center" }}>الإجراءات</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredApproved.map((item) => {
+                      const studentObj = item.student || item.user || item;
+                      const subObj =
+                        item.subscription ||
+                        item.active_subscription ||
+                        item.subscriptions?.[0] ||
+                        item;
 
-                    const firstName =
-                      item.first_name || studentObj.first_name || "";
-                    const lastName =
-                      item.last_name || studentObj.last_name || "";
-                    const studentName =
-                      `${firstName} ${lastName}`.trim() ||
-                      item.name ||
-                      studentObj.name ||
-                      "طالب معتمد";
+                      const firstName = item.first_name || studentObj.first_name || "";
+                      const lastName = item.last_name || studentObj.last_name || "";
+                      const studentName =
+                        `${firstName} ${lastName}`.trim() ||
+                        item.name ||
+                        studentObj.name ||
+                        "طالب معتمد";
 
-                    const gradeId =
-                      item.grade_id ||
-                      studentObj.grade_id ||
-                      item.grade?.id ||
-                      studentObj.grade?.id ||
-                      1;
-                    const gradeName = getArabicGradeName(
-                      item.grade || studentObj.grade,
-                      gradeId,
-                    );
+                      const gradeId =
+                        item.grade_id ||
+                        studentObj.grade_id ||
+                        item.grade?.id ||
+                        studentObj.grade?.id ||
+                        1;
+                      const gradeName = getArabicGradeName(
+                        item.grade || studentObj.grade,
+                        gradeId,
+                      );
 
-                    const subscriptionCode =
-                      getSubscriptionCode(
-                        subObj.subscription_code,
-                        item.subscription_code,
-                        studentObj.subscription_code,
-                        subObj,
-                        item.code,
-                        studentObj.code,
-                      ) ||
-                      "—";
+                      const subscriptionCode =
+                        getSubscriptionCode(
+                          subObj.subscription_code,
+                          item.subscription_code,
+                          studentObj.subscription_code,
+                          subObj,
+                          item.code,
+                          studentObj.code,
+                        ) || "—";
 
-                    // Any student returned by approved-students is approved/active unless explicitly inactive
-                    const statusVal =
-                      getSubscriptionStatus(subObj, item, studentObj) ||
-                      "active";
-                    const isDeactivated =
-                      isDeactivatedStatus(statusVal) ||
-                      subObj.is_active === false ||
-                      item.is_active === false;
-                    const isActive = !isDeactivated;
+                      const statusVal =
+                        getSubscriptionStatus(subObj, item, studentObj) || "active";
+                      const isDeactivated =
+                        isDeactivatedStatus(statusVal) ||
+                        subObj.is_active === false ||
+                        item.is_active === false;
+                      const isActive = !isDeactivated;
 
-                    const expiryDate =
-                      subObj.code_expires_at ||
-                      subObj.end_date ||
-                      subObj.expires_at ||
-                      item.code_expires_at ||
-                      item.end_date ||
-                      "مستمر حتى نهاية العام";
+                      const subscriptionStartDateRaw =
+                        subObj.start_date ||
+                        item.start_date ||
+                        studentObj.start_date ||
+                        subObj.subscription?.start_date ||
+                        item.subscription?.start_date ||
+                        "";
+                      const subscriptionStartDate =
+                        formatSubscriptionExpiry(subscriptionStartDateRaw);
+                      const phone = studentObj.phone || item.phone || "—";
+                      const isCopied = copiedCode === subscriptionCode;
 
-                    const phone =
-                      studentObj.phone || item.phone || "—";
-
-                    return (
-                      <tr
-                        key={item.id}
-                        style={{
-                          borderBottom: "1px solid rgba(255,255,255,0.05)",
-                          verticalAlign: "middle",
-                        }}
-                      >
-                        <td style={{ padding: "16px 12px" }}>
-                          <div
-                            title={studentName}
-                            style={{
-                              fontWeight: 800,
-                              color: "#fff",
-                              lineHeight: 1.5,
-                              whiteSpace: "nowrap",
-                              overflow: "hidden",
-                              textOverflow: "ellipsis",
-                            }}
-                          >
-                            {studentName}
-                          </div>
-                        </td>
-                        <td style={{ padding: "16px 12px", textAlign: "center" }}>
-                          <span className="badge-tag" style={{ whiteSpace: "nowrap" }}>{gradeName}</span>
-                        </td>
-                        <td style={{ padding: "16px 12px", textAlign: "center" }}>
-                          <div
-                            style={{
-                              display: "inline-flex",
-                              alignItems: "center",
-                              gap: "8px",
-                              background: "#050914",
-                              border: "1px solid rgba(6, 182, 212, 0.3)",
-                              padding: "4px 10px",
-                              borderRadius: "8px",
-                              whiteSpace: "nowrap",
-                            }}
-                          >
-                            <span
+                      return (
+                        <tr key={item.id} className={!isActive ? "row-deactivated" : ""}>
+                          <td>
+                            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                              <div
+                                style={{
+                                  width: "36px",
+                                  height: "36px",
+                                  borderRadius: "11px",
+                                  background: isActive
+                                    ? "linear-gradient(135deg, #10b981 0%, #059669 100%)"
+                                    : "linear-gradient(135deg, #e11d48 0%, #9f1239 100%)",
+                                  color: "#fff",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  fontWeight: 900,
+                                  fontSize: "0.85rem",
+                                  flexShrink: 0,
+                                  boxShadow: isActive
+                                    ? "0 3px 10px rgba(16, 185, 129, 0.25)"
+                                    : "0 3px 10px rgba(225, 29, 72, 0.25)",
+                                }}
+                              >
+                                {studentName.charAt(0)}
+                              </div>
+                              <div style={{ minWidth: 0 }}>
+                                <div
+                                  title={studentName}
+                                  style={{
+                                    fontWeight: 800,
+                                    color: "#fff",
+                                    fontSize: "0.88rem",
+                                    whiteSpace: "nowrap",
+                                    overflow: "hidden",
+                                    textOverflow: "ellipsis",
+                                  }}
+                                >
+                                  {studentName}
+                                </div>
+                                <span style={{ fontSize: "0.7rem", color: "var(--text-dim)" }}>
+                                  ID: {item.student_id || studentObj.id || item.id}
+                                </span>
+                              </div>
+                            </div>
+                          </td>
+                          <td style={{ textAlign: "center" }}>
+                            <span className="badge-tag">{gradeName}</span>
+                          </td>
+                          <td style={{ textAlign: "center" }}>
+                            <div
                               style={{
-                                fontFamily: "monospace",
-                                fontWeight: 900,
-                                color: "var(--cyan)",
-                                fontSize: "0.9rem",
-                                letterSpacing: "1px",
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: "6px",
+                                background: "rgba(6, 182, 212, 0.08)",
+                                border: "1px solid rgba(6, 182, 212, 0.22)",
+                                padding: "4px 10px",
+                                borderRadius: "8px",
                               }}
                             >
-                              {subscriptionCode}
-                            </span>
-                            {subscriptionCode !== "—" && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  handleCopyCode(subscriptionCode)
-                                }
+                              <span
                                 style={{
-                                  background: "none",
-                                  border: "none",
-                                  color:
-                                    copiedCode === subscriptionCode
-                                      ? "var(--emerald)"
-                                      : "var(--text-muted)",
-                                  cursor: "pointer",
-                                  padding: "2px",
+                                  fontFamily: "monospace",
+                                  fontWeight: 900,
+                                  color: "var(--cyan)",
+                                  fontSize: "0.88rem",
+                                  letterSpacing: "0.8px",
+                                  direction: "ltr",
                                 }}
-                                title="نسخ الكود"
                               >
-                                {copiedCode === subscriptionCode ? (
-                                  <Check size={14} />
-                                ) : (
-                                  <Copy size={14} />
-                                )}
-                              </button>
-                            )}
-                          </div>
-                        </td>
-                        <td style={{ padding: "16px 12px", textAlign: "center" }}>
-                          <span
-                            style={{
-                              fontSize: "0.72rem",
-                              fontWeight: 800,
-                              padding: "3px 8px",
-                              borderRadius: "6px",
-                              background: isActive
-                                ? "rgba(16, 185, 129, 0.15)"
-                                : "rgba(244, 63, 94, 0.15)",
-                              color: isActive ? "var(--emerald)" : "#fda4af",
-                              border: `1px solid ${isActive ? "rgba(16, 185, 129, 0.3)" : "rgba(244, 63, 94, 0.3)"}`,
-                              whiteSpace: "nowrap",
-                            }}
-                          >
-                            {isActive ? "نشط ومعتمد" : "معطل / ملغي"}
-                          </span>
-                        </td>
-                        <td
-                          style={{
-                            padding: "16px 12px",
-                            color: "var(--text-muted)",
-                            fontSize: "0.8rem",
-                            textAlign: "center",
-                            whiteSpace: "nowrap",
-                          }}
-                        >
-                          {expiryDate}
-                        </td>
-                        <td
-                          style={{
-                            padding: "16px 12px",
-                            direction: "ltr",
-                            textAlign: "right",
-                            color: "var(--text-muted)",
-                            fontFamily: "monospace",
-                            fontSize: "0.85rem",
-                            whiteSpace: "nowrap",
-                          }}
-                        >
-                          {phone}
-                        </td>
-                        <td
-                          style={{ padding: "14px 10px", textAlign: "center" }}
-                        >
-                          <div
-                            style={{
-                              display: "inline-flex",
-                              alignItems: "center",
-                              gap: "8px",
-                              justifyContent: "center",
-                              flexWrap: "nowrap",
-                              whiteSpace: "nowrap",
-                            }}
-                          >
-                            {isActive ? (
-                              <>
+                                {subscriptionCode}
+                              </span>
+                              {subscriptionCode !== "—" && (
                                 <button
+                                  type="button"
+                                  onClick={() => handleCopyCode(subscriptionCode)}
+                                  style={{
+                                    background: "none",
+                                    border: "none",
+                                    color: isCopied ? "var(--emerald)" : "var(--text-muted)",
+                                    cursor: "pointer",
+                                    padding: "2px",
+                                    display: "flex",
+                                  }}
+                                  title="نسخ الكود"
+                                >
+                                  {isCopied ? <Check size={14} /> : <Copy size={14} />}
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                          <td style={{ textAlign: "center" }}>
+                            <span
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: "5px",
+                                fontSize: "0.74rem",
+                                fontWeight: 800,
+                                padding: "4px 10px",
+                                borderRadius: "999px",
+                                background: isActive
+                                  ? "rgba(16, 185, 129, 0.14)"
+                                  : "rgba(244, 63, 94, 0.14)",
+                                color: isActive ? "var(--emerald)" : "#fda4af",
+                                border: `1px solid ${isActive ? "rgba(16, 185, 129, 0.3)" : "rgba(244, 63, 94, 0.3)"}`,
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              <span
+                                style={{
+                                  width: "6px",
+                                  height: "6px",
+                                  borderRadius: "50%",
+                                  background: isActive ? "var(--emerald)" : "var(--rose)",
+                                }}
+                              />
+                              <span>{isActive ? "نشط ومفعل" : "معطل / محظور"}</span>
+                            </span>
+                          </td>
+                          <td
+                            style={{
+                              color: "var(--text-muted)",
+                              fontSize: "0.82rem",
+                              textAlign: "center",
+                              whiteSpace: "nowrap",
+                            }}
+                            title={String(subscriptionStartDateRaw)}
+                          >
+                            {subscriptionStartDate}
+                          </td>
+                          <td
+                            style={{
+                              direction: "ltr",
+                              textAlign: "right",
+                              color: "var(--text-muted)",
+                              fontFamily: "monospace",
+                              fontSize: "0.85rem",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {phone}
+                          </td>
+                          <td style={{ textAlign: "center" }}>
+                            <div
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: "6px",
+                                justifyContent: "center",
+                                flexWrap: "nowrap",
+                              }}
+                            >
+                              {isActive ? (
+                                <>
+                                  <button
+                                    onClick={() =>
+                                      setDeactivationTarget({
+                                        type: "subscription",
+                                        subscriptionId:
+                                          item.subscription_id ||
+                                          subObj.subscription_id ||
+                                          (subObj !== item ? subObj.id : null) ||
+                                          item.active_subscription?.id ||
+                                          item.subscriptions?.[0]?.id ||
+                                          item.id,
+                                        studentName,
+                                        subscriptionCode:
+                                          subscriptionCode === "—" ? "" : subscriptionCode,
+                                      })
+                                    }
+                                    disabled={isProcessingAction}
+                                    className="btn-secondary"
+                                    style={{
+                                      padding: "5px 10px",
+                                      fontSize: "0.75rem",
+                                      color: "var(--rose)",
+                                      borderColor: "rgba(244, 63, 94, 0.3)",
+                                      gap: "4px",
+                                    }}
+                                    title="تعطيل الاشتراك ومنعه من الدخول"
+                                  >
+                                    <PowerOff size={13} />
+                                    <span>تعطيل</span>
+                                  </button>
+                                  {hasActiveTrustedDevice(item, studentObj, subObj) && (
+                                    <button
+                                      onClick={() =>
+                                        handleResetDevice(
+                                          item.subscription_id ||
+                                            subObj.subscription_id ||
+                                            (subObj !== item ? subObj.id : null) ||
+                                            item.active_subscription?.id ||
+                                            item.subscriptions?.[0]?.id ||
+                                            item.id,
+                                        )
+                                      }
+                                      disabled={isProcessingAction}
+                                      className="btn-secondary"
+                                      style={{
+                                        padding: "5px 10px",
+                                        fontSize: "0.75rem",
+                                        color: "var(--amber)",
+                                        borderColor: "rgba(245, 158, 11, 0.3)",
+                                        gap: "4px",
+                                      }}
+                                      title="إعادة ضبط الجهاز الموثوق ليتمكن الطالب من التسجيل بجهاز جديد"
+                                    >
+                                      <RotateCcw size={13} />
+                                      <span>ضبط الجهاز</span>
+                                    </button>
+                                  )}
+                                </>
+                              ) : (
+                                <button
+                                  type="button"
                                   onClick={() =>
-                                    setDeactivationTarget({
-                                      type: "subscription",
-                                      subscriptionId:
-                                        item.subscription_id ||
-                                        subObj.subscription_id ||
-                                        (subObj !== item ? subObj.id : null) ||
-                                        item.subscription_code?.id ||
-                                        item.active_subscription?.id ||
-                                        item.subscriptions?.[0]?.id ||
-                                        item.id,
-                                      studentName,
-                                      subscriptionCode:
-                                        subscriptionCode === "—"
-                                          ? ""
-                                          : subscriptionCode,
-                                    })
+                                    openStudentDeactivationConfirmation(studentObj || item)
                                   }
                                   disabled={isProcessingAction}
                                   className="btn-secondary"
                                   style={{
                                     padding: "5px 10px",
-                                    fontSize: "0.75rem",
-                                    color: "var(--rose)",
+                                    fontSize: "0.74rem",
+                                    color: "#fda4af",
+                                    borderColor: "rgba(244, 63, 94, 0.35)",
+                                    gap: "4px",
                                   }}
-                                  title="تعطيل الاشتراك ومنعه من الدخول"
+                                  title="حذف هذا الاشتراك المعطل نهائياً"
                                 >
-                                  <PowerOff size={13} />
-                                  <span>تعطيل</span>
+                                  <Trash2 size={13} />
+                                  <span>حذف نهائي</span>
                                 </button>
-                                {hasActiveTrustedDevice(item, studentObj, subObj) && (
-                                  <button
-                                    onClick={() =>
-                                      handleResetDevice(
-                                        item.subscription_id ||
-                                          subObj.subscription_id ||
-                                          (subObj !== item ? subObj.id : null) ||
-                                          item.subscription_code?.id ||
-                                          item.active_subscription?.id ||
-                                          item.subscriptions?.[0]?.id ||
-                                          item.id,
-                                      )
-                                    }
-                                  disabled={isProcessingAction}
-                                  className="btn-secondary"
-                                  style={{
-                                    padding: "5px 10px",
-                                    fontSize: "0.75rem",
-                                    color: "var(--amber)",
-                                    borderColor: "rgba(245, 158, 11, 0.3)",
-                                  }}
-                                  title="إعادة ضبط الجهاز الموثوق ليتمكن الطالب من التسجيل بجهاز جديد"
-                                >
-                                  <RotateCcw size={13} />
-                                  <span>ضبط الجهاز</span>
-                                  </button>
-                                )}
-                              </>
-                            ) : (
-                              <span className="badge-tag">غير نشط</span>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div className="modern-table-footer">
+                <span>
+                  عرض <strong>{filteredApproved.length}</strong> من إجمالي <strong>{approvedStats.total}</strong> اشتراك معتمد
+                </span>
+                <span style={{ display: "inline-flex", gap: "12px", alignItems: "center" }}>
+                  <span style={{ color: "var(--emerald)" }}>● نشط: {approvedStats.active}</span>
+                  <span style={{ color: "var(--rose)" }}>● معطل: {approvedStats.deactivated}</span>
+                </span>
+              </div>
             </div>
           )}
         </div>
@@ -2041,156 +2883,235 @@ export default function TeacherDashboardPage() {
       {/* ==================================================================== */}
       {activeTab === "students" && (
         <div>
-          {/* Top Controls: Grade Filter & Search */}
+          {/* Header */}
           <div
             style={{
               display: "flex",
-              alignItems: "center",
               justifyContent: "space-between",
+              alignItems: "center",
+              marginBottom: "1.25rem",
               flexWrap: "wrap",
               gap: "1rem",
-              marginBottom: "1.25rem",
             }}
           >
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "6px",
-                flexWrap: "wrap",
-              }}
-            >
-              <span
+            <div>
+              <h3
                 style={{
-                  fontSize: "0.8rem",
-                  fontWeight: 700,
-                  color: "var(--text-muted)",
+                  fontSize: "1.15rem",
+                  fontWeight: 900,
+                  color: "#fff",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
                 }}
               >
-                الصف:
-              </span>
-              {["الكل", ...GRADES.map((g) => g.name)].map((g) => (
-                <button
-                  key={g}
-                  onClick={() => setGradeFilter(g)}
-                  className={`tab-btn ${gradeFilter === g ? "active" : ""}`}
+                <Users size={19} style={{ color: "var(--cyan)" }} />
+                <span>سجل الطلاب الشامل وإدارة الحسابات</span>
+                <span
                   style={{
                     fontSize: "0.75rem",
-                    padding: "5px 14px",
+                    fontWeight: 800,
+                    padding: "2px 10px",
                     borderRadius: "999px",
+                    background: "rgba(6, 182, 212, 0.15)",
+                    color: "var(--cyan)",
+                    border: "1px solid rgba(6, 182, 212, 0.3)",
                   }}
                 >
-                  {g}
+                  {studentsTotalCount} طالب مسجل
+                </span>
+              </h3>
+              <p
+                style={{
+                  fontSize: "0.82rem",
+                  color: "var(--text-muted)",
+                  marginTop: "4px",
+                }}
+              >
+                إدارة ملفات الطلاب الأكاديمية، متابعة حالة التفعيل، نسخ أكواد الدخول، وتصفية الطلاب المعطلين
+              </p>
+            </div>
+          </div>
+
+          {/* Professional Filter Bar */}
+          <div className="modern-filter-bar">
+            {/* Row 1: Search & Status Filters */}
+            <div className="modern-filter-row">
+              <div className="modern-search-box">
+                <span className="modern-search-icon">
+                  <Search size={15} />
+                </span>
+                <input
+                  type="text"
+                  placeholder="بحث بالاسم أو الهاتف أو الكود..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value, { replace: true })}
+                  className="modern-search-input"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery("")}
+                    className="modern-search-clear"
+                    title="مسح البحث"
+                  >
+                    <X size={13} />
+                  </button>
+                )}
+              </div>
+
+              {/* Status Segmented Filter */}
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                <div className="status-filter-group" role="group" aria-label="تصفية حالة الطلاب">
+                  <button
+                    type="button"
+                    onClick={() => setStudentsStatus("all")}
+                    className={`status-filter-btn ${studentsStatus === "all" ? "is-active" : ""}`}
+                  >
+                    <span>الكل</span>
+                    <span className="status-filter-count">{studentsStats.total}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setStudentsStatus("active")}
+                    className={`status-filter-btn ${studentsStatus === "active" ? "is-active" : ""}`}
+                  >
+                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--emerald)" }} />
+                    <span>النشطين</span>
+                    <span className="status-filter-count">{studentsStats.active}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setStudentsStatus("deactivated")}
+                    className={`status-filter-btn is-deactivated ${studentsStatus === "deactivated" ? "is-active" : ""}`}
+                  >
+                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--rose)" }} />
+                    <span>المعطلين</span>
+                    <span className="status-filter-count">{studentsStats.deactivated}</span>
+                  </button>
+                </div>
+
+                {/* Quick Deactivated Shortcut Button */}
+                <button
+                  type="button"
+                  onClick={() => setStudentsStatus(studentsStatus === "deactivated" ? "all" : "deactivated")}
+                  className={`btn-quick-deactivated ${studentsStatus === "deactivated" ? "is-active" : ""}`}
+                  title={studentsStatus === "deactivated" ? "إظهار جميع الطلاب" : "تصفية وعرض الطلاب المعطلين فقط"}
+                >
+                  <UserX size={15} />
+                  <span>{studentsStatus === "deactivated" ? "إلغاء فلتر المعطلين" : "عرض الطلاب المعطلين"}</span>
+                  <span className="badge-pill">{studentsStats.deactivated}</span>
                 </button>
-              ))}
+              </div>
             </div>
 
-            <div style={{ position: "relative", width: "280px" }}>
-              <input
-                type="text"
-                placeholder="بحث بالاسم أو الهاتف أو الكود..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="form-input"
-                style={{
-                  paddingLeft: "1rem",
-                  paddingRight: "2.5rem",
-                  fontSize: "0.85rem",
-                }}
+            {/* Row 2: Grade Pills & Reset Action */}
+            <div className="modern-filter-row" style={{ paddingTop: "0.25rem", borderTop: "1px solid rgba(148, 163, 184, 0.08)" }}>
+              <GradeFilter
+                value={gradeFilter}
+                onChange={setGradeFilter}
+                includeAll
+                showLabel={true}
               />
-              <Search
-                size={15}
-                style={{
-                  position: "absolute",
-                  right: "12px",
-                  top: "50%",
-                  transform: "translateY(-50%)",
-                  color: "var(--text-dim)",
-                }}
-              />
+
+              {(searchQuery || gradeFilter !== BRANCHES[0] || studentsStatus !== "all") && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchQuery("");
+                    setGradeFilter(BRANCHES[0]);
+                    setStudentsStatus("all");
+                  }}
+                  className="btn-secondary"
+                  style={{ fontSize: "0.78rem", padding: "6px 14px", gap: "6px" }}
+                >
+                  <RotateCcw size={13} />
+                  <span>إعادة تعيين الفلاتر</span>
+                </button>
+              )}
             </div>
           </div>
 
           {/* Table Container */}
-          <div
-            style={{
-              background: "var(--bg-card)",
-              border: "1px solid var(--border-subtle)",
-              borderRadius: "16px",
-              overflow: "hidden",
-              boxShadow: "0 8px 30px rgba(0,0,0,0.3)",
-            }}
-          >
-            <div style={{ overflowX: "auto" }}>
-              <table
-                style={{
-                  width: "100%",
-                  borderCollapse: "collapse",
-                  textAlign: "right",
-                  fontSize: "0.85rem",
-                }}
-              >
+          <div className="modern-table-container">
+            <div className="modern-table-scroll">
+              <table className="modern-table">
                 <thead>
-                  <tr
-                    style={{
-                      background: "#090e1a",
-                      borderBottom: "1px solid rgba(255,255,255,0.08)",
-                      color: "var(--text-muted)",
-                    }}
-                  >
-                    <th
-                      style={{
-                        padding: "14px 16px",
-                        width: "50px",
-                        textAlign: "center",
-                      }}
-                    >
-                      #
-                    </th>
-                    <th style={{ padding: "14px 16px" }}>اسم الطالب</th>
-                    <th style={{ padding: "14px 16px" }}>الصف الدراسي</th>
-                    <th style={{ padding: "14px 16px" }}>هاتف الطالب</th>
-                    <th style={{ padding: "14px 16px" }}>هاتف ولي الأمر</th>
-                    <th style={{ padding: "14px 16px" }}>كود الدخول</th>
-                    <th style={{ padding: "14px 16px", textAlign: "center" }}>
-                      الحالة
-                    </th>
-                    <th
-                      style={{
-                        padding: "14px 16px",
-                        textAlign: "center",
-                        minWidth: "220px",
-                      }}
-                    >
-                      الإجراءات
-                    </th>
+                  <tr>
+                    <th style={{ width: "50px", textAlign: "center" }}>#</th>
+                    <th style={{ width: "24%" }}>اسم الطالب</th>
+                    <th style={{ width: "14%", textAlign: "center" }}>الصف الدراسي</th>
+                    <th style={{ width: "13%" }}>هاتف الطالب</th>
+                    <th style={{ width: "13%" }}>هاتف ولي الأمر</th>
+                    <th style={{ width: "14%", textAlign: "center" }}>كود الدخول</th>
+                    <th style={{ width: "10%", textAlign: "center" }}>الحالة</th>
+                    <th style={{ width: "16%", textAlign: "center" }}>الإجراءات</th>
                   </tr>
                 </thead>
                 <tbody>
                   {isLoadingStudents ? (
                     <tr>
-                      <td
-                        colSpan={8}
-                        style={{
-                          padding: "3.5rem 1rem",
-                          textAlign: "center",
-                          color: "var(--text-muted)",
-                        }}
-                      >
-                        جاري تحميل الطلاب من الخادم...
+                      <td colSpan={8} style={{ padding: "4rem 1rem", textAlign: "center", color: "var(--text-muted)" }}>
+                        <RefreshCw size={24} className="animate-spin" style={{ margin: "0 auto 10px", color: "var(--cyan)" }} />
+                        <p>جاري تحميل سجل الطلاب من الخادم...</p>
                       </td>
                     </tr>
                   ) : filteredStudents.length === 0 ? (
                     <tr>
-                      <td
-                        colSpan={8}
-                        style={{
-                          padding: "3.5rem 1rem",
-                          textAlign: "center",
-                          color: "var(--text-muted)",
-                        }}
-                      >
-                        لا يوجد طلاب يطابقون خيارات البحث أو التصفية الحالية
+                      <td colSpan={8} style={{ padding: "4rem 1rem", textAlign: "center" }}>
+                        {studentsStatus === "deactivated" ? (
+                          <div style={{ maxWidth: 440, margin: "0 auto" }}>
+                            <div
+                              style={{
+                                width: "54px",
+                                height: "54px",
+                                borderRadius: "50%",
+                                background: "rgba(16, 185, 129, 0.12)",
+                                color: "var(--emerald)",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                margin: "0 auto 12px",
+                              }}
+                            >
+                              <CheckCircle2 size={28} />
+                            </div>
+                            <h4 style={{ color: "#fff", fontSize: "1.05rem", fontWeight: 800, marginBottom: "6px" }}>
+                              لا يوجد طلاب معطلين حالياً 🎉
+                            </h4>
+                            <p style={{ color: "var(--text-muted)", fontSize: "0.84rem", marginBottom: "1rem" }}>
+                              جميع حسابات الطلاب في هذه الصفحة نشطة ومفعلة للدخول إلى المنصة
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => setStudentsStatus("all")}
+                              className="btn-secondary"
+                              style={{ fontSize: "0.8rem", padding: "6px 16px", margin: "0 auto" }}
+                            >
+                              عرض جميع الطلاب
+                            </button>
+                          </div>
+                        ) : (
+                          <div>
+                            <p style={{ color: "var(--text-muted)", marginBottom: "1rem", fontSize: "0.9rem" }}>
+                              لا يوجد طلاب يطابقون خيارات البحث أو التصفية المحددة
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSearchQuery("");
+                                setGradeFilter(BRANCHES[0]);
+                                setStudentsStatus("all");
+                              }}
+                              className="btn-secondary"
+                              style={{ fontSize: "0.8rem", padding: "6px 14px", margin: "0 auto" }}
+                            >
+                              إعادة ضبط الفلاتر
+                            </button>
+                          </div>
+                        )}
                       </td>
                     </tr>
                   ) : (
@@ -2211,127 +3132,102 @@ export default function TeacherDashboardPage() {
                                 item.subscription?.id ||
                                 item.active_subscription?.id ||
                                 item.subscriptions?.[0]?.id ||
-                                          item.subscription_code?.id ||
+                                item.id ||
                                 "",
                             ) ===
                               String(
                                 std.subscription_id ||
                                   std.subscription?.id ||
                                   std.active_subscription?.id ||
-                                            std.subscription_code?.id ||
                                   "__no_subscription_id__",
                               )
                           );
                         },
                       );
-                      const subscriptionStatus = getSubscriptionStatus(
-                        studentSubscription,
-                        std,
+                      const studentCode = getSubscriptionCode(
+                        std.subscription_code,
+                        std.code,
+                        std.subscriptions?.[0],
+                        std.active_subscription,
+                        studentSubscription?.subscription_code,
+                        studentSubscription?.code,
+                        studentSubscription?.subscription,
+                        studentSubscription?.active_subscription,
+                        studentSubscription?.subscriptions?.[0],
                       );
-                      const isStudentActive = subscriptionStatus
-                        ? !isDeactivatedStatus(subscriptionStatus)
-                        : std.isActive !== false;
+                      const isStudentActive = isStudentRecordActive(
+                        std,
+                        studentSubscription,
+                      );
+                      const isCopied = copiedCode === studentCode;
+
                       return (
                         <tr
                           key={std.id}
-                          style={{
-                            borderBottom: "1px solid rgba(255,255,255,0.04)",
-                            transition: "background 0.15s ease",
-                          }}
-                          onMouseEnter={(e) =>
-                            (e.currentTarget.style.background =
-                              "rgba(255,255,255,0.02)")
-                          }
-                          onMouseLeave={(e) =>
-                            (e.currentTarget.style.background = "transparent")
-                          }
+                          className={!isStudentActive ? "row-deactivated" : ""}
                         >
                           {/* Index */}
-                          <td
-                            style={{
-                              padding: "14px 16px",
-                              textAlign: "center",
-                              color: "var(--text-dim)",
-                              fontWeight: 600,
-                              fontSize: "0.8rem",
-                            }}
-                          >
+                          <td style={{ textAlign: "center", color: "var(--text-dim)", fontWeight: 700, fontSize: "0.78rem" }}>
                             {index + 1}
                           </td>
 
                           {/* Student Name & Avatar */}
-                          <td style={{ padding: "14px 16px" }}>
-                            <div
-                              style={{
-                                display: "flex",
-                                alignItems: "center",
-                                gap: "10px",
-                              }}
-                            >
+                          <td>
+                            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
                               <div
                                 style={{
-                                  width: "34px",
-                                  height: "34px",
-                                  borderRadius: "10px",
+                                  width: "36px",
+                                  height: "36px",
+                                  borderRadius: "11px",
                                   background: isStudentActive
                                     ? "linear-gradient(135deg, #4f46e5 0%, #06b6d4 100%)"
-                                    : "rgba(255,255,255,0.1)",
+                                    : "linear-gradient(135deg, #e11d48 0%, #9f1239 100%)",
                                   color: "#fff",
                                   display: "flex",
                                   alignItems: "center",
                                   justifyContent: "center",
-                                  fontWeight: 800,
-                                  fontSize: "0.82rem",
+                                  fontWeight: 900,
+                                  fontSize: "0.85rem",
                                   flexShrink: 0,
+                                  boxShadow: isStudentActive
+                                    ? "0 3px 10px rgba(6, 182, 212, 0.25)"
+                                    : "0 3px 10px rgba(225, 29, 72, 0.25)",
                                 }}
                               >
-                                {(
-                                  std.first_name ||
-                                  std.name ||
-                                  "ط"
-                                )
-                                  .trim()
-                                  .charAt(0)}
+                                {(std.first_name || std.name || "ط").trim().charAt(0)}
                               </div>
-                              <div>
+                              <div style={{ minWidth: 0 }}>
                                 <div
+                                  title={`${std.first_name || ""} ${std.last_name || ""}`.trim() || std.name}
                                   style={{
                                     fontWeight: 800,
                                     color: "#ffffff",
                                     fontSize: "0.88rem",
+                                    whiteSpace: "nowrap",
+                                    overflow: "hidden",
+                                    textOverflow: "ellipsis",
                                   }}
                                 >
                                   {`${std.first_name || ""} ${std.last_name || ""}`.trim() ||
                                     std.name ||
                                     "طالب"}
                                 </div>
-                                {std.governorate && (
-                                  <div
-                                    style={{
-                                      fontSize: "0.72rem",
-                                      color: "var(--text-dim)",
-                                      marginTop: "1px",
-                                    }}
-                                  >
-                                    {std.governorate}
-                                  </div>
-                                )}
+                                <div style={{ fontSize: "0.72rem", color: "var(--text-dim)", marginTop: "1px" }}>
+                                  {std.governorate ? `${std.governorate} • ` : ""}ID: {std.id}
+                                </div>
                               </div>
                             </div>
                           </td>
 
-                          {/* Grade (Safely rendered as string) */}
-                          <td style={{ padding: "14px 16px" }}>
-                            <span
-                              className="badge-tag"
-                              style={{ whiteSpace: "nowrap" }}
-                            >
+                          {/* Grade */}
+                          <td style={{ textAlign: "center" }}>
+                            <span className="badge-tag">
                               {getArabicGradeName(std.grade, std.grade_id)}
                             </span>
                           </td>
 
                           {/* Phone */}
-                          <td style={{ padding: "14px 16px" }}>
+                          <td>
                             <div
                               style={{
                                 direction: "ltr",
@@ -2344,16 +3240,13 @@ export default function TeacherDashboardPage() {
                                 fontSize: "0.85rem",
                               }}
                             >
-                              <Phone
-                                size={12}
-                                style={{ color: "var(--text-dim)" }}
-                              />
+                              <Phone size={12} style={{ color: "var(--text-dim)" }} />
                               <span>{std.phone || "—"}</span>
                             </div>
                           </td>
 
                           {/* Parent Phone */}
-                          <td style={{ padding: "14px 16px" }}>
+                          <td>
                             <div
                               style={{
                                 direction: "ltr",
@@ -2366,23 +3259,22 @@ export default function TeacherDashboardPage() {
                                 fontSize: "0.85rem",
                               }}
                             >
-                              <Phone
-                                size={12}
-                                style={{ color: "var(--text-dim)" }}
-                              />
-                              <span>
-                                {std.parentPhone || std.parent_phone || "—"}
-                              </span>
+                              <Phone size={12} style={{ color: "var(--text-dim)" }} />
+                              <span>{std.parentPhone || std.parent_phone || "—"}</span>
                             </div>
                           </td>
 
                           {/* Code with Copy Button */}
-                          <td style={{ padding: "14px 16px" }}>
+                          <td style={{ textAlign: "center" }}>
                             <div
                               style={{
                                 display: "inline-flex",
                                 alignItems: "center",
                                 gap: "6px",
+                                background: "rgba(6, 182, 212, 0.08)",
+                                border: "1px solid rgba(6, 182, 212, 0.22)",
+                                padding: "4px 9px",
+                                borderRadius: "8px",
                               }}
                             >
                               <span
@@ -2390,86 +3282,53 @@ export default function TeacherDashboardPage() {
                                   fontFamily: "monospace",
                                   color: "var(--cyan)",
                                   fontWeight: 800,
-                                  background: "rgba(6, 182, 212, 0.1)",
-                                  padding: "3px 8px",
-                                  borderRadius: "6px",
-                                  border: "1px solid rgba(6, 182, 212, 0.25)",
-                                  fontSize: "0.8rem",
-                                  letterSpacing: "0.5px",
+                                  fontSize: "0.82rem",
+                                  letterSpacing: "0.6px",
+                                  direction: "ltr",
                                 }}
                               >
-                                {getSubscriptionCode(
-                                  std.subscription_code,
-                                  std.code,
-                                  std.subscriptions?.[0],
-                                  std.active_subscription,
-                                ) ||
-                                  "قيد الاعتماد"}
+                                {studentCode || "قيد الاعتماد"}
                               </span>
-                              {getSubscriptionCode(
-                                std.subscription_code,
-                                std.code,
-                                std.subscriptions?.[0],
-                                std.active_subscription,
-                              ) && (
+                              {studentCode && (
                                 <button
+                                  type="button"
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    handleCopyCode(
-                                      getSubscriptionCode(
-                                        std.subscription_code,
-                                        std.code,
-                                        std.subscriptions?.[0],
-                                        std.active_subscription,
-                                      ),
-                                    );
+                                    handleCopyCode(studentCode);
                                   }}
                                   style={{
                                     background: "none",
                                     border: "none",
-                                    color:
-                                      copiedCode === std.code
-                                        ? "var(--emerald)"
-                                        : "var(--text-dim)",
+                                    color: isCopied ? "var(--emerald)" : "var(--text-dim)",
                                     cursor: "pointer",
-                                    padding: "3px",
+                                    padding: "2px",
                                     display: "flex",
                                   }}
                                   title="نسخ كود الطالب"
                                 >
-                                  {copiedCode === std.code ? (
-                                    <Check size={13} />
-                                  ) : (
-                                    <Copy size={13} />
-                                  )}
+                                  {isCopied ? <Check size={13} /> : <Copy size={13} />}
                                 </button>
                               )}
                             </div>
                           </td>
 
                           {/* Status Badge */}
-                          <td
-                            style={{
-                              padding: "14px 16px",
-                              textAlign: "center",
-                            }}
-                          >
+                          <td style={{ textAlign: "center" }}>
                             <span
                               style={{
                                 display: "inline-flex",
                                 alignItems: "center",
-                                gap: "4px",
-                                fontSize: "0.72rem",
-                                fontWeight: 700,
+                                gap: "5px",
+                                fontSize: "0.74rem",
+                                fontWeight: 800,
                                 padding: "3px 9px",
                                 borderRadius: "999px",
                                 background: isStudentActive
-                                  ? "rgba(16, 185, 129, 0.15)"
-                                  : "rgba(244, 63, 94, 0.15)",
-                                color: isStudentActive
-                                  ? "var(--emerald)"
-                                  : "var(--rose)",
+                                  ? "rgba(16, 185, 129, 0.14)"
+                                  : "rgba(244, 63, 94, 0.14)",
+                                color: isStudentActive ? "var(--emerald)" : "var(--rose)",
                                 border: `1px solid ${isStudentActive ? "rgba(16, 185, 129, 0.3)" : "rgba(244, 63, 94, 0.3)"}`,
+                                whiteSpace: "nowrap",
                               }}
                             >
                               <span
@@ -2477,22 +3336,15 @@ export default function TeacherDashboardPage() {
                                   width: "6px",
                                   height: "6px",
                                   borderRadius: "50%",
-                                  background: isStudentActive
-                                    ? "var(--emerald)"
-                                    : "var(--rose)",
+                                  background: isStudentActive ? "var(--emerald)" : "var(--rose)",
                                 }}
-                              ></span>
+                              />
                               <span>{isStudentActive ? "مفعل" : "معطل"}</span>
                             </span>
                           </td>
 
                           {/* Action Buttons */}
-                          <td
-                            style={{
-                              padding: "14px 16px",
-                              textAlign: "center",
-                            }}
-                          >
+                          <td style={{ textAlign: "center" }}>
                             <div
                               style={{
                                 display: "inline-flex",
@@ -2501,60 +3353,57 @@ export default function TeacherDashboardPage() {
                                 justifyContent: "center",
                               }}
                             >
-                              {/* View Details */}
                               <button
                                 type="button"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  handleOpenStudentDetails(std);
+                                  handleOpenStudentDetails({
+                                    ...std,
+                                    code: studentCode || std.code || std.subscription_code,
+                                    subscription_code: studentCode || std.subscription_code || std.code,
+                                    studentSubscription,
+                                    grade: getArabicGradeName(std.grade, std.grade_id),
+                                    grade_name: getArabicGradeName(std.grade, std.grade_id),
+                                  });
                                 }}
                                 className="btn-secondary"
-                                style={{
-                                  padding: "5px 10px",
-                                  fontSize: "0.75rem",
-                                }}
-                                title="عرض التفاصيل الكاملة من السيرفر"
+                                style={{ padding: "5px 9px", fontSize: "0.75rem", gap: "4px" }}
+                                title="عرض التفاصيل الكاملة"
                               >
-                                <Eye
-                                  size={13}
-                                  style={{ color: "var(--cyan)" }}
-                                />
+                                <Eye size={13} style={{ color: "var(--cyan)" }} />
                                 <span>تفاصيل</span>
                               </button>
 
-                              {/* Edit */}
                               <button
+                                type="button"
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   setEditingStudent(std);
                                 }}
                                 className="btn-secondary"
-                                style={{
-                                  padding: "5px 10px",
-                                  fontSize: "0.75rem",
-                                  color: "var(--amber)",
-                                }}
-                                title="تعديل"
+                                style={{ padding: "5px 9px", fontSize: "0.75rem", color: "var(--amber)", gap: "4px" }}
+                                title="تعديل بيانات الطالب"
                               >
                                 <Edit3 size={13} />
                                 <span>تعديل</span>
                               </button>
 
-                              {/* Delete */}
                               <button
+                                type="button"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  handleDeleteStudentRecord(std);
+                                  openStudentDeactivationConfirmation(std);
                                 }}
                                 className="btn-secondary"
                                 style={{
                                   padding: "5px 8px",
                                   fontSize: "0.75rem",
                                   color: "var(--rose)",
+                                  borderColor: "rgba(244, 63, 94, 0.3)",
                                 }}
-                                title="حذف الطالب من السجل"
+                                title={isStudentActive ? "تعطيل حساب الطالب" : "حذف حساب الطالب المعطل نهائياً"}
                               >
-                                <Trash2 size={13} />
+                                {isStudentActive ? <PowerOff size={13} /> : <Trash2 size={13} />}
                               </button>
                             </div>
                           </td>
@@ -2565,7 +3414,20 @@ export default function TeacherDashboardPage() {
                 </tbody>
               </table>
             </div>
+
+            {/* Table Footer */}
+            <div className="modern-table-footer">
+              <span>
+                عرض <strong>{filteredStudents.length}</strong> طالب في هذه الصفحة • إجمالي المسجلين: <strong>{studentsTotalCount}</strong>
+              </span>
+              <span style={{ display: "inline-flex", gap: "12px", alignItems: "center" }}>
+                <span style={{ color: "var(--emerald)" }}>● نشط: {studentsStats.active}</span>
+                <span style={{ color: "var(--rose)" }}>● معطل: {studentsStats.deactivated}</span>
+              </span>
+            </div>
           </div>
+
+          {/* Pagination */}
           {studentsPagination.last_page > 1 && (
             <div
               style={{
@@ -2573,36 +3435,27 @@ export default function TeacherDashboardPage() {
                 alignItems: "center",
                 justifyContent: "center",
                 gap: "1rem",
-                marginTop: "1rem",
+                marginTop: "1.25rem",
               }}
             >
               <button
                 type="button"
                 className="btn-secondary"
-                disabled={
-                  isLoadingStudents || studentsPagination.current_page <= 1
-                }
-                onClick={() =>
-                  fetchAdminStudents(studentsPagination.current_page - 1)
-                }
+                disabled={isLoadingStudents || studentsPagination.current_page <= 1}
+                onClick={() => setUrlState({ page: String(currentStudentsPage - 1) })}
+                style={{ fontSize: "0.82rem", padding: "8px 16px" }}
               >
                 السابق
               </button>
-              <span style={{ color: "var(--text-muted)", fontSize: "0.85rem" }}>
-                صفحة {studentsPagination.current_page} من{" "}
-                {studentsPagination.last_page}
+              <span style={{ color: "var(--text-muted)", fontSize: "0.85rem", fontWeight: 700 }}>
+                صفحة <strong style={{ color: "var(--cyan)" }}>{studentsPagination.current_page}</strong> من <strong>{studentsPagination.last_page}</strong>
               </span>
               <button
                 type="button"
                 className="btn-secondary"
-                disabled={
-                  isLoadingStudents ||
-                  studentsPagination.current_page >=
-                    studentsPagination.last_page
-                }
-                onClick={() =>
-                  fetchAdminStudents(studentsPagination.current_page + 1)
-                }
+                disabled={isLoadingStudents || studentsPagination.current_page >= studentsPagination.last_page}
+                onClick={() => setUrlState({ page: String(currentStudentsPage + 1) })}
+                style={{ fontSize: "0.82rem", padding: "8px 16px" }}
               >
                 التالي
               </button>
@@ -3421,10 +4274,11 @@ export default function TeacherDashboardPage() {
       )}
 
       {/* ==================================================================== */}
-      {/* TAB 6: SUBSCRIPTION CODES BY GRADE (GET /api/v1/admin/subscription-codes) */}
+      {/* TAB 4: SUBSCRIPTION CODES BY GRADE (GET /api/v1/admin/subscription-codes) */}
       {/* ==================================================================== */}
       {activeTab === "codes" && (
         <div>
+          {/* Header Title & Actions */}
           <div
             style={{
               display: "flex",
@@ -3437,9 +4291,21 @@ export default function TeacherDashboardPage() {
           >
             <div>
               <h3
-                style={{ fontSize: "1.1rem", fontWeight: 800, color: "#fff" }}
+                style={{ fontSize: "1.1rem", fontWeight: 800, color: "#fff", display: "flex", alignItems: "center", gap: "8px" }}
               >
-                أكواد اشتراكات الطلاب المعتمدة حسب الصف:
+                <span>أكواد اشتراكات الطلاب المعتمدة حسب الصف</span>
+                <span
+                  style={{
+                    fontSize: "0.75rem",
+                    padding: "2px 8px",
+                    borderRadius: "20px",
+                    background: "rgba(168, 85, 247, 0.15)",
+                    color: "var(--purple)",
+                    border: "1px solid rgba(168, 85, 247, 0.3)",
+                  }}
+                >
+                  {getGradeNameById(selectedCodesGrade)}
+                </span>
               </h3>
               <p
                 style={{
@@ -3448,12 +4314,11 @@ export default function TeacherDashboardPage() {
                   marginTop: "4px",
                 }}
               >
-                استعراض وتصدير جميع أكواد الطلاب النشطة لكل مرحلة دراسية
-                وتوزيعها للطلاب
+                استعراض وتصدير جميع أكواد الطلاب لكل مرحلة دراسية، مع تصفية فورية للأكواد النشطة والمعطلة
               </p>
             </div>
 
-            {/* Controls */}
+            {/* Quick Actions */}
             <div
               style={{
                 display: "flex",
@@ -3462,47 +4327,13 @@ export default function TeacherDashboardPage() {
                 flexWrap: "wrap",
               }}
             >
-              {/* Grade Selector */}
-              <div
-                style={{ display: "flex", alignItems: "center", gap: "6px" }}
-              >
-                <span
-                  style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}
-                >
-                  الصف:
-                </span>
-                <select
-                  value={selectedCodesGrade}
-                  onChange={(e) => {
-                    const gId = Number(e.target.value);
-                    setSelectedCodesGrade(gId);
-                    fetchSubscriptionCodes(gId);
-                  }}
-                  className="form-input"
-                  style={{
-                    background: "#0b1120",
-                    color: "#fff",
-                    fontSize: "0.85rem",
-                    padding: "6px 12px",
-                  }}
-                >
-                  {GRADES.map((g) => (
-                    <option
-                      key={g.numericId || g.id}
-                      value={g.numericId || GRADE_ID_MAP[g.id] || 1}
-                    >
-                      {g.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
               {/* Refresh */}
               <button
                 onClick={() => fetchSubscriptionCodes(selectedCodesGrade)}
                 className="btn-secondary"
-                style={{ fontSize: "0.85rem", padding: "6px 12px" }}
+                style={{ fontSize: "0.85rem", padding: "7px 14px" }}
                 disabled={isLoadingCodes}
+                title="تحديث الأكواد من الخادم"
               >
                 <RefreshCw
                   size={14}
@@ -3512,347 +4343,453 @@ export default function TeacherDashboardPage() {
               </button>
 
               {/* Copy All Codes */}
-              {subscriptionCodesList.length > 0 && (
+              {filteredCodes.length > 0 && (
                 <button
                   onClick={() => {
-                    const allCodesText = subscriptionCodesList
+                    const allCodesText = filteredCodes
                       .map(
                         (c) =>
-                          `${c.student_name || "طالب"}: ${c.subscription_code}`,
+                          `${c.student_name || "طالب"}: ${getSubscriptionCode(c.subscription_code, c.subscription, c)}`,
                       )
                       .join("\n");
                     navigator.clipboard?.writeText(allCodesText);
                     showToast(
-                      `تم نسخ ${subscriptionCodesList.length} كود اشتراك بنجاح! 📋`,
+                      `تم نسخ ${filteredCodes.length} كود اشتراك بنجاح! 📋`,
                     );
                   }}
                   className="btn-primary"
-                  style={{ fontSize: "0.85rem", padding: "6px 14px" }}
+                  style={{ fontSize: "0.85rem", padding: "7px 16px" }}
+                  title="نسخ جميع الأكواد المعروضة حالياً"
                 >
                   <Copy size={14} />
-                  <span>نسخ جميع الأكواد ({subscriptionCodesList.length})</span>
+                  <span>نسخ الأكواد المعروضة ({filteredCodes.length})</span>
                 </button>
               )}
             </div>
           </div>
 
-          {/* Search within Codes */}
-          <div
-            style={{
-              marginBottom: "1rem",
-              maxWidth: "340px",
-              position: "relative",
-            }}
-          >
-            <input
-              type="text"
-              placeholder="ابحث باسم الطالب أو كود الاشتراك..."
-              value={codesSearchQuery}
-              onChange={(e) => setCodesSearchQuery(e.target.value)}
-              className="form-input"
-              style={{
-                fontSize: "0.85rem",
-                paddingLeft: "1rem",
-                paddingRight: "2.5rem",
-              }}
-            />
-            <Search
-              size={15}
-              style={{
-                position: "absolute",
-                right: "12px",
-                top: "50%",
-                transform: "translateY(-50%)",
-                color: "var(--text-muted)",
-              }}
-            />
+          {/* Professional Modern Filter Bar */}
+          <div className="modern-filter-bar">
+            {/* Row 1: Search & Status Filters */}
+            <div className="modern-filter-row">
+              <div className="modern-search-box">
+                <span className="modern-search-icon">
+                  <Search size={15} />
+                </span>
+                <input
+                  type="text"
+                  placeholder="بحث باسم الطالب أو كود الاشتراك..."
+                  value={codesSearchQuery}
+                  onChange={(e) => setCodesSearchQuery(e.target.value, { replace: true })}
+                  className="modern-search-input"
+                />
+                {codesSearchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setCodesSearchQuery("")}
+                    className="modern-search-clear"
+                    title="مسح البحث"
+                  >
+                    <X size={13} />
+                  </button>
+                )}
+              </div>
+
+              {/* Status Segmented Filter */}
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                <div className="status-filter-group" role="group" aria-label="تصفية حالة الأكواد">
+                  <button
+                    type="button"
+                    onClick={() => setCodesStatus("all")}
+                    className={`status-filter-btn ${codesStatus === "all" ? "is-active" : ""}`}
+                  >
+                    <span>الكل</span>
+                    <span className="status-filter-count">{codesStats.total}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setCodesStatus("active")}
+                    className={`status-filter-btn ${codesStatus === "active" ? "is-active" : ""}`}
+                  >
+                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--emerald)" }} />
+                    <span>النشطة</span>
+                    <span className="status-filter-count">{codesStats.active}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setCodesStatus("deactivated")}
+                    className={`status-filter-btn is-deactivated ${codesStatus === "deactivated" ? "is-active" : ""}`}
+                  >
+                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--rose)" }} />
+                    <span>المعطلة</span>
+                    <span className="status-filter-count">{codesStats.deactivated}</span>
+                  </button>
+                </div>
+
+                {/* Quick Deactivated Shortcut Button */}
+                <button
+                  type="button"
+                  onClick={() => setCodesStatus(codesStatus === "deactivated" ? "all" : "deactivated")}
+                  className={`btn-quick-deactivated ${codesStatus === "deactivated" ? "is-active" : ""}`}
+                  title={codesStatus === "deactivated" ? "إظهار جميع الأكواد" : "تصفية وعرض الأكواد المعطلة فقط"}
+                >
+                  <UserX size={15} />
+                  <span>{codesStatus === "deactivated" ? "إلغاء فلتر المعطلين" : "عرض الأكواد المعطلة فقط"}</span>
+                  <span className="badge-pill">{codesStats.deactivated}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Row 2: Grade Selection & Reset Actions */}
+            <div className="modern-filter-row" style={{ paddingTop: "0.25rem", borderTop: "1px solid rgba(148, 163, 184, 0.08)" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                <span style={{ fontSize: "0.8rem", color: "var(--text-muted)", fontWeight: 700 }}>
+                  المرحلة الدراسية:
+                </span>
+                <GradeFilter
+                  value={selectedCodesGrade}
+                  showLabel={false}
+                  options={GRADES.map((grade) => ({
+                    value: grade.numericId || GRADE_ID_MAP[grade.id] || 1,
+                    label: grade.shortName || grade.name,
+                  }))}
+                  disabled={isLoadingCodes}
+                  onChange={(gradeId) => {
+                    if (Number(gradeId) === selectedCodesGrade) return;
+                    setSelectedCodesGrade(Number(gradeId));
+                  }}
+                />
+              </div>
+
+              {(codesSearchQuery || codesStatus !== "all") && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCodesSearchQuery("");
+                    setCodesStatus("all");
+                  }}
+                  className="modern-filter-reset"
+                  title="إلغاء جميع الفلاتر"
+                >
+                  <X size={13} />
+                  <span>إعادة ضبط التصفية</span>
+                </button>
+              )}
+            </div>
           </div>
 
-          {/* Table */}
+          {/* Table / Content */}
           {isLoadingCodes ? (
             <div
               style={{
                 textAlign: "center",
-                padding: "3rem",
+                padding: "3.5rem 1rem",
                 color: "var(--cyan)",
               }}
             >
               <RefreshCw
-                size={24}
+                size={28}
                 className="animate-spin"
-                style={{ margin: "0 auto 8px" }}
+                style={{ margin: "0 auto 10px" }}
               />
-              <p>جاري تحميل أكواد الاشتراك...</p>
+              <p style={{ fontWeight: 700 }}>جاري تحميل وتحديث أكواد الاشتراك...</p>
+            </div>
+          ) : filteredCodes.length === 0 ? (
+            <div
+              className="feature-card"
+              style={{
+                padding: "3rem 1.5rem",
+                textAlign: "center",
+                background: "rgba(15, 23, 42, 0.6)",
+                border: "1px dashed rgba(148, 163, 184, 0.2)",
+                borderRadius: "16px",
+              }}
+            >
+              {codesStatus === "deactivated" ? (
+                <>
+                  <div
+                    style={{
+                      width: 52,
+                      height: 52,
+                      borderRadius: "50%",
+                      background: "rgba(16, 185, 129, 0.1)",
+                      display: "grid",
+                      placeItems: "center",
+                      margin: "0 auto 1rem",
+                      color: "var(--emerald)",
+                    }}
+                  >
+                    <CheckCircle2 size={28} />
+                  </div>
+                  <h4 style={{ color: "#fff", fontSize: "1rem", fontWeight: 800 }}>
+                    لا توجد أكواد معطلة لهذا الصف حالياً ✨
+                  </h4>
+                  <p style={{ color: "var(--text-muted)", fontSize: "0.82rem", marginTop: "6px" }}>
+                    جميع أكواد الطلاب في {getGradeNameById(selectedCodesGrade)} نشطة وتعمل بشكل طبيعي.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setCodesStatus("all")}
+                    className="btn-secondary"
+                    style={{ marginTop: "1rem", fontSize: "0.82rem", padding: "6px 14px" }}
+                  >
+                    عرض جميع الأكواد
+                  </button>
+                </>
+              ) : codesSearchQuery ? (
+                <>
+                  <Search size={36} style={{ color: "var(--text-muted)", margin: "0 auto 1rem" }} />
+                  <h4 style={{ color: "#fff", fontSize: "1rem", fontWeight: 800 }}>
+                    لا توجد أكواد مطابقة لبحثك: "{codesSearchQuery}"
+                  </h4>
+                  <p style={{ color: "var(--text-muted)", fontSize: "0.82rem", marginTop: "6px" }}>
+                    جرّب البحث باسم طالب آخر أو إلغاء كلمة البحث الحالية.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setCodesSearchQuery("")}
+                    className="btn-secondary"
+                    style={{ marginTop: "1rem", fontSize: "0.82rem", padding: "6px 14px" }}
+                  >
+                    مسح البحث
+                  </button>
+                </>
+              ) : (
+                <>
+                  <Key size={40} style={{ color: "var(--text-muted)", margin: "0 auto 1rem" }} />
+                  <h4 style={{ color: "#fff", fontSize: "1rem", fontWeight: 800 }}>
+                    لا توجد أكواد اشتراك معتمدة لهذا الصف حالياً
+                  </h4>
+                  <p style={{ color: "var(--text-muted)", fontSize: "0.82rem", marginTop: "6px" }}>
+                    يمكنك قبول طلبات الطلاب أو إضافة طالب وتفعيل اشتراكه من تبويب "طلبات التفعيل" أو "سجل الطلاب"
+                  </p>
+                </>
+              )}
             </div>
           ) : (
-            (() => {
-              const filtered = (subscriptionCodesList || []).filter((item) => {
-                if (!codesSearchQuery.trim()) return true;
-                const q = codesSearchQuery.toLowerCase();
-                const name = (item.student_name || "").toLowerCase();
-                const code = getSubscriptionCode(
-                  item.subscription_code,
-                  item.subscription,
-                  item,
-                ).toLowerCase();
-                return name.includes(q) || code.includes(q);
-              });
+            <div className="modern-table-container">
+              <div className="modern-table-scroll">
+                <table className="modern-table">
+                  <thead>
+                    <tr>
+                      <th style={{ width: "6%", textAlign: "center" }}>#</th>
+                      <th style={{ width: "26%" }}>اسم الطالب</th>
+                      <th style={{ width: "22%", textAlign: "center" }}>كود الدخول (كود الاشتراك)</th>
+                      <th style={{ width: "18%", textAlign: "center" }}>المرحلة الدراسية</th>
+                      <th style={{ width: "14%", textAlign: "center" }}>حالة الكود</th>
+                      <th style={{ width: "14%", textAlign: "center" }}>إجراءات</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredCodes.map((item, idx) => {
+                      const subscriptionCode = getSubscriptionCode(
+                        item.subscription_code,
+                        item.subscription,
+                        item,
+                      );
+                      const isSubscriptionInactive = getCodeItemInactiveState(item);
+                      const isCopied = copiedCode === subscriptionCode;
 
-              if (filtered.length === 0) {
-                return (
-                  <div
-                    className="feature-card"
-                    style={{ padding: "3rem", textAlign: "center" }}
-                  >
-                    <Key
-                      size={40}
-                      style={{
-                        color: "var(--text-muted)",
-                        margin: "0 auto 1rem",
-                      }}
-                    />
-                    <h4
-                      style={{
-                        color: "#fff",
-                        fontSize: "1rem",
-                        fontWeight: 800,
-                      }}
-                    >
-                      لا توجد أكواد اشتراك معتمدة لهذا الصف حالياً
-                    </h4>
-                    <p
-                      style={{
-                        color: "var(--text-muted)",
-                        fontSize: "0.8rem",
-                        marginTop: "6px",
-                      }}
-                    >
-                      يمكنك قبول طلبات الطلاب أو إضافة طالب وتفعيل اشتراكه من
-                      تبويب "طلبات التفعيل" أو "سجل الطلاب"
-                    </p>
-                  </div>
-                );
-              }
-
-              return (
-                <div style={{ overflowX: "auto" }}>
-                  <table
-                    className="data-table"
-                    style={{ width: "100%", textAlign: "right" }}
-                  >
-                    <thead>
-                      <tr>
-                        <th>#</th>
-                        <th>اسم الطالب</th>
-                        <th>كود الاشتراك (كود الدخول)</th>
-                        <th>المرحلة الدراسية</th>
-                        <th>حالة الكود</th>
-                        <th>إجراءات</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filtered.map((item, idx) => {
-                        const subscriptionCode = getSubscriptionCode(
-                          item.subscription_code,
-                          item.subscription,
-                          item,
-                        );
-                        const linkedApprovedRecord = approvedSubscriptions.find(
-                          (record) => {
-                            const recordCode = getSubscriptionCode(
-                              record.subscription_code,
-                              record.subscription,
-                              record.active_subscription,
-                              record.subscriptions?.[0],
-                              record,
-                            );
-                            const recordStudentId =
-                              record.student?.id ||
-                              record.user?.id ||
-                              record.student_id ||
-                              record.user_id;
-                            const codeStudentId =
-                              item.student?.id ||
-                              item.user?.id ||
-                              item.student_id ||
-                              item.user_id;
-                            const recordStudent = record.student || record.user || record;
-                            const recordStudentName =
-                              `${record.first_name || recordStudent.first_name || ""} ${record.last_name || recordStudent.last_name || ""}`.trim() ||
-                              record.student_name ||
-                              record.name ||
-                              recordStudent.name ||
-                              "";
-                            const codeStudentName =
-                              item.student_name ||
-                              item.student?.name ||
-                              item.user?.name ||
-                              item.name ||
-                              "";
-                            const namesMatch =
-                              recordStudentName.trim().replace(/\s+/g, " ").toLowerCase() ===
-                              codeStudentName.trim().replace(/\s+/g, " ").toLowerCase();
-                            return (
-                              (recordCode && recordCode === subscriptionCode) ||
-                              (recordStudentId != null &&
-                                codeStudentId != null &&
-                                String(recordStudentId) === String(codeStudentId)) ||
-                              (recordStudentName && codeStudentName && namesMatch)
-                            );
-                          },
-                        );
-                        const linkedSubscription = getSubscriptionRecord(
-                          linkedApprovedRecord,
-                        );
-                        const codeSubscription = getSubscriptionRecord(item);
-                        const inactiveStatuses = [
-                          "inactive",
-                          "cancelled",
-                          "canceled",
-                          "deactivated",
-                          "disabled",
-                          "expired",
-                        ];
-                        const activeStatuses = ["active", "approved", "enabled"];
-                        const statusCandidates = [
-                          getSubscriptionStatus(
-                            linkedApprovedRecord,
-                            linkedSubscription,
-                            linkedApprovedRecord?.student,
-                          ),
-                          linkedSubscription?.status,
-                          linkedApprovedRecord?.subscription_status,
-                          linkedApprovedRecord?.subscriptionStatus,
-                          linkedApprovedRecord?.status,
-                          codeSubscription?.status,
-                          item.subscription_status,
-                          item.subscriptionStatus,
-                          item.status,
-                          linkedSubscription?.is_active === false ||
-                          linkedApprovedRecord?.is_active === false ||
-                          codeSubscription?.is_active === false ||
-                          item.is_active === false
-                            ? "inactive"
-                            : linkedSubscription?.is_active === true ||
-                                linkedApprovedRecord?.is_active === true ||
-                                codeSubscription?.is_active === true ||
-                                item.is_active === true
-                              ? "active"
-                              : "",
-                        ]
-                          .filter(Boolean)
-                          .map((status) => String(status).toLowerCase());
-                        const linkedStatus =
-                          statusCandidates.find((status) =>
-                            inactiveStatuses.includes(status),
-                          ) ||
-                          statusCandidates[0] ||
-                          "";
-                        const isSubscriptionInactive =
-                          inactiveStatuses.includes(linkedStatus);
-                        const hasSubscriptionStatus =
-                          inactiveStatuses.includes(linkedStatus) ||
-                          activeStatuses.includes(linkedStatus);
-                        const isCopied = copiedCode === subscriptionCode;
-                        return (
-                          <tr key={subscriptionCode || idx}>
-                            <td
+                      return (
+                        <tr
+                          key={subscriptionCode || item.id || idx}
+                          className={isSubscriptionInactive ? "row-deactivated" : ""}
+                        >
+                          {/* Row Index */}
+                          <td style={{ textAlign: "center" }}>
+                            <span
                               style={{
-                                color: "var(--text-muted)",
-                                fontSize: "0.8rem",
+                                display: "inline-grid",
+                                placeItems: "center",
+                                width: "24px",
+                                height: "24px",
+                                borderRadius: "6px",
+                                color: "#94a3b8",
+                                background: "rgba(148, 163, 184, 0.08)",
+                                fontSize: "0.75rem",
+                                fontWeight: 800,
                               }}
                             >
                               {idx + 1}
-                            </td>
-                            <td style={{ fontWeight: 800, color: "#fff" }}>
-                              {item.student_name || "طالب المنصة"}
-                            </td>
-                            <td>
+                            </span>
+                          </td>
+
+                          {/* Student Info */}
+                          <td>
+                            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
                               <span
                                 style={{
-                                  fontFamily: "monospace",
-                                  fontSize: "0.95rem",
+                                  width: "34px",
+                                  height: "34px",
+                                  display: "grid",
+                                  placeItems: "center",
+                                  flexShrink: 0,
+                                  borderRadius: "10px",
+                                  color: isSubscriptionInactive ? "var(--rose)" : "var(--purple)",
+                                  background: isSubscriptionInactive
+                                    ? "rgba(244, 63, 94, 0.12)"
+                                    : "rgba(168, 85, 247, 0.12)",
+                                  border: `1px solid ${isSubscriptionInactive ? "rgba(244, 63, 94, 0.25)" : "rgba(168, 85, 247, 0.25)"}`,
                                   fontWeight: 800,
-                                  color: "var(--cyan)",
-                                  background: "rgba(6, 182, 212, 0.12)",
-                                  padding: "4px 10px",
-                                  borderRadius: "6px",
-                                  border: "1px solid rgba(6, 182, 212, 0.25)",
-                                  letterSpacing: "1px",
+                                  fontSize: "0.85rem",
                                 }}
                               >
-                                {subscriptionCode || "—"}
+                                {(item.student_name || "ط").trim().charAt(0)}
                               </span>
-                            </td>
-                            <td>
-                              <span className="badge-tag">
-                                {getGradeNameById(selectedCodesGrade)}
-                              </span>
-                            </td>
-                            <td>
-                                                            <span
-                                className="badge-tag"
-                                style={{
-                                  background: !hasSubscriptionStatus
-                                    ? "rgba(148, 163, 184, 0.12)"
-                                    : isSubscriptionInactive
-                                      ? "rgba(244, 63, 94, 0.15)"
-                                      : "rgba(16, 185, 129, 0.15)",
-                                  color: !hasSubscriptionStatus
-                                    ? "var(--text-muted)"
-                                    : isSubscriptionInactive
-                                      ? "var(--rose)"
-                                      : "var(--emerald)",
-                                  borderColor: !hasSubscriptionStatus
-                                    ? "rgba(148, 163, 184, 0.3)"
-                                    : isSubscriptionInactive
-                                      ? "rgba(244, 63, 94, 0.3)"
-                                      : "rgba(16, 185, 129, 0.3)",
-                                  whiteSpace: "nowrap",
-                                }}
-                              >
-                                {!hasSubscriptionStatus
-                                  ? "\u062d\u0627\u0644\u0629 \u0627\u0644\u0627\u0634\u062a\u0631\u0627\u0643 \u063a\u064a\u0631 \u0645\u062a\u0627\u062d\u0629"
-                                  : isSubscriptionInactive
-                                    ? "\u0645\u0639\u0637\u0644"
-                                    : "\u0646\u0634\u0637"}
-                              </span>
-                            </td>
-                            <td>
-                              <button
-                                onClick={() =>
-                                  handleCopyCode(subscriptionCode)
-                                }
-                                className="btn-secondary"
-                                style={{
-                                  fontSize: "0.75rem",
-                                  padding: "5px 12px",
-                                  display: "inline-flex",
-                                  alignItems: "center",
-                                  gap: "6px",
-                                }}
-                              >
-                                {isCopied ? (
-                                  <Check
-                                    size={14}
-                                    style={{ color: "var(--emerald)" }}
-                                  />
-                                ) : (
-                                  <Copy size={14} />
-                                )}
-                                <span>
-                                  {isCopied ? "تم النسخ" : "نسخ الكود"}
+                              <div>
+                                <span style={{ fontWeight: 800, color: "#f8fafc", display: "block" }}>
+                                  {item.student_name || "طالب المنصة"}
                                 </span>
-                              </button>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+                                {item.phone && (
+                                  <span style={{ fontSize: "0.72rem", color: "var(--text-muted)", direction: "ltr" }}>
+                                    {item.phone}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* Subscription Code */}
+                          <td style={{ textAlign: "center" }}>
+                            <span
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: "6px",
+                                fontFamily: "monospace",
+                                fontSize: "0.85rem",
+                                fontWeight: 800,
+                                color: isSubscriptionInactive ? "#fda4af" : "#67e8f9",
+                                background: isSubscriptionInactive ? "rgba(244, 63, 94, 0.1)" : "rgba(6, 182, 212, 0.1)",
+                                padding: "6px 10px",
+                                borderRadius: "8px",
+                                border: `1px solid ${isSubscriptionInactive ? "rgba(244, 63, 94, 0.25)" : "rgba(6, 182, 212, 0.25)"}`,
+                                letterSpacing: "0.6px",
+                                direction: "ltr",
+                              }}
+                            >
+                              <Key size={13} />
+                              {subscriptionCode || "—"}
+                            </span>
+                          </td>
+
+                          {/* Grade */}
+                          <td style={{ textAlign: "center" }}>
+                            <span
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                padding: "4px 8px",
+                                borderRadius: "6px",
+                                border: "1px solid rgba(168, 85, 247, 0.2)",
+                                background: "rgba(168, 85, 247, 0.08)",
+                                color: "#d8b4fe",
+                                fontSize: "0.74rem",
+                                fontWeight: 700,
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {getGradeNameById(selectedCodesGrade)}
+                            </span>
+                          </td>
+
+                          {/* Code Status */}
+                          <td style={{ textAlign: "center" }}>
+                            <span
+                              className="badge-tag"
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: "6px",
+                                background: isSubscriptionInactive
+                                  ? "rgba(244, 63, 94, 0.12)"
+                                  : "rgba(16, 185, 129, 0.12)",
+                                color: isSubscriptionInactive ? "var(--rose)" : "var(--emerald)",
+                                borderColor: isSubscriptionInactive
+                                  ? "rgba(244, 63, 94, 0.28)"
+                                  : "rgba(16, 185, 129, 0.28)",
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              <span
+                                style={{
+                                  width: "6px",
+                                  height: "6px",
+                                  borderRadius: "50%",
+                                  background: isSubscriptionInactive ? "var(--rose)" : "var(--emerald)",
+                                  boxShadow: isSubscriptionInactive ? "0 0 6px rgba(244, 63, 94, 0.6)" : "0 0 6px rgba(16, 185, 129, 0.6)",
+                                }}
+                              />
+                              {isSubscriptionInactive ? "معطل" : "نشط"}
+                            </span>
+                          </td>
+
+                          {/* Actions */}
+                          <td style={{ textAlign: "center" }}>
+                            <button
+                              type="button"
+                              onClick={() => handleCopyCode(subscriptionCode)}
+                              className="btn-secondary"
+                              style={{
+                                fontSize: "0.75rem",
+                                padding: "6px 12px",
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: "6px",
+                                borderRadius: "8px",
+                                borderColor: isCopied
+                                  ? "rgba(16, 185, 129, 0.4)"
+                                  : "rgba(148, 163, 184, 0.2)",
+                                color: isCopied ? "var(--emerald)" : "#cbd5e1",
+                              }}
+                              title="نسخ كود الاشتراك للحافظة"
+                            >
+                              {isCopied ? (
+                                <Check size={13} style={{ color: "var(--emerald)" }} />
+                              ) : (
+                                <Copy size={13} />
+                              )}
+                              <span>{isCopied ? "تم النسخ" : "نسخ الكود"}</span>
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Table Footer Summary */}
+              <div className="modern-table-footer">
+                <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+                  <span>
+                    عرض <strong style={{ color: "#fff" }}>{filteredCodes.length}</strong> من أصل{" "}
+                    <strong style={{ color: "#fff" }}>{subscriptionCodesList.length}</strong> كود
+                  </span>
+                  <span style={{ color: "rgba(148, 163, 184, 0.4)" }}>•</span>
+                  <span style={{ color: "var(--emerald)" }}>النشطة: {codesStats.active}</span>
+                  <span style={{ color: "rgba(148, 163, 184, 0.4)" }}>•</span>
+                  <span style={{ color: "var(--rose)" }}>المعطلة: {codesStats.deactivated}</span>
                 </div>
-              );
-            })()
+
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <span
+                    style={{
+                      fontSize: "0.73rem",
+                      padding: "3px 8px",
+                      borderRadius: "6px",
+                      background: "rgba(168, 85, 247, 0.12)",
+                      color: "#d8b4fe",
+                      border: "1px solid rgba(168, 85, 247, 0.2)",
+                    }}
+                  >
+                    {getGradeNameById(selectedCodesGrade)}
+                  </span>
+                </div>
+              </div>
+            </div>
           )}
         </div>
       )}
@@ -4122,51 +5059,6 @@ export default function TeacherDashboardPage() {
                 </div>
               </div>
 
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
-                  gap: "0.75rem",
-                  marginBottom: "1.25rem",
-                }}
-              >
-                <div>
-                  <label className="form-label" style={{ fontSize: "0.75rem" }}>
-                    تاريخ بداية الاشتراك
-                  </label>
-                  <input
-                    type="date"
-                    value={newStudentData.start_date}
-                    onChange={(e) =>
-                      setNewStudentData({
-                        ...newStudentData,
-                        start_date: e.target.value,
-                      })
-                    }
-                    className="form-input"
-                    style={{ background: "#0b1120", color: "#fff" }}
-                  />
-                </div>
-                <div>
-                  <label className="form-label" style={{ fontSize: "0.75rem" }}>
-                    تاريخ انتهاء الكود والاشتراك
-                  </label>
-                  <input
-                    type="date"
-                    value={newStudentData.end_date}
-                    onChange={(e) =>
-                      setNewStudentData({
-                        ...newStudentData,
-                        end_date: e.target.value,
-                        code_expires_at: e.target.value,
-                      })
-                    }
-                    className="form-input"
-                    style={{ background: "#0b1120", color: "#fff" }}
-                  />
-                </div>
-              </div>
-
               <div style={{ display: "flex", gap: "0.75rem" }}>
                 <button
                   type="submit"
@@ -4189,381 +5081,29 @@ export default function TeacherDashboardPage() {
         </div>
       )}
 
+            {/* ==================================================================== */}
+      {/* MODAL: VIEW STUDENT DETAILS & EXAM HISTORY BREAKDOWN                 */}
       {/* ==================================================================== */}
-      {/* MODAL: VIEW STUDENT DETAILS (GET /api/v1/admin/students/{id})         */}
-      {/* ==================================================================== */}
-      {viewingStudent && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,0.85)",
-            backdropFilter: "blur(10px)",
-            zIndex: 1000,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: "1rem",
-          }}
-        >
-          <div
-            className="form-card"
-            style={{
-              width: "100%",
-              maxWidth: "600px",
-              position: "relative",
-              maxHeight: "90vh",
-              overflowY: "auto",
-            }}
-          >
-            <button
-              onClick={() => setViewingStudent(null)}
-              style={{
-                position: "absolute",
-                top: "16px",
-                left: "16px",
-                background: "none",
-                border: "none",
-                color: "var(--text-muted)",
-                cursor: "pointer",
-              }}
-            >
-              <X size={20} />
-            </button>
+      <StudentExamHistoryModal
+        isOpen={Boolean(viewingStudent || examHistoryStudent)}
+        onClose={() => {
+          setViewingStudent(null);
+          setExamHistoryStudent(null);
+        }}
+        student={viewingStudent || examHistoryStudent}
+        lessonsList={lessonsList}
+        availableExams={adminExamsList}
+        onResetDevice={handleResetDeviceForStudent}
+        onDeactivate={openStudentDeactivationConfirmation}
+        onEdit={(std) => {
+          setViewingStudent(null);
+          setExamHistoryStudent(null);
+          setEditingStudent(std);
+        }}
+        isProcessingAction={isProcessingAction}
+      />
 
-            {/* Student Header */}
-            <div style={{ textAlign: "center", marginBottom: "1.5rem" }}>
-              <div
-                style={{
-                  width: "64px",
-                  height: "64px",
-                  borderRadius: "18px",
-                  background: "linear-gradient(135deg, #4f46e5, #06b6d4)",
-                  color: "#fff",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  fontSize: "1.6rem",
-                  fontWeight: 900,
-                  margin: "0 auto 12px",
-                }}
-              >
-                {viewingStudentName.charAt(0)}
-              </div>
-              <h2
-                style={{
-                  fontSize: "1.3rem",
-                  fontWeight: 900,
-                  color: "#fff",
-                  marginBottom: "4px",
-                }}
-              >
-                {viewingStudentName}
-              </h2>
-              <span className="badge-tag" style={{ marginTop: "4px" }}>
-                {getArabicGradeName(
-                  viewingStudent.grade,
-                  viewingStudent.grade_id,
-                )}
-              </span>
-            </div>
-
-            {/* Basic Info */}
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: "8px",
-                background: "#050914",
-                border: "1px solid rgba(255,255,255,0.06)",
-                borderRadius: "12px",
-                padding: "14px",
-                marginBottom: "1rem",
-                fontSize: "0.85rem",
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  borderBottom: "1px solid rgba(255,255,255,0.05)",
-                  paddingBottom: "6px",
-                }}
-              >
-                <span style={{ color: "var(--text-muted)" }}>
-                  كود الاشتراك:
-                </span>
-                <strong
-                  style={{
-                    color: "var(--cyan)",
-                    fontFamily: "monospace",
-                    letterSpacing: "1px",
-                  }}
-                >
-                  {getSubscriptionCode(
-                    viewingStudent.code,
-                    viewingStudent.subscription_code,
-                    viewingStudent.subscription,
-                  ) ||
-                    "قيد الاعتماد"}
-                </strong>
-              </div>
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  borderBottom: "1px solid rgba(255,255,255,0.05)",
-                  paddingBottom: "6px",
-                }}
-              >
-                <span style={{ color: "var(--text-muted)" }}>هاتف الطالب:</span>
-                <strong style={{ color: "#fff", direction: "ltr" }}>
-                  {viewingStudent.phone || "غير مسجل"}
-                </strong>
-              </div>
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  borderBottom: "1px solid rgba(255,255,255,0.05)",
-                  paddingBottom: "6px",
-                }}
-              >
-                <span style={{ color: "var(--text-muted)" }}>
-                  هاتف ولي الأمر:
-                </span>
-                <strong style={{ color: "#fff", direction: "ltr" }}>
-                  {viewingStudent.parentPhone ||
-                    viewingStudent.parent_phone ||
-                    "غير مسجل"}
-                </strong>
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between", borderBottom: "1px solid rgba(255,255,255,0.05)", paddingBottom: "6px" }}>
-                <span style={{ color: "var(--text-muted)" }}>حالة الحساب:</span>
-                <span
-                  style={{
-                    color:
-                      viewingStudent.status === "pending"
-                        ? "#f59e0b"
-                        : "var(--emerald)",
-                    fontWeight: 800,
-                  }}
-                >
-                  {viewingStudent.status === "pending"
-                    ? "قيد المراجعة"
-                    : "مفعّل ومعتمد"}
-                </span>
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between", borderBottom: "1px solid rgba(255,255,255,0.05)", paddingBottom: "6px" }}>
-                <span style={{ color: "var(--text-muted)" }}>تاريخ بدء الاشتراك:</span>
-                <strong style={{ color: "#fff" }}>
-                  {viewingStudent.start_date ||
-                    viewingStudent.subscription?.start_date ||
-                    viewingStudent.created_at?.split("T")[0] ||
-                    "—"}
-                </strong>
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between", borderBottom: "1px solid rgba(255,255,255,0.05)", paddingBottom: "6px" }}>
-                <span style={{ color: "var(--text-muted)" }}>صلاحية وانتهاء الكود:</span>
-                <strong style={{ color: "#fff" }}>
-                  {viewingStudent.end_date ||
-                    viewingStudent.subscription?.end_date ||
-                    viewingStudent.subscription?.expires_at ||
-                    viewingStudent.code_expires_at ||
-                    "—"}
-                </strong>
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between" }}>
-                <span style={{ color: "var(--text-muted)" }}>معرف الجهاز الموثوق:</span>
-                <strong
-                  style={{
-                    color: "var(--emerald)",
-                    fontFamily: "monospace",
-                    fontSize: "0.75rem",
-                    wordBreak: "break-all",
-                    direction: "ltr",
-                  }}
-                >
-                  {viewingStudent.trusted_device?.device_identifier ||
-                    (typeof viewingStudent.trusted_device === "string"
-                      ? viewingStudent.trusted_device
-                      : viewingStudent.device_identifier || "مسجل ومحمي 🔒")}
-                </strong>
-              </div>
-            </div>
-
-            {/* Activity Stats */}
-            <h3
-              style={{
-                fontSize: "0.9rem",
-                fontWeight: 800,
-                color: "var(--cyan)",
-                marginBottom: "10px",
-                display: "flex",
-                alignItems: "center",
-                gap: "6px",
-              }}
-            >
-              <BarChart2 size={16} /> إحصائيات النشاط والتقدم
-            </h3>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr 1fr",
-                gap: "10px",
-                marginBottom: "1.25rem",
-              }}
-            >
-              {[
-                {
-                  icon: <Video size={20} />,
-                  label: "فيديوهات شاهدها",
-                  value: completedLessons,
-                  total: totalLessons,
-                  color: "#06b6d4",
-                },
-                {
-                  icon: <FileQuestion size={20} />,
-                  label: "امتحانات أداها",
-                  value: completedQuizzes,
-                  total: totalQuizzes,
-                  color: "#a78bfa",
-                },
-                {
-                  icon: <BarChart2 size={20} />,
-                  label: "متوسط الدرجات",
-                  value: averageScore,
-                  total: null,
-                  color: "#10b981",
-                },
-              ].map((stat, i) => (
-                <div
-                  key={i}
-                  style={{
-                    background: "#050914",
-                    border: `1px solid ${stat.color}30`,
-                    borderRadius: "12px",
-                    padding: "14px 10px",
-                    textAlign: "center",
-                  }}
-                >
-                  <div
-                    style={{
-                      color: stat.color,
-                      marginBottom: "8px",
-                      display: "flex",
-                      justifyContent: "center",
-                    }}
-                  >
-                    {stat.icon}
-                  </div>
-                  <div
-                    style={{
-                      fontSize: "1.3rem",
-                      fontWeight: 900,
-                      color: "#fff",
-                    }}
-                  >
-                    {stat.value}
-                    {stat.total !== null ? (
-                      <span
-                        style={{
-                          fontSize: "0.75rem",
-                          color: "var(--text-muted)",
-                          fontWeight: 400,
-                        }}
-                      >
-                        /{stat.total}
-                      </span>
-                    ) : (
-                      ""
-                    )}
-                  </div>
-                  <div
-                    style={{
-                      fontSize: "0.7rem",
-                      color: "var(--text-muted)",
-                      marginTop: "3px",
-                    }}
-                  >
-                    {stat.label}
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            {/* Quick Action Management Buttons */}
-            <div
-              style={{
-                display: "flex",
-                gap: "8px",
-                flexWrap: "wrap",
-                marginBottom: "1rem",
-                padding: "10px",
-                background: "rgba(255,255,255,0.02)",
-                borderRadius: "10px",
-                border: "1px solid rgba(255,255,255,0.06)",
-              }}
-            >
-              {viewingStudent.status === "inactive" ||
-              viewingStudent.status === "cancelled" ? (
-                <span className="badge-tag">إعادة التفعيل غير متاحة</span>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() =>
-                    openStudentDeactivationConfirmation(viewingStudent)
-                  }
-                  disabled={isProcessingAction}
-                  className="btn-secondary"
-                  style={{
-                    flex: 1,
-                    justifyContent: "center",
-                    color: "var(--rose)",
-                    borderColor: "rgba(244, 63, 94, 0.3)",
-                    fontSize: "0.8rem",
-                  }}
-                >
-                  <PowerOff size={15} />
-                  <span>تعطيل الحساب</span>
-                </button>
-              )}
-
-              {hasActiveTrustedDevice(viewingStudent) && (
-                <button
-                  type="button"
-                  onClick={async () => {
-                    await handleResetDeviceForStudent(viewingStudent);
-                  }}
-                disabled={isProcessingAction}
-                className="btn-secondary"
-                style={{
-                  flex: 1,
-                  justifyContent: "center",
-                  color: "var(--amber)",
-                  borderColor: "rgba(245, 158, 11, 0.3)",
-                  fontSize: "0.8rem",
-                }}
-              >
-                <RotateCcw size={15} />
-                <span>إعادة ضبط الجهاز</span>
-                </button>
-              )}
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setViewingStudent(null)}
-              className="btn-secondary"
-              style={{ width: "100%", justifyContent: "center" }}
-            >
-              <span>إغلاق</span>
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* ==================================================================== */}
+{/* ==================================================================== */}
       {/* MODAL: EDIT STUDENT (PUT /api/v1/admin/students/{id})                  */}
       {/* ==================================================================== */}
       {editingStudent && (
@@ -4830,16 +5370,78 @@ export default function TeacherDashboardPage() {
                   type="url"
                   required
                   value={newLessonData.videoUrl}
-                  onChange={(e) =>
+                  onChange={(e) => {
                     setNewLessonData({
                       ...newLessonData,
                       videoUrl: e.target.value,
-                    })
-                  }
+                      duration: "",
+                    });
+                    setLessonDurationStatus("");
+                  }}
                   className="form-input"
                   dir="ltr"
                 />
+                <div
+                  role="status"
+                  style={{
+                    marginTop: "0.5rem",
+                    color: newLessonData.duration ? "var(--emerald)" : "var(--text-muted)",
+                    fontSize: "0.8rem",
+                  }}
+                >
+                  {lessonDurationStatus ||
+                    (newLessonData.videoUrl
+                      ? "جارٍ تحديد مدة الشرح من الرابط..."
+                      : "مدة الشرح ستُحسب تلقائيًا من رابط الفيديو")}
+                  {newLessonData.duration ? ` — ${newLessonData.duration}` : ""}
+                </div>
               </div>
+              <section
+                style={{
+                  padding: "1rem",
+                  marginTop: "1rem",
+                  border: "1px solid var(--border-color, #334155)",
+                  borderRadius: "12px",
+                  background: "rgba(15, 23, 42, 0.55)",
+                }}
+              >
+                <h3 style={{ color: "#fff", fontWeight: 800, marginBottom: "0.75rem" }}>
+                  سؤال المحاضرة والاختيارات
+                </h3>
+                <div className="form-group" style={{ marginBottom: "0.75rem" }}>
+                  <label className="form-label" htmlFor="lesson-quiz-question">السؤال *</label>
+                  <textarea
+                    id="lesson-quiz-question"
+                    required
+                    className="form-input"
+                    rows={3}
+                    value={newLessonData.quizQuestion}
+                    onChange={(e) => setNewLessonData({ ...newLessonData, quizQuestion: e.target.value })}
+                    placeholder="اكتبي سؤالًا على محتوى المحاضرة"
+                  />
+                </div>
+                {[1, 2, 3, 4].map((number) => (
+                  <div key={number} style={{ display: "flex", gap: "0.6rem", alignItems: "center", marginBottom: "0.6rem" }}>
+                    <input
+                      type="radio"
+                      name="lesson-quiz-correct-option"
+                      aria-label={`تحديد الاختيار ${number} كإجابة صحيحة`}
+                      checked={newLessonData.quizCorrectOption === number}
+                      onChange={() => setNewLessonData({ ...newLessonData, quizCorrectOption: number })}
+                    />
+                    <input
+                      type="text"
+                      required
+                      className="form-input"
+                      aria-label={`الاختيار ${number}`}
+                      value={newLessonData[`quizOption${number}`]}
+                      onChange={(e) => setNewLessonData({ ...newLessonData, [`quizOption${number}`]: e.target.value })}
+                      placeholder={`الاختيار ${number}${newLessonData.quizCorrectOption === number ? " (الإجابة الصحيحة)" : ""}`}
+                    />
+                  </div>
+                ))}
+                <small style={{ color: "var(--text-muted)" }}>حددي الدائرة بجانب الإجابة الصحيحة.</small>
+              </section>
               <div
                 style={{
                   display: "flex",
@@ -4983,6 +5585,7 @@ export default function TeacherDashboardPage() {
                   <label className="form-label">الخيار (جـ)</label>
                   <input
                     type="text"
+                    required
                     value={newQuestionData.opt3}
                     onChange={(e) =>
                       setNewQuestionData({
@@ -4997,6 +5600,7 @@ export default function TeacherDashboardPage() {
                   <label className="form-label">الخيار (د)</label>
                   <input
                     type="text"
+                    required
                     value={newQuestionData.opt4}
                     onChange={(e) =>
                       setNewQuestionData({
@@ -5809,6 +6413,8 @@ export default function TeacherDashboardPage() {
           </div>
         </div>
       )}
+
+
     </div>
   );
 }

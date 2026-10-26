@@ -86,33 +86,33 @@ export const tokenStorage = {
  * for student device binding.
  */
 export function getOrCreateDeviceId() {
-  try {
-    let id = localStorage.getItem(DEVICE_ID_KEY);
+  if (typeof localStorage === "undefined") {
+    throw new Error("لا يمكن إنشاء معرّف الجهاز في هذه البيئة");
+  }
 
-    if (!id) {
-      if (
-        typeof crypto !== "undefined" &&
-        typeof crypto.randomUUID === "function"
-      ) {
-        id = crypto.randomUUID();
-      } else {
-        id = "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(
-          /[xy]/g,
-          function (c) {
-            const r = (Math.random() * 16) | 0;
-            const v = c === "x" ? r : (r & 0x3) | 0x8;
-            return v.toString(16);
-          },
-        );
-      }
+  let id = localStorage.getItem(DEVICE_ID_KEY);
 
-      localStorage.setItem(DEVICE_ID_KEY, id);
+  if (!id) {
+    if (
+      typeof crypto !== "undefined" &&
+      typeof crypto.randomUUID === "function"
+    ) {
+      id = crypto.randomUUID();
+    } else {
+      id = "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(
+        /[xy]/g,
+        function (c) {
+          const r = (Math.random() * 16) | 0;
+          const v = c === "x" ? r : (r & 0x3) | 0x8;
+          return v.toString(16);
+        },
+      );
     }
 
-    return id;
-  } catch {
-    return "8f4c2e91-7a32-4d8b-91a2-5e6f3c8d1204";
+    localStorage.setItem(DEVICE_ID_KEY, id);
   }
+
+  return id;
 }
 
 // ======================================================================
@@ -143,8 +143,11 @@ export const GRADE_ID_MAP = {
   "الصف الأول الإعدادي": 6,
 };
 
-export const getGradeNameById = (id) =>
-  GRADE_ID_MAP[id] || "الصف الثالث الثانوي";
+export const getGradeNameById = (id) => {
+  const value = GRADE_ID_MAP[id];
+  if (typeof value === "string") return value;
+  return GRADE_ID_MAP[value] || "غير محدد";
+};
 
 export const getGradeIdByName = (name) => GRADE_ID_MAP[name] || 1;
 
@@ -185,6 +188,9 @@ function translateApiError(message) {
 
   // Never expose an untranslated English server or network error in the UI.
   if (/[a-z]/i.test(message)) {
+    if (/abort|timed?\s*out/i.test(message)) {
+      return "انتهت مهلة الاتصال بالخادم. يُرجى المحاولة مرة أخرى.";
+    }
     return "حدث خطأ أثناء تنفيذ الطلب. يُرجى مراجعة البيانات والمحاولة مرة أخرى.";
   }
   return message;
@@ -192,12 +198,17 @@ function translateApiError(message) {
 
 async function request(endpoint, options = {}, authType = null) {
   const url = buildApiUrl(endpoint);
+  const { timeoutMs = 15000, ...fetchOptions } = options;
+  const isFormData =
+    typeof FormData !== "undefined" && fetchOptions.body instanceof FormData;
 
   const headers = {
-    "Content-Type": "application/json",
     Accept: "application/json",
     ...options.headers,
   };
+  if (!isFormData && !headers["Content-Type"]) {
+    headers["Content-Type"] = "application/json";
+  }
 
   if (authType === "admin") {
     const token = tokenStorage.getAdminToken();
@@ -218,12 +229,12 @@ async function request(endpoint, options = {}, authType = null) {
 
     const timeoutId = setTimeout(() => {
       controller.abort();
-    }, 15000);
+    }, timeoutMs);
 
     let response;
     try {
       response = await fetch(url, {
-        ...options,
+        ...fetchOptions,
         headers,
         signal: controller.signal,
       });
@@ -284,6 +295,53 @@ async function request(endpoint, options = {}, authType = null) {
   }
 }
 
+async function requestStudentFile(endpoint) {
+  const token = tokenStorage.getStudentToken();
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 120000);
+  let response;
+  try {
+    response = await fetch(buildApiUrl(endpoint), {
+      method: "GET",
+      headers: {
+        Accept: "application/pdf, application/octet-stream, application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new Error(
+        "انتهت مهلة تنزيل الملف. يُرجى المحاولة مرة أخرى.",
+        { cause: error },
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => null);
+    const message = translateApiError(
+      data?.message || data?.error || `خطأ ${response.status}: تعذر تنزيل الملف`,
+    );
+    const error = new Error(message);
+    error.status = response.status;
+    error.data = data;
+    throw error;
+  }
+
+  const disposition = response.headers.get("Content-Disposition") || "";
+  const encodedFilename = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  const filename =
+    (encodedFilename && decodeURIComponent(encodedFilename)) ||
+    disposition.match(/filename="?([^";]+)"?/i)?.[1] ||
+    "";
+
+  return { blob: await response.blob(), filename };
+}
+
 // ======================================================================
 // RESPONSE NORMALIZER
 // ======================================================================
@@ -316,6 +374,47 @@ function normalizeApiSuccess(res) {
     data: payload,
     isOffline: false,
   };
+}
+
+function buildMemoFormData(payload) {
+  const formData = new FormData();
+  const fields = [
+    "grade_id",
+    "title",
+    "description",
+    "file_url",
+    "cover_image_url",
+    "file_size",
+    "pages",
+    "year",
+    "sort_order",
+    "is_active",
+  ];
+
+  fields.forEach((field) => {
+    if (payload[field] === undefined || payload[field] === null) return;
+    const value =
+      field === "is_active"
+        ? payload[field]
+          ? "1"
+          : "0"
+        : String(payload[field]);
+    formData.append(field, value);
+  });
+
+  if (typeof File !== "undefined" && payload.pdf_file instanceof File) {
+    formData.append("pdf_file", payload.pdf_file);
+  }
+  if (typeof File !== "undefined" && payload.cover_image instanceof File) {
+    formData.append("cover_image", payload.cover_image);
+  }
+  if (Array.isArray(payload.features)) {
+    payload.features.forEach((feature, index) => {
+      formData.append(`features[${index}]`, String(feature));
+    });
+  }
+
+  return formData;
 }
 
 // ======================================================================
@@ -730,6 +829,48 @@ export const api = {
     };
   },
 
+  /**
+   * DELETE /api/v1/admin/deactivated-students/{student}
+   * Permanently removes a student after their subscription has been deactivated.
+   */
+  async deleteDeactivatedStudent(studentId) {
+    const cleanStudentId = String(studentId ?? "").trim();
+    if (!cleanStudentId) {
+      return { success: false, error: "Student ID is required" };
+    }
+
+    const res = await request(
+      `/api/v1/admin/deactivated-students/${encodeURIComponent(cleanStudentId)}`,
+      { method: "DELETE" },
+      "admin",
+    );
+
+    return res.success
+      ? normalizeApiSuccess(res)
+      : { ...res, success: false, error: res.error || "Failed to delete student" };
+  },
+
+  /**
+   * DELETE /api/v1/admin/subscriptions/{subscription}
+   * Permanently removes a deactivated subscription and its student.
+   */
+  async deleteDeactivatedSubscription(subscriptionId) {
+    const cleanSubscriptionId = String(subscriptionId ?? "").trim();
+    if (!cleanSubscriptionId) {
+      return { success: false, error: "Subscription ID is required" };
+    }
+
+    const res = await request(
+      `/api/v1/admin/subscriptions/${encodeURIComponent(cleanSubscriptionId)}`,
+      { method: "DELETE" },
+      "admin",
+    );
+
+    return res.success
+      ? normalizeApiSuccess(res)
+      : { ...res, success: false, error: res.error || "Failed to delete subscription" };
+  },
+
   // Alias used by StudentContext
   async deactivateStudent(subscriptionId) {
     return api.deactivateSubscription(subscriptionId);
@@ -827,19 +968,22 @@ export const api = {
             : [];
 
       return {
+        success: true,
         data: list,
         current_page:
-          payload?.current_page || res.data?.current_page || Number(page) || 1,
-        last_page: payload?.last_page || res.data?.last_page || 1,
-        total: payload?.total || res.data?.total || list.length,
+          payload?.current_page ?? res.data?.current_page ?? (Number(page) || 1),
+        last_page: payload?.last_page ?? res.data?.last_page ?? 1,
+        total: payload?.total ?? res.data?.total ?? list.length,
       };
     }
 
     return {
+      success: false,
       data: [],
       current_page: 1,
       last_page: 1,
       total: 0,
+      error: res.error || "Failed to fetch admin students",
     };
   },
 
@@ -922,6 +1066,34 @@ export const api = {
       success: false,
       data: null,
       error: res.error || "فشل جلب بيانات الطالب",
+    };
+  },
+
+  /**
+   * GET /api/v1/admin/students/{student}/lessons/{lesson}/quiz/answers
+   */
+  async getAdminStudentLessonQuizAnswers(studentId, lessonId, attemptId) {
+    const query = attemptId
+      ? `?attempt_id=${encodeURIComponent(attemptId)}`
+      : "";
+    const res = await request(
+      `/api/v1/admin/students/${studentId}/lessons/${lessonId}/quiz/answers${query}`,
+      {
+        method: "GET",
+      },
+      "admin",
+    );
+
+    if (res.success) {
+      return normalizeApiSuccess(res);
+    }
+
+    return {
+      success: false,
+      data: null,
+      error: res.error || "فشل جلب إجابات الطالب",
+      status: res.status,
+      isNetworkError: res.isNetworkError,
     };
   },
 
@@ -1025,6 +1197,29 @@ export const api = {
   },
 
   /**
+   * POST /api/v1/admin/lessons/{lesson}/quiz/questions
+   */
+  async saveAdminLessonQuiz(lessonId, payload = {}) {
+    if (!lessonId) throw new Error("معرّف الدرس غير متاح لحفظ الاختبار");
+
+    const body = {
+      title: String(payload.title || "").trim(),
+      description: String(payload.description || ""),
+      duration_minutes: Number(payload.duration_minutes),
+      passing_percentage: Number(payload.passing_percentage),
+      questions: Array.isArray(payload.questions) ? payload.questions : [],
+    };
+    const res = await request(
+      `/api/v1/admin/lessons/${encodeURIComponent(lessonId)}/quiz/questions`,
+      { method: "POST", body: JSON.stringify(body) },
+      "admin",
+    );
+
+    if (res.success) return res.data;
+    throw new Error(res.error || "تعذّر حفظ اختبار الدرس");
+  },
+
+  /**
    * DELETE /api/v1/admin/lessons/{lesson}
    */
   async deleteAdminLesson(lessonId) {
@@ -1073,12 +1268,10 @@ export const api = {
    */
   async createAdminExam(payload = {}) {
     const lessonId = Number(payload.lesson_id ?? payload.lessonId);
-    if (!Number.isInteger(lessonId) || lessonId < 1) {
-      throw new Error("يُرجى اختيار محاضرة لربط الامتحان بها.");
-    }
+    const hasLesson = Number.isInteger(lessonId) && lessonId > 0;
 
     const body = {
-      lesson_id: lessonId,
+      ...(hasLesson ? { lesson_id: lessonId } : {}),
       title: String(payload.title || "").trim(),
       description: payload.description || "",
       duration_minutes:
@@ -1105,7 +1298,10 @@ export const api = {
       return res.data;
     }
 
-    throw new Error(res.error || "فشل إنشاء الاختبار");
+    const error = new Error(res.error || "فشل إنشاء الاختبار");
+    error.status = res.status;
+    error.data = res.data;
+    throw error;
   },
 
   /**
@@ -1164,6 +1360,98 @@ export const api = {
     }
 
     throw new Error(res.error || "فشل حذف الاختبار");
+  },
+
+  // ====================================================================
+  // ADMIN MEMOS
+  // ====================================================================
+
+  async getAdminMemos(gradeId = null) {
+    const query = gradeId ? `?grade_id=${encodeURIComponent(gradeId)}` : "";
+    const res = await request(
+      `/api/v1/admin/memos${query}`,
+      { method: "GET" },
+      "admin",
+    );
+
+    if (!res.success) {
+      throw new Error(res.error || "فشل جلب قائمة المذكرات");
+    }
+
+    const payload = res.data?.data ?? res.data;
+    if (Array.isArray(payload)) return payload;
+    return payload?.memos || payload?.data || [];
+  },
+
+  async createAdminMemo(payload = {}) {
+    const res = await request(
+      "/api/v1/admin/memos",
+      {
+        method: "POST",
+        body: buildMemoFormData(payload),
+        timeoutMs: 120000,
+      },
+      "admin",
+    );
+
+    if (res.success) return res.data?.data || res.data;
+
+    const error = new Error(res.error || "فشل إنشاء المذكرة");
+    error.status = res.status;
+    error.data = res.data;
+    throw error;
+  },
+
+  async getAdminMemoDetails(memoId) {
+    const res = await request(
+      `/api/v1/admin/memos/${memoId}`,
+      { method: "GET" },
+      "admin",
+    );
+
+    if (res.success) {
+      const payload = res.data?.data || res.data;
+      return payload?.memo || payload;
+    }
+
+    const error = new Error(res.error || "فشل جلب تفاصيل المذكرة");
+    error.status = res.status;
+    error.data = res.data;
+    throw error;
+  },
+
+  async updateAdminMemo(memoId, payload = {}) {
+    const res = await request(
+      `/api/v1/admin/memos/${memoId}`,
+      {
+        method: "PUT",
+        body: buildMemoFormData(payload),
+        timeoutMs: 120000,
+      },
+      "admin",
+    );
+
+    if (res.success) return res.data?.data || res.data;
+
+    const error = new Error(res.error || "فشل تعديل المذكرة");
+    error.status = res.status;
+    error.data = res.data;
+    throw error;
+  },
+
+  async deleteAdminMemo(memoId) {
+    const res = await request(
+      `/api/v1/admin/memos/${memoId}`,
+      { method: "DELETE" },
+      "admin",
+    );
+
+    if (res.success) return res.data;
+
+    const error = new Error(res.error || "فشل حذف المذكرة");
+    error.status = res.status;
+    error.data = res.data;
+    throw error;
   },
 
   // ====================================================================
@@ -1330,6 +1618,32 @@ export const api = {
   },
 
   /**
+   * PUT /api/v1/student/profile
+   */
+  async updateStudentProfile(payload = {}) {
+    const body = {
+      ...(payload.first_name !== undefined
+        ? { first_name: String(payload.first_name).trim() }
+        : {}),
+      ...(payload.last_name !== undefined
+        ? { last_name: String(payload.last_name).trim() }
+        : {}),
+      ...(payload.parent_phone !== undefined
+        ? { parent_phone: String(payload.parent_phone).trim() }
+        : {}),
+    };
+
+    const res = await request(
+      "/api/v1/student/profile",
+      { method: "PUT", body: JSON.stringify(body) },
+      "student",
+    );
+
+    if (res.success) return normalizeApiSuccess(res);
+    throw new Error(res.error || "فشل تحديث بيانات الطالب");
+  },
+
+  /**
    * GET /api/v1/student/lessons
    */
   async getStudentLessons() {
@@ -1348,6 +1662,72 @@ export const api = {
     }
 
     throw new Error(res.error || "فشل جلب دروس الطالب");
+  },
+
+  /**
+   * GET /api/v1/student/lessons/{lesson}
+   */
+  async getStudentLesson(lessonId) {
+    const res = await request(
+      `/api/v1/student/lessons/${encodeURIComponent(lessonId)}`,
+      { method: "GET" },
+      "student",
+    );
+
+    if (res.success) return res.data?.data || res.data;
+    throw new Error(res.error || "فشل جلب تفاصيل الدرس");
+  },
+
+  /**
+   * GET /api/v1/student/materials/{material}/download
+   */
+  async downloadStudentMaterial(materialId) {
+    return requestStudentFile(
+      `/api/v1/student/materials/${encodeURIComponent(materialId)}/download`,
+    );
+  },
+
+  /**
+   * GET /api/v1/student/lessons/{lesson}/quiz/answers
+   */
+  async getStudentLessonQuizAnswers(lessonId, attemptId) {
+    const query =
+      attemptId == null
+        ? ""
+        : `?attempt_id=${encodeURIComponent(attemptId)}`;
+    const res = await request(
+      `/api/v1/student/lessons/${encodeURIComponent(lessonId)}/quiz/answers${query}`,
+      { method: "GET" },
+      "student",
+    );
+
+    if (res.success) return normalizeApiSuccess(res);
+    throw new Error(res.error || "فشل جلب إجابات الاختبار");
+  },
+
+  /**
+   * GET /api/v1/student/memos
+   */
+  async getStudentMemos() {
+    const res = await request(
+      "/api/v1/student/memos",
+      { method: "GET" },
+      "student",
+    );
+
+    if (!res.success) throw new Error(res.error || "فشل جلب مذكرات الطالب");
+    const payload = res.data?.data ?? res.data;
+    if (Array.isArray(payload)) return payload;
+    return payload?.memos || payload?.data || [];
+  },
+
+  /**
+   * GET /api/v1/student/memos/{memo}/download
+   */
+  async downloadStudentMemo(memoId) {
+    return requestStudentFile(
+      `/api/v1/student/memos/${encodeURIComponent(memoId)}/download`,
+    );
   },
 
   /**
@@ -1425,6 +1805,22 @@ export const api = {
   // ====================================================================
 
   /**
+   * GET /api/v1/student/exams
+   */
+  async getStudentExams() {
+    const res = await request(
+      "/api/v1/student/exams",
+      { method: "GET" },
+      "student",
+    );
+
+    if (!res.success) throw new Error(res.error || "فشل جلب اختبارات الطالب");
+    const payload = res.data?.data ?? res.data;
+    if (Array.isArray(payload)) return payload;
+    return payload?.exams || payload?.data || [];
+  },
+
+  /**
    * GET /api/v1/student/exams/{exam}
    */
   async getStudentExam(examId) {
@@ -1444,6 +1840,22 @@ export const api = {
     err.status = res.status;
     err.isLocked = res.status === 403;
     throw err;
+  },
+
+  /**
+   * GET /api/v1/student/exams/{exam}/attempts
+   */
+  async getStudentExamAttempts(examId) {
+    const res = await request(
+      `/api/v1/student/exams/${encodeURIComponent(examId)}/attempts`,
+      { method: "GET" },
+      "student",
+    );
+
+    if (!res.success) throw new Error(res.error || "فشل جلب محاولات الاختبار");
+    const payload = res.data?.data ?? res.data;
+    if (Array.isArray(payload)) return payload;
+    return payload?.attempts || payload?.data || [];
   },
 
   /**
@@ -1476,24 +1888,36 @@ export const api = {
    * POST /api/v1/student/exams/{exam}/submit
    */
   async submitStudentExam(examId, payload = {}) {
-    let attempt_id = 1;
+    let attempt_id;
     let answers = [];
 
     if (Array.isArray(payload)) {
       answers = payload;
     } else if (payload && typeof payload === "object") {
-      attempt_id = payload.attempt_id || payload.attemptId || 1;
+      attempt_id = payload.attempt_id || payload.attemptId;
       answers = Array.isArray(payload.answers) ? payload.answers : [];
     }
 
-    const formattedAnswers = answers.map((a, idx) => ({
-      question_id: Number(a.question_id || a.questionId || idx + 1),
-      option_id: Number(
-        a.option_id ||
-          a.optionId ||
-          (a.selectedOptionIndex !== undefined ? a.selectedOptionIndex + 1 : 1),
-      ),
+    if (!Number.isInteger(Number(attempt_id)) || Number(attempt_id) <= 0) {
+      throw new Error("رقم محاولة الاختبار غير متاح؛ أعد بدء الاختبار");
+    }
+
+    const formattedAnswers = answers.map((a) => ({
+      question_id: Number(a.question_id || a.questionId),
+      option_id: Number(a.option_id || a.optionId),
     }));
+    if (
+      formattedAnswers.length === 0 ||
+      formattedAnswers.some(
+        (answer) =>
+          !Number.isInteger(answer.question_id) ||
+          answer.question_id <= 0 ||
+          !Number.isInteger(answer.option_id) ||
+          answer.option_id <= 0,
+      )
+    ) {
+      throw new Error("تعذر تجهيز الإجابات بالمعرّفات المطلوبة من الخادم");
+    }
 
     const body = {
       attempt_id: Number(attempt_id),
@@ -1533,6 +1957,11 @@ export const api = {
   adminExamsShow: (examId) => api.getAdminExamDetails(examId),
   adminExamsUpdate: (examId, payload) => api.updateAdminExam(examId, payload),
   adminExamsDestroy: (examId) => api.deleteAdminExam(examId),
+  adminMemosIndex: (gradeId) => api.getAdminMemos(gradeId),
+  adminMemosStore: (payload) => api.createAdminMemo(payload),
+  adminMemosShow: (memoId) => api.getAdminMemoDetails(memoId),
+  adminMemosUpdate: (memoId, payload) => api.updateAdminMemo(memoId, payload),
+  adminMemosDestroy: (memoId) => api.deleteAdminMemo(memoId),
   adminExamQuestionStore: (examId, payload) =>
     api.createAdminQuestion(examId, payload),
   adminQuestionUpdate: (qId, payload) => api.updateAdminQuestion(qId, payload),
@@ -1556,6 +1985,16 @@ export const api = {
   studentVideoShow: (videoId) => api.getStudentVideo(videoId),
   studentVideoProgress: (videoId, payload) =>
     api.updateVideoProgress(videoId, payload),
+  studentExamsIndex: () => api.getStudentExams(),
+  studentExamAttempts: (examId) => api.getStudentExamAttempts(examId),
+  studentLessonShow: (lessonId) => api.getStudentLesson(lessonId),
+  studentLessonQuizAnswers: (lessonId, attemptId) =>
+    api.getStudentLessonQuizAnswers(lessonId, attemptId),
+  studentMemosIndex: () => api.getStudentMemos(),
+  studentMemoDownload: (memoId) => api.downloadStudentMemo(memoId),
+  studentMaterialDownload: (materialId) =>
+    api.downloadStudentMaterial(materialId),
+  studentProfileUpdate: (payload) => api.updateStudentProfile(payload),
 };
 
 export default api;

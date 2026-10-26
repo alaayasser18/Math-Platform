@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useStudent } from "../context/useStudent";
 import {
   User,
@@ -17,6 +17,9 @@ import {
   RefreshCw,
   Clock,
   Smartphone,
+  Pencil,
+  Save,
+  X,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 
@@ -24,21 +27,56 @@ export default function ProfilePage() {
   const {
     student,
     lessonsList,
+    studentExamsList,
     memosList,
-    openAuthModal,
+    isLoadingMemos,
     fetchStudentProfile,
+    fetchStudentMemos,
+    updateStudentProfile,
     showToast,
   } = useStudent();
 
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [profileForm, setProfileForm] = useState({
+    first_name: "",
+    last_name: "",
+    parent_phone: "",
+  });
+
+  useEffect(() => {
+    fetchStudentMemos();
+  }, [fetchStudentMemos]);
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
-    if (typeof fetchStudentProfile === "function") {
-      await fetchStudentProfile();
+    try {
+      const result = await fetchStudentProfile();
+      if (result?.success) showToast("تم تحديث بيانات الحساب من السيرفر بنجاح");
+    } finally {
+      setIsRefreshing(false);
     }
-    setIsRefreshing(false);
-    showToast("تم تحديث بيانات الحساب من السيرفر بنجاح");
+  };
+
+  const startEditingProfile = () => {
+    setProfileForm({
+      first_name: student?.first_name || "",
+      last_name: student?.last_name || "",
+      parent_phone: student?.parent_phone || student?.parentPhone || "",
+    });
+    setIsEditing(true);
+  };
+
+  const saveProfile = async (event) => {
+    event.preventDefault();
+    setIsSavingProfile(true);
+    try {
+      const result = await updateStudentProfile(profileForm);
+      if (result?.success) setIsEditing(false);
+    } finally {
+      setIsSavingProfile(false);
+    }
   };
 
   const studentName =
@@ -69,14 +107,28 @@ export default function ProfilePage() {
   const subscriptionStatus =
     student?.subscription?.status ||
     student?.subscription?.approval_status ||
-    (student?.status === "active" ? "نشط ومفعل" : "معتمد");
+    student?.status ||
+    "غير متاح";
 
   const subscriptionEndDate =
     student?.subscription?.end_date ||
     student?.subscription?.expires_at ||
     student?.subscription?.code_expires_at ||
     student?.end_date ||
-    "مستمر حتى نهاية العام";
+    "—";
+
+  const attendanceRate =
+    student?.attendance_percentage ??
+    student?.attendance_rate ??
+    student?.attendanceRate ??
+    "—";
+  const completedQuizzes =
+    student?.completed_exams ??
+    student?.completed_quizzes ??
+    student?.completedQuizzes ??
+    "—";
+  const averageScore =
+    student?.average_score ?? student?.averageScore ?? "—";
 
   const trustedDeviceId =
     student?.trusted_device?.device_identifier ||
@@ -95,7 +147,7 @@ export default function ProfilePage() {
   return (
     <div
       className="container"
-      style={{ paddingTop: "1.5rem", paddingBottom: "3rem", maxWidth: "980px" }}
+      style={{ paddingTop: "1.5rem", paddingBottom: "3rem" }}
     >
       {/* Student Dashboard Header */}
       <div
@@ -224,7 +276,81 @@ export default function ProfilePage() {
             />
             <span>{isRefreshing ? "جارٍ التحديث..." : "تحديث البيانات"}</span>
           </button>
+          <button
+            type="button"
+            onClick={startEditingProfile}
+            className="btn-secondary"
+            style={{
+              padding: "7px 14px",
+              fontSize: "0.8rem",
+              display: "flex",
+              alignItems: "center",
+              gap: "7px",
+            }}
+          >
+            <Pencil size={14} />
+            تعديل بيانات التواصل
+          </button>
         </div>
+
+        {isEditing && (
+          <form
+            onSubmit={saveProfile}
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+              gap: "12px",
+              marginTop: "1.25rem",
+              padding: "1rem",
+              background: "#090e1a",
+              border: "1px solid var(--border-subtle)",
+              borderRadius: "var(--radius-md)",
+            }}
+          >
+            {[
+              ["first_name", "الاسم الأول"],
+              ["last_name", "اسم العائلة"],
+              ["parent_phone", "هاتف ولي الأمر"],
+            ].map(([field, label]) => (
+              <label key={field} className="form-label">
+                {label}
+                <input
+                  className="form-input"
+                  required
+                  type={field === "parent_phone" ? "tel" : "text"}
+                  value={profileForm[field]}
+                  onChange={(event) =>
+                    setProfileForm((current) => ({
+                      ...current,
+                      [field]: event.target.value,
+                    }))
+                  }
+                  style={{ width: "100%", marginTop: "6px" }}
+                />
+              </label>
+            ))}
+            <div style={{ display: "flex", alignItems: "end", gap: "8px" }}>
+              <button
+                type="submit"
+                className="btn-primary"
+                disabled={isSavingProfile}
+                style={{ justifyContent: "center", flex: 1 }}
+              >
+                <Save size={15} />
+                {isSavingProfile ? "جارٍ الحفظ..." : "حفظ"}
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                disabled={isSavingProfile}
+                onClick={() => setIsEditing(false)}
+                aria-label="إلغاء تعديل بيانات التواصل"
+              >
+                <X size={15} />
+              </button>
+            </div>
+          </form>
+        )}
 
         {/* Academic Performance Summary */}
         <div style={{ marginTop: "1.25rem" }}>
@@ -245,25 +371,25 @@ export default function ProfilePage() {
           <div className="stats-row" style={{ marginBottom: "0" }}>
             <div className="stat-box">
               <div className="stat-box-val" style={{ color: "var(--emerald)" }}>
-                {student?.attendanceRate || "98%"}
+                {attendanceRate}
               </div>
               <div className="stat-box-lbl">نسبة حضور المحاضرات</div>
             </div>
             <div className="stat-box">
               <div className="stat-box-val" style={{ color: "var(--cyan)" }}>
-                {student?.completedQuizzes || 6}
+                {completedQuizzes}
               </div>
               <div className="stat-box-lbl">امتحانات تم اجتيازها</div>
             </div>
             <div className="stat-box">
               <div className="stat-box-val" style={{ color: "var(--amber)" }}>
-                {student?.averageScore || "94%"}
+                {averageScore}
               </div>
               <div className="stat-box-lbl">متوسط درجات الاختبارات</div>
             </div>
             <div className="stat-box">
               <div className="stat-box-val" style={{ color: "#818cf8" }}>
-                {studentMemos.length || 4}
+                {isLoadingMemos ? "..." : studentMemos.length}
               </div>
               <div className="stat-box-lbl">مذكرات مخصصة لصفك</div>
             </div>
@@ -289,11 +415,7 @@ export default function ProfilePage() {
             بيانات الحساب الشخصي:
           </h3>
           <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
-              gap: "0.75rem",
-            }}
+            className="profile-info-grid"
           >
             <div
               style={{
@@ -692,7 +814,7 @@ export default function ProfilePage() {
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+            gridTemplateColumns: "repeat(auto-fit, minmax(min(280px, 100%), 1fr))",
             gap: "1rem",
           }}
         >
@@ -751,9 +873,18 @@ export default function ProfilePage() {
                 >
                   <span>مشاهدة الفيديو</span>
                 </Link>
-                {l.quiz && (
+                {(studentExamsList || []).some(
+                  (exam) =>
+                    String(exam.lesson_id || exam.lesson?.id) === String(l.id),
+                ) && (
                   <Link
-                    to={`/quiz/${l.id}`}
+                    to={`/quiz/${
+                      (studentExamsList || []).find(
+                        (exam) =>
+                          String(exam.lesson_id || exam.lesson?.id) ===
+                          String(l.id),
+                      )?.id
+                    }`}
                     className="btn-secondary"
                     style={{
                       padding: "7px 12px",
@@ -774,7 +905,7 @@ export default function ProfilePage() {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+          gridTemplateColumns: "repeat(auto-fit, minmax(min(280px, 100%), 1fr))",
           gap: "1rem",
         }}
       >

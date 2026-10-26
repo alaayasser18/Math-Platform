@@ -1,9 +1,17 @@
 import { Link } from "react-router-dom";
-import { PlayCircle, Award, FileText } from "lucide-react";
+import { PlayCircle, Award, FileText, Trash2 } from "lucide-react";
 import { useStudent } from "../context/useStudent";
 
-export default function LessonCard({ lesson }) {
-  const { showToast } = useStudent();
+export default function LessonCard({ lesson, onDelete }) {
+  const { showToast, userRole, studentExamsList } = useStudent();
+  const isTeacher = userRole === "teacher";
+  const studentExam = (studentExamsList || []).find(
+    (exam) =>
+      String(exam.lesson_id || exam.lesson?.id) === String(lesson.id),
+  );
+  const examRouteId = isTeacher
+    ? lesson.exam_id || lesson.exam?.id || lesson.id
+    : studentExam?.id || studentExam?.exam_id;
 
   return (
     <div className="lesson-card">
@@ -40,7 +48,7 @@ export default function LessonCard({ lesson }) {
         </div>
       </div>
 
-      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+      <div className="lesson-card-actions" style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
         <Link
           to={`/watch/${lesson.id}`}
           className="btn-primary"
@@ -49,30 +57,48 @@ export default function LessonCard({ lesson }) {
           <PlayCircle size={15} />
           <span>مشاهدة الشرح</span>
         </Link>
-        <Link
-          to={`/quiz/${lesson.id}`}
-          className="btn-secondary"
-          style={{
-            padding: "8px 14px",
-            fontSize: "0.8rem",
-            color: "var(--amber)",
-          }}
-        >
-          <Award size={15} />
-          <span>امتحان الدرس</span>
-        </Link>
-        <button
-          onClick={() =>
-            showToast(
-              `جاري تجهيز وتحميل مذكرة الدرس PDF: ${lesson.pdfFile || lesson.title} 📥`,
-            )
-          }
-          className="btn-secondary"
-          style={{ padding: "8px 12px" }}
-          title="تحميل مذكرة الدرس PDF"
-        >
-          <FileText size={15} />
-        </button>
+        {examRouteId && (
+          <Link
+            to={`/quiz/${examRouteId}`}
+            className="btn-secondary"
+            style={{
+              padding: "8px 14px",
+              fontSize: "0.8rem",
+              color: "var(--amber)",
+            }}
+          >
+            <Award size={15} />
+            <span>امتحان الدرس</span>
+          </Link>
+        )}
+        {isTeacher && (
+          <button
+            onClick={() =>
+              showToast(
+                `جاري تجهيز وتحميل مذكرة الدرس PDF: ${lesson.pdfFile || lesson.title} 📥`,
+              )
+            }
+            className="btn-secondary"
+            style={{ padding: "8px 12px" }}
+            title="تحميل مذكرة الدرس PDF"
+          >
+            <FileText size={15} />
+          </button>
+        )}
+        {isTeacher && onDelete && (
+          <button
+            onClick={() => onDelete(lesson)}
+            className="btn-secondary"
+            style={{
+              padding: "8px 12px",
+              color: "#fb7185",
+              borderColor: "rgba(244, 63, 94, 0.3)",
+            }}
+            title="حذف هذا الدرس"
+          >
+            <Trash2 size={15} />
+          </button>
+        )}
       </div>
     </div>
   );

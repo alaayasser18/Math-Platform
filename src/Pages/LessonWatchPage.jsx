@@ -1,23 +1,104 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import { useStudent } from "../context/useStudent";
-import { FileText, Award, ArrowRight, CheckCircle2 } from "lucide-react";
+import {
+  FileText,
+  Award,
+  ArrowRight,
+  CheckCircle2,
+  LockKeyhole,
+  PlayCircle,
+} from "lucide-react";
 import ProtectedVideoPlayer from "../Components/ProtectedVideoPlayer";
 import { getYouTubeVideoId } from "../utils/youtube";
 
 export default function LessonWatchPage() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { showToast, lessonsList, student, userRole, getStudentVideo } =
-    useStudent();
+  const {
+    showToast,
+    lessonsList,
+    student,
+    userRole,
+    getStudentVideo,
+    getStudentLessonDetails,
+    isLoadingLessons,
+  } = useStudent();
   const isTeacher = userRole === "teacher";
 
-  const lesson = (lessonsList || []).find((l) => l.id === parseInt(id));
+  const listedLesson = (lessonsList || []).find(
+    (item) => String(item.id) === String(id),
+  );
+  const listedLessonId = listedLesson?.id;
+  const [lessonDetailsResult, setLessonDetailsResult] = useState(null);
+
+  useEffect(() => {
+    if (!listedLessonId || isTeacher) return undefined;
+
+    let isActive = true;
+    getStudentLessonDetails(listedLessonId)
+      .then((response) => {
+        if (isActive) {
+          setLessonDetailsResult({
+            lessonId: listedLessonId,
+            details: response?.lesson || response,
+            error: "",
+          });
+        }
+      })
+      .catch((error) => {
+        if (!isActive) return;
+        setLessonDetailsResult({
+          lessonId: listedLessonId,
+          details: null,
+          error: error?.message || "تعذر جلب تفاصيل الدرس",
+        });
+        showToast(error?.message || "تعذر جلب تفاصيل الدرس", "error");
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [getStudentLessonDetails, isTeacher, listedLessonId, showToast]);
+
+  const lessonDetails =
+    lessonDetailsResult?.lessonId === listedLessonId
+      ? lessonDetailsResult.details
+      : null;
+  const lessonDetailsError =
+    lessonDetailsResult?.lessonId === listedLessonId
+      ? lessonDetailsResult.error
+      : "";
+  const lesson = useMemo(
+    () => (listedLesson ? { ...listedLesson, ...(lessonDetails || {}) } : null),
+    [listedLesson, lessonDetails],
+  );
   const videoId =
     lesson?.videoId ||
     lesson?.video?.id ||
+    lesson?.video?.video_id ||
     lesson?.video_id ||
     lesson?.videos?.[0]?.id ||
+    null;
+  const lessonSequence = (lessonsList || []).filter((item) => {
+    const hasVideo =
+      item.videoId || item.video?.id || item.video_id || item.videos?.[0]?.id;
+    return (
+      hasVideo &&
+      item.grade === lesson?.grade &&
+      item.branch === lesson?.branch
+    );
+  });
+  const currentLessonIndex = lessonSequence.findIndex(
+    (item) => String(item.id) === String(lesson?.id),
+  );
+  const previousLesson =
+    (currentLessonIndex > 0 ? lessonSequence[currentLessonIndex - 1] : null) ||
+    (lessonsList || []).find(
+      (item) =>
+        item.grade === lesson?.grade &&
+        Number(item.number) === Number(lesson?.number) - 1,
+    ) ||
     null;
   const [videoAccess, setVideoAccess] = useState({
     id: null,
@@ -94,6 +175,13 @@ export default function LessonWatchPage() {
       : "checking";
 
   if (!lesson) {
+    if (isLoadingLessons) {
+      return (
+        <div className="container" role="status" style={{ padding: "5rem 1rem", textAlign: "center" }}>
+          جارٍ تحميل الدرس من الخادم...
+        </div>
+      );
+    }
     return (
       <div
         className="container"
@@ -179,6 +267,11 @@ export default function LessonWatchPage() {
 
   return (
     <div className="container" style={{ paddingTop: "1.5rem" }}>
+    {lessonDetailsError && (
+      <p role="status" style={{ color: "var(--amber)", marginBottom: "1rem" }}>
+        تعذر تحميل تفاصيل الدرس الكاملة من الخادم؛ {lessonDetailsError}
+      </p>
+    )}
       {/* Back Button */}
       <div style={{ marginBottom: "1.25rem" }}>
         <button
@@ -199,7 +292,7 @@ export default function LessonWatchPage() {
           style={{
             background: "var(--bg-card)",
             borderRadius: "var(--radius-xl)",
-            padding: "1.5rem",
+            padding: "clamp(1rem, 3vw, 1.5rem)",
             border: "1px solid var(--border-subtle)",
           }}
         >
@@ -222,7 +315,7 @@ export default function LessonWatchPage() {
               </span>
               <h1
                 style={{
-                  fontSize: "1.25rem",
+                  fontSize: "clamp(1rem, 3vw, 1.25rem)",
                   fontWeight: 800,
                   color: "#ffffff",
                 }}
@@ -261,8 +354,30 @@ export default function LessonWatchPage() {
                 videoId={videoId}
               />
             ) : (
-              <div className="form-card" style={{ textAlign: "center" }}>
-                {videoAccessStatus === "checking"
+              <div
+                className="video-access-notice"
+                role={videoAccessStatus === "checking" ? "status" : "alert"}
+                aria-live="polite"
+              >
+                {videoAccessStatus === "locked" ? (
+                  <>
+                    <span className="video-access-notice__icon" aria-hidden="true">
+                      <LockKeyhole size={22} />
+                    </span>
+                    <h2>
+                      {"\u0647\u0630\u0627 \u0627\u0644\u062f\u0631\u0633 \u0645\u0642\u0641\u0648\u0644 \u062d\u0627\u0644\u064a\u064b\u0627"}
+                    </h2>
+                    <p>
+                      {previousLesson
+                        ? <>{"\u0644\u0644\u0645\u062a\u0627\u0628\u0639\u0629\u060c \u064a\u062c\u0628 \u0645\u0634\u0627\u0647\u062f\u0629 \u0627\u0644\u062f\u0631\u0633 \u0627\u0644\u0633\u0627\u0628\u0642 \u00ab"}{previousLesson.title}{"\u00bb \u0623\u0648\u0644\u064b\u0627. \u0623\u0643\u0645\u0644\u0647 \u062b\u0645 \u062d\u0627\u0648\u0644 \u0641\u062a\u062d \u0647\u0630\u0627 \u0627\u0644\u0641\u064a\u062f\u064a\u0648 \u0645\u0631\u0629 \u0623\u062e\u0631\u0649."}</>
+                        : "\u0644\u0644\u0645\u062a\u0627\u0628\u0639\u0629\u060c \u064a\u062c\u0628 \u0645\u0634\u0627\u0647\u062f\u0629 \u0627\u0644\u062f\u0631\u0633 \u0627\u0644\u0633\u0627\u0628\u0642 \u0623\u0648\u0644\u064b\u0627. \u0623\u0643\u0645\u0644\u0647 \u062b\u0645 \u062d\u0627\u0648\u0644 \u0641\u062a\u062d \u0647\u0630\u0627 \u0627\u0644\u0641\u064a\u062f\u064a\u0648 \u0645\u0631\u0629 \u0623\u062e\u0631\u0649."}
+                    </p>
+                    <Link to={previousLesson ? `/watch/${previousLesson.id}` : "/lessons"} className="btn-primary video-access-notice__action">
+                      <PlayCircle size={17} />
+                      <span>{previousLesson ? "\u0645\u0634\u0627\u0647\u062f\u0629 \u0627\u0644\u062f\u0631\u0633 \u0627\u0644\u0633\u0627\u0628\u0642" : "\u0627\u0644\u0639\u0648\u062f\u0629 \u0625\u0644\u0649 \u0627\u0644\u062f\u0631\u0648\u0633"}</span>
+                    </Link>
+                  </>
+                ) : videoAccessStatus === "checking"
                   ? "جاري التحقق من صلاحية مشاهدة الفيديو..."
                   : videoAccessStatus === "locked"
                     ? "هذا الفيديو مقفل أو غير متاح لاشتراكك."
@@ -292,22 +407,25 @@ export default function LessonWatchPage() {
                 <Award size={16} />
                 <span>امتحان تقييمي للدرس</span>
               </Link>
-              <button
-                onClick={() =>
-                  showToast(
-                    `تم بدء تحميل مذكرة: ${lesson.pdfFile || lesson.title} 📥`,
-                  )
-                }
-                className="btn-secondary"
-              >
-                <FileText size={16} />
-                <span>تحميل المذكرة PDF</span>
-              </button>
+              {isTeacher && (
+                <button
+                  onClick={() =>
+                    showToast(
+                      `تم بدء تحميل مذكرة: ${lesson.pdfFile || lesson.title} 📥`,
+                    )
+                  }
+                  className="btn-secondary"
+                >
+                  <FileText size={16} />
+                  <span>تحميل المذكرة PDF</span>
+                </button>
+              )}
             </div>
           </div>
 
           {/* Explanation / Keypoints Tabs */}
-          <div style={{ marginTop: "1.25rem" }}>
+          {isTeacher && (
+            <div style={{ marginTop: "1.25rem" }}>
             <h3
               style={{
                 fontSize: "1rem",
@@ -329,47 +447,48 @@ export default function LessonWatchPage() {
               {lesson.description}
             </p>
 
-            <h4
-              style={{
-                fontSize: "0.9rem",
-                fontWeight: 700,
-                color: "var(--cyan)",
-                marginBottom: "0.75rem",
-              }}
-            >
-              أهم النقاط التي يغطيها الشرح:
-            </h4>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
-                gap: "0.75rem",
-              }}
-            >
-              {lesson.keyPoints?.map((pt, idx) => (
-                <div
-                  key={idx}
-                  style={{
-                    background: "rgba(10, 16, 30, 0.7)",
-                    border: "1px solid var(--border-subtle)",
-                    padding: "10px 14px",
-                    borderRadius: "var(--radius-md)",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "8px",
-                    fontSize: "0.8rem",
-                    color: "var(--text-main)",
-                  }}
-                >
-                  <CheckCircle2
-                    size={16}
-                    style={{ color: "var(--emerald)", flexShrink: 0 }}
-                  />
-                  <span>{pt}</span>
-                </div>
-              ))}
+              <h4
+                style={{
+                  fontSize: "0.9rem",
+                  fontWeight: 700,
+                  color: "var(--cyan)",
+                  marginBottom: "0.75rem",
+                }}
+              >
+                أهم النقاط التي يغطيها الشرح:
+              </h4>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(min(260px, 100%), 1fr))",
+                  gap: "0.75rem",
+                }}
+              >
+                {lesson.keyPoints?.map((pt, idx) => (
+                  <div
+                    key={idx}
+                    style={{
+                      background: "rgba(10, 16, 30, 0.7)",
+                      border: "1px solid var(--border-subtle)",
+                      padding: "10px 14px",
+                      borderRadius: "var(--radius-md)",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "8px",
+                      fontSize: "0.8rem",
+                      color: "var(--text-main)",
+                    }}
+                  >
+                    <CheckCircle2
+                      size={16}
+                      style={{ color: "var(--emerald)", flexShrink: 0 }}
+                    />
+                    <span>{pt}</span>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
     </div>

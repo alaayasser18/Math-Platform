@@ -116,10 +116,13 @@ export default function AuthModal() {
         style={{
           maxWidth: "480px",
           width: "100%",
+          maxHeight: "92vh",
+          overflowY: "auto",
+          overflowX: "hidden",
           background: "#090e1a",
           border: "1px solid rgba(6, 182, 212, 0.3)",
           borderRadius: "var(--radius-xl, 20px)",
-          padding: "1.75rem",
+          padding: "clamp(1rem, 4vw, 1.75rem)",
           position: "relative",
           boxShadow: "0 20px 50px rgba(0,0,0,0.85)",
         }}
@@ -273,6 +276,7 @@ export default function AuthModal() {
           /* Activation Request Form with select dropdown and validation */
           <form onSubmit={handleRegisterSubmit} noValidate>
             <div
+              className="grid-2col"
               style={{
                 display: "grid",
                 gridTemplateColumns: "1fr 1fr",
