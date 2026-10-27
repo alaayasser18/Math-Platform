@@ -1123,7 +1123,7 @@ export const StudentProvider = ({ children }) => {
                   duration: video?.duration || l.duration || "",
                   videoUrl:
                     video?.video_url || video?.url || l.video_url || l.videoUrl || "",
-                  quiz: l.quiz || null,
+                  quiz: l.quiz || l.exam || null,
                 };
               }),
             );
@@ -1157,7 +1157,7 @@ export const StudentProvider = ({ children }) => {
                   isCompleted: Boolean(l.is_completed),
                   progress: l.progress || 0,
                   accessStatus: l.access_status || "",
-                  quiz: l.quiz || null,
+                  quiz: l.quiz || l.exam || null,
                 };
               }),
             );
@@ -1395,7 +1395,7 @@ export const StudentProvider = ({ children }) => {
         );
         if (!lesson) throw new Error("الدرس المطلوب غير موجود في بيانات الخادم");
 
-        const existingQuestions = (lesson.quiz?.questions || []).map(
+        const existingQuestions = ((lesson.quiz || lesson.exam)?.questions || []).map(
           (existing, questionIndex) => {
             const options = existing.options || existing.choices || [];
             const correctIndex = Number.isInteger(existing.correctIndex)
@@ -1439,11 +1439,10 @@ export const StudentProvider = ({ children }) => {
         }));
 
         const result = await api.saveAdminLessonQuiz(lessonId, {
-          title: lesson.quiz?.title || `اختبار: ${lesson.title || ""}`,
-          description: lesson.quiz?.description || "",
-          duration_minutes:
-            lesson.quiz?.duration_minutes || lesson.quiz?.durationMinutes || 10,
-          passing_percentage: lesson.quiz?.passing_percentage || 60,
+          title: (lesson.quiz || lesson.exam)?.title || `اختبار: ${lesson.title || ""}`,
+          description: (lesson.quiz || lesson.exam)?.description || "",
+          duration_minutes: (lesson.quiz || lesson.exam)?.duration_minutes || (lesson.quiz || lesson.exam)?.durationMinutes || 10,
+          passing_percentage: (lesson.quiz || lesson.exam)?.passing_percentage || 60,
           questions: [
             ...existingQuestions,
             {
