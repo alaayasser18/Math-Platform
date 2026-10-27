@@ -66,7 +66,7 @@ export default function LessonsPage() {
 
   const [newLessonData, setNewLessonData] = useState({
     title: "",
-    branch: BRANCHES[0] || "التفاضل والتكامل",
+    branch: BRANCHES.find((b) => b !== "الكل") || "التفاضل والتكامل",
     grade: GRADES[0].name,
     gradeId: GRADES[0].id,
     duration: "",
@@ -182,13 +182,13 @@ export default function LessonsPage() {
     });
   }, [lessonsList, effectiveGrade, selectedBranch, searchQuery]);
 
-  // Extract unique branches available for this grade
+  // Extract unique branches available for this grade (never duplicate "الكل")
   const gradeBranches = useMemo(() => {
     const branchesInGrade = new Set(
       (lessonsList || [])
         .filter((l) => effectiveGrade === BRANCHES[0] || l.grade === effectiveGrade)
         .map((l) => l.branch?.trim())
-        .filter(Boolean),
+        .filter((b) => b && b !== BRANCHES[0] && b !== "الكل"),
     );
     return [BRANCHES[0], ...Array.from(branchesInGrade)];
   }, [lessonsList, effectiveGrade]);
@@ -420,7 +420,7 @@ export default function LessonsPage() {
         </div>
 
         {/* Row 2: Grade Tabs (Teacher only) & Branch Chips */}
-        <div className="modern-filter-row" style={{ paddingTop: "0.35rem", borderTop: "1px solid rgba(148, 163, 184, 0.08)", gap: "0.75rem", flexWrap: "wrap" }}>
+        <div className="modern-filter-row" style={{ paddingTop: "0.6rem", borderTop: "1px solid rgba(148, 163, 184, 0.08)", gap: "1rem", flexWrap: "wrap", alignItems: "center" }}>
           {isTeacher && (
             <GradeFilter
               value={selectedGrade}
@@ -432,7 +432,7 @@ export default function LessonsPage() {
           )}
 
           <div className="grade-filter" role="group" aria-label="أفرع المادة">
-            <span className="grade-filter-label">الفرع:</span>
+            <span className="grade-filter-label" style={{ color: "#94a3b8" }}>الفرع:</span>
             <div className="grade-filter-options">
               {gradeBranches.map((branch) => {
                 const isActive = selectedBranch === branch;
@@ -643,7 +643,7 @@ export default function LessonsPage() {
                     className="form-input"
                     style={{ width: "100%" }}
                   >
-                    {BRANCHES.map((b) => (
+                    {BRANCHES.filter((b) => b !== "الكل").map((b) => (
                       <option key={b} value={b}>
                         {b}
                       </option>

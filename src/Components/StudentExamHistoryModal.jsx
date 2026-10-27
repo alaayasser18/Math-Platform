@@ -1481,11 +1481,12 @@ function StudentExamHistoryModalContent({
       onClick={onClose}
     >
       <div
-        className="form-card print-container"
+        className="student-exam-history-dialog print-container"
         style={{
           width: '100%',
-          maxWidth: '960px',
-          maxHeight: '92vh',
+          maxWidth: '1020px',
+          height: 'min(90vh, 880px)',
+          maxHeight: '90vh',
           display: 'flex',
           flexDirection: 'column',
           backgroundColor: '#090f1d',
@@ -1504,6 +1505,7 @@ function StudentExamHistoryModalContent({
         <div
           className="exam-history-modal-header"
           style={{
+            flexShrink: 0,
             padding: '1.25rem 1.75rem',
             borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
             background:
@@ -1746,6 +1748,7 @@ function StudentExamHistoryModalContent({
         <div
           className="exam-history-kpi-ribbon"
           style={{
+            flexShrink: 0,
             padding: '1rem 1.75rem',
             background: 'rgba(5, 9, 20, 0.75)',
             borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
@@ -1965,12 +1968,14 @@ function StudentExamHistoryModalContent({
         <div
           className="exam-history-tabs"
           style={{
+            flexShrink: 0,
             padding: '0 1.75rem',
-            background: 'rgba(15, 23, 42, 0.5)',
-            borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
+            background: 'rgba(15, 23, 42, 0.65)',
+            borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
             display: 'flex',
             alignItems: 'center',
             gap: '8px',
+            minHeight: '48px',
           }}
         >
           <button
@@ -2066,6 +2071,7 @@ function StudentExamHistoryModalContent({
           <div
             style={{
               flex: 1,
+              minHeight: 0,
               display: 'flex',
               flexDirection: 'column',
               overflow: 'hidden',
@@ -2074,6 +2080,7 @@ function StudentExamHistoryModalContent({
             {/* View Mode Switcher (Solved vs All Grade Exams) */}
             <div
               style={{
+                flexShrink: 0,
                 padding: '0.75rem 1.75rem',
                 borderBottom: '1px solid rgba(255, 255, 255, 0.05)',
                 display: 'flex',
@@ -2143,6 +2150,7 @@ function StudentExamHistoryModalContent({
             {/* Search and Branch Controls */}
             <div
               style={{
+                flexShrink: 0,
                 padding: '0.7rem 1.75rem',
                 borderBottom: '1px solid rgba(255, 255, 255, 0.05)',
                 display: 'flex',
@@ -2209,6 +2217,7 @@ function StudentExamHistoryModalContent({
             <div
               style={{
                 flex: 1,
+                minHeight: 0,
                 overflowY: 'auto',
                 padding: '1.25rem 1.75rem',
                 display: 'flex',
@@ -3114,6 +3123,7 @@ function StudentExamHistoryModalContent({
           <div
             style={{
               flex: 1,
+              minHeight: 0,
               overflowY: 'auto',
               padding: '1.75rem',
               display: 'flex',
@@ -3488,6 +3498,7 @@ function StudentExamHistoryModalContent({
           <div
             style={{
               flex: 1,
+              minHeight: 0,
               overflowY: 'auto',
               padding: '1.75rem',
               display: 'flex',

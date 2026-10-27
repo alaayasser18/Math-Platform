@@ -3,7 +3,7 @@ import { PlayCircle, Award, FileText, Trash2 } from "lucide-react";
 import { useStudent } from "../context/useStudent";
 
 export default function LessonCard({ lesson, onDelete }) {
-  const { showToast, userRole, studentExamsList } = useStudent();
+  const { student, showToast, userRole, studentExamsList } = useStudent();
   const isTeacher = userRole === "teacher";
   const studentExam = (studentExamsList || []).find(
     (exam) =>
@@ -11,7 +11,23 @@ export default function LessonCard({ lesson, onDelete }) {
   );
   const examRouteId = isTeacher
     ? lesson.exam_id || lesson.exam?.id || lesson.id
-    : studentExam?.id || studentExam?.exam_id;
+    : studentExam?.id || studentExam?.exam_id || lesson.exam_id || lesson.id;
+
+  const studentKey =
+    student?.id ||
+    student?.student_id ||
+    student?.code ||
+    student?.subscription_code ||
+    "student";
+  const isExamCompleted =
+    !isTeacher &&
+    (studentExam?.is_solved ||
+      studentExam?.score !== undefined ||
+      Boolean(
+        localStorage.getItem(
+          `el_eamid_quiz_completed_${studentKey}_${examRouteId || lesson.id}`,
+        ),
+      ));
 
   const formattedNumber =
     typeof lesson.number === "number" && lesson.number < 10
@@ -78,12 +94,17 @@ export default function LessonCard({ lesson, onDelete }) {
             style={{
               padding: "8px 14px",
               fontSize: "0.8rem",
-              color: "var(--amber)",
-              borderColor: "rgba(245, 158, 11, 0.35)",
+              color: isExamCompleted ? "var(--emerald)" : "var(--amber)",
+              borderColor: isExamCompleted
+                ? "rgba(16, 185, 129, 0.45)"
+                : "rgba(245, 158, 11, 0.35)",
+              background: isExamCompleted
+                ? "rgba(16, 185, 129, 0.1)"
+                : undefined,
             }}
           >
             <Award size={15} />
-            <span>امتحان الدرس</span>
+            <span>{isExamCompleted ? "إجابات الامتحان ✓" : "امتحان الدرس"}</span>
           </Link>
         )}
 
