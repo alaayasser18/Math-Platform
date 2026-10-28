@@ -1358,7 +1358,7 @@ export default function TeacherDashboardPage() {
       )}
       {/* Professional Executive Header */}
       <div
-        className="feature-card"
+        className="feature-card teacher-dashboard-hero"
         style={{
           padding: "1.5rem 2rem",
           marginBottom: "1.5rem",

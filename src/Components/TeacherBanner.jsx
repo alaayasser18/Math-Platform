@@ -13,7 +13,7 @@ export default function TeacherBanner() {
     "";
 
   return (
-    <div className="hero-card">
+    <div className="hero-card teacher-home-hero">
       <div className="hero-glow-edge"></div>
 
       <div className="hero-grid">
