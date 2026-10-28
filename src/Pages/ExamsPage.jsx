@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from "react";
+﻿import { useMemo, useState, useEffect } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import { useStudent } from "../context/useStudent";
 import useUrlState from "../hooks/useUrlState";
@@ -2052,9 +2052,7 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
   const [currentIdx, setCurrentIdx] = useState(0);
   const [selectedAnswers, setSelectedAnswers] = useState({});
   const [isSubmitted, setIsSubmitted] = useState(false);
-  const [timeLeft, setTimeLeft] = useState(
-    (lesson?.quiz?.durationMinutes || 10) * 60,
-  );
+  const [timeLeft, setTimeLeft] = useState(null);
   const [attemptId, setAttemptId] = useState(null);
 
   useEffect(() => {
@@ -2066,6 +2064,7 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
         if (teacherQuiz && Array.isArray(teacherQuiz.questions) && teacherQuiz.questions.length > 0) {
           setExamData(teacherQuiz);
           setExamLoadState("ready");
+          setTimeLeft((teacherQuiz?.duration_minutes || teacherQuiz?.durationMinutes || 10) * 60);
           return;
         }
 
@@ -2077,6 +2076,7 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
             if (isMounted && detail) {
               setExamData(detail);
               setExamLoadState("ready");
+              setTimeLeft((detail?.duration_minutes || detail?.durationMinutes || 10) * 60);
               return;
             }
           } catch (e) {
@@ -2086,7 +2086,9 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
 
         if (isMounted) {
           setExamData(teacherQuiz || null);
+          setTimeLeft(((teacherQuiz?.duration_minutes || teacherQuiz?.durationMinutes || 10)) * 60);
           setExamLoadState("ready");
+          setTimeLeft(((teacherQuiz?.duration_minutes || teacherQuiz?.durationMinutes || 10)) * 60);
         }
         return;
       }
@@ -2148,7 +2150,7 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
   }, [examId, getStudentExam, isTeacher, lesson, startExamAttempt]);
 
   useEffect(() => {
-    if (examLoadState !== "ready" || isSubmitted || timeLeft <= 0) return;
+    if (examLoadState !== "ready" || isSubmitted || timeLeft === null || timeLeft <= 0) return;
     const timer = setInterval(() => {
       setTimeLeft((prev) => {
         if (prev <= 1) {
