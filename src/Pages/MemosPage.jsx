@@ -3,7 +3,7 @@ import { useStudent } from "../context/useStudent";
 import GradeFilter from "../Components/GradeFilter";
 import useUrlState from "../hooks/useUrlState";
 import { GRADES, BRANCHES } from "../data/platformData";
-import { getGradeIdByName } from "../services/api";
+import { getGradeIdByName, getGradeNameById } from "../services/api";
 import { getDocument, GlobalWorkerOptions } from "pdfjs-dist";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import {
@@ -21,11 +21,14 @@ import {
 
 GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
-const memoGradeValues = new Set([BRANCHES[0], ...GRADES.map((grade) => grade.name)]);
+const memoGradeValues = new Set([
+  BRANCHES[0],
+  ...GRADES.map((grade) => grade.name),
+]);
 const MEMO_URL_SCHEMA = {
   grade: {
     defaultValue: BRANCHES[0],
-    normalize: (value) => memoGradeValues.has(value) ? value : null,
+    normalize: (value) => (memoGradeValues.has(value) ? value : null),
   },
 };
 
@@ -94,7 +97,12 @@ export default function MemosPage() {
   } = useStudent();
   const isTeacher = userRole === "teacher";
 
-  const studentGrade = student?.grade || "";
+  // اسم صف الطالب بيتحدد من grade_id اللي راجع من السيرفر، مش من نص الصف
+  // (نص الصف ممكن يرجع بالإنجليزي من الـ API).
+  const studentGradeId = student?.grade_id || student?.gradeId;
+  const studentGrade = studentGradeId
+    ? getGradeNameById(studentGradeId)
+    : student?.grade || "";
   const [urlState, setUrlState] = useUrlState(MEMO_URL_SCHEMA);
   const selectedGrade = isTeacher ? urlState.grade : studentGrade;
   const setSelectedGrade = (grade) => setUrlState({ grade });
@@ -122,6 +130,9 @@ export default function MemosPage() {
   }, [fetchAdminMemos, fetchStudentMemos, isTeacher, selectedGrade]);
 
   const filteredMemos = useMemo(() => {
+    // الطالب: السيرفر بيرجّع له مذكرات صفه بس، فنعرض اللي راجع كما هو.
+    if (!isTeacher) return memosList || [];
+
     return (memosList || []).filter((memo) => {
       if (effectiveGrade === BRANCHES[0]) return true;
       const memoGradeId = memo.grade_id || memo.grade?.id || memo.grade;
@@ -130,7 +141,7 @@ export default function MemosPage() {
         String(memoGradeId) === String(getGradeIdByName(effectiveGrade))
       );
     });
-  }, [memosList, effectiveGrade]);
+  }, [memosList, effectiveGrade, isTeacher]);
 
   const resetMemoForm = () => {
     setNewMemoData(createEmptyMemoForm());
@@ -171,7 +182,10 @@ export default function MemosPage() {
       }
     } catch (error) {
       console.error("Failed to read uploaded memo PDF:", error);
-      showToast("تعذر قراءة ملف PDF. تأكدي من أن الملف صالح ثم حاولي مرة أخرى.", "error");
+      showToast(
+        "تعذر قراءة ملف PDF. تأكدي من أن الملف صالح ثم حاولي مرة أخرى.",
+        "error",
+      );
       event.target.value = "";
     } finally {
       setIsReadingPdf(false);
@@ -228,9 +242,7 @@ export default function MemosPage() {
       setIsAddMemoOpen(false);
       resetMemoForm();
       await fetchAdminMemos(
-        selectedGrade === BRANCHES[0]
-          ? null
-          : getGradeIdByName(selectedGrade),
+        selectedGrade === BRANCHES[0] ? null : getGradeIdByName(selectedGrade),
       );
     } finally {
       setIsProcessing(false);
@@ -317,31 +329,18 @@ export default function MemosPage() {
       style={{ paddingTop: "1.5rem", paddingBottom: "3rem" }}
     >
       {/* Header */}
-      <div className="section-header" style={{ alignItems: "flex-start", gap: "1.25rem" }}>
+      <div
+        className="section-header"
+        style={{ alignItems: "center", marginBottom: "1.25rem", gap: "1rem" }}
+      >
         <div>
-          <div
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "6px",
-              fontSize: "0.75rem",
-              color: "var(--purple)",
-              fontWeight: 700,
-              marginBottom: "6px",
-            }}
-          >
-            <BookOpen size={14} />
-            <span>السلسلة التعليمية الأشهر في الرياضيات</span>
-          </div>
           <h1 className="section-title">
-            {isTeacher
-              ? "معاينة وإدارة سلسلة مذكرات العميد"
-              : `مذكرات وملخصات (${studentGrade})`}
+            {isTeacher ? "مذكرات العميد PDF" : `مذكرات ${studentGrade}`}
           </h1>
           <p className="section-desc">
             {isTeacher
-              ? "تصفح المذكرات المرفوعة، رفع مذكرات جديدة بصيغة PDF، وإدارتها للطلاب"
-              : `المذكرات الأصلية ونماذج الامتحانات المخصصة لـ: ${student?.name || "طالب المنصة"}`}
+              ? "إدارة وتحميل مذكرات الشرح ونماذج الامتحانات"
+              : `المذكرات الأصلية المخصصة لـ ${student?.name || "طالب المنصة"}`}
           </p>
         </div>
 
@@ -439,29 +438,39 @@ export default function MemosPage() {
       )}
 
       {/* Grade Filter for Teacher */}
-      {isTeacher && <GradeFilter value={selectedGrade} onChange={setSelectedGrade} includeAll />}
+      {isTeacher && (
+        <div style={{ marginBottom: "1.5rem" }}>
+          <GradeFilter
+            value={selectedGrade}
+            onChange={setSelectedGrade}
+            includeAll
+            showLabel={true}
+          />
+        </div>
+      )}
 
       {/* Memos Grid */}
       <div
         className="memos-grid"
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fill, minmax(min(260px, 100%), 1fr))",
+          gridTemplateColumns:
+            "repeat(auto-fill, minmax(min(260px, 100%), 1fr))",
           gap: "1.5rem",
         }}
       >
-      {isLoadingMemos ? (
-        <div
-          style={{
-            gridColumn: "1 / -1",
-            textAlign: "center",
-            padding: "3rem 1rem",
-            color: "var(--text-muted)",
-          }}
-        >
-          جارٍ تحميل المذكرات...
-        </div>
-      ) : filteredMemos.length === 0 ? (
+        {isLoadingMemos ? (
+          <div
+            style={{
+              gridColumn: "1 / -1",
+              textAlign: "center",
+              padding: "3rem 1rem",
+              color: "var(--text-muted)",
+            }}
+          >
+            جارٍ تحميل المذكرات...
+          </div>
+        ) : filteredMemos.length === 0 ? (
           <div
             style={{
               gridColumn: "1 / -1",
@@ -472,7 +481,10 @@ export default function MemosPage() {
               border: "1px solid var(--border-subtle)",
             }}
           >
-            <BookOpen size={48} style={{ color: "var(--text-dim)", margin: "0 auto 1rem" }} />
+            <BookOpen
+              size={48}
+              style={{ color: "var(--text-dim)", margin: "0 auto 1rem" }}
+            />
             <p
               style={{ fontWeight: 800, fontSize: "1.1rem", color: "#ffffff" }}
             >
@@ -532,16 +544,30 @@ export default function MemosPage() {
                     <img
                       src={memo.cover_image_url || memo.cover_image}
                       alt={memo.title}
-                      style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                      style={{
+                        width: "100%",
+                        height: "100%",
+                        objectFit: "cover",
+                      }}
                     />
                   </div>
                 )}
 
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    marginBottom: "8px",
+                  }}
+                >
                   {getMemoGradeName(memo) && (
                     <span
                       className="badge-tag"
-                      style={{ color: "var(--purple)", background: "rgba(168, 85, 247, 0.12)" }}
+                      style={{
+                        color: "var(--purple)",
+                        background: "rgba(168, 85, 247, 0.12)",
+                      }}
                     >
                       {getMemoGradeName(memo)}
                     </span>
@@ -605,7 +631,6 @@ export default function MemosPage() {
                     <span>{memo.file_size}</span>
                   </div>
                 )}
-
               </div>
 
               <button
@@ -688,7 +713,14 @@ export default function MemosPage() {
               <X size={20} />
             </button>
 
-            <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "1.25rem" }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "10px",
+                marginBottom: "1.25rem",
+              }}
+            >
               <div
                 style={{
                   width: "40px",
@@ -703,18 +735,41 @@ export default function MemosPage() {
                 <FileText size={22} />
               </div>
               <div>
-                <h2 style={{ fontSize: "1.2rem", fontWeight: 800, color: "#fff", margin: 0 }}>
+                <h2
+                  style={{
+                    fontSize: "1.2rem",
+                    fontWeight: 800,
+                    color: "#fff",
+                    margin: 0,
+                  }}
+                >
                   {editingMemo ? "تعديل المذكرة" : "رفع مذكرة جديدة PDF"}
                 </h2>
-                <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", margin: "4px 0 0" }}>
+                <p
+                  style={{
+                    fontSize: "0.8rem",
+                    color: "var(--text-muted)",
+                    margin: "4px 0 0",
+                  }}
+                >
                   أدخل بيانات المذكرة، المرحلة، وعدد الصفحات لإضافتها للمكتبة
                 </p>
               </div>
             </div>
 
-            <form onSubmit={handleSaveMemo} style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+            <form
+              onSubmit={handleSaveMemo}
+              style={{ display: "flex", flexDirection: "column", gap: "1rem" }}
+            >
               <div>
-                <label className="form-label" style={{ fontWeight: 700, marginBottom: "6px", display: "block" }}>
+                <label
+                  className="form-label"
+                  style={{
+                    fontWeight: 700,
+                    marginBottom: "6px",
+                    display: "block",
+                  }}
+                >
                   عنوان المذكرة{" "}
                   <span style={{ color: "#ffffff" }} aria-hidden="true">
                     *
@@ -734,7 +789,14 @@ export default function MemosPage() {
               </div>
 
               <div>
-                <label className="form-label" style={{ fontWeight: 700, marginBottom: "6px", display: "block" }}>
+                <label
+                  className="form-label"
+                  style={{
+                    fontWeight: 700,
+                    marginBottom: "6px",
+                    display: "block",
+                  }}
+                >
                   المرحلة الدراسية{" "}
                   <span style={{ color: "#ffffff" }} aria-hidden="true">
                     *
@@ -760,9 +822,23 @@ export default function MemosPage() {
                 </select>
               </div>
 
-              <div className="grid-2col" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+              <div
+                className="grid-2col"
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: "1rem",
+                }}
+              >
                 <div>
-                  <label className="form-label" style={{ fontWeight: 700, marginBottom: "6px", display: "block" }}>
+                  <label
+                    className="form-label"
+                    style={{
+                      fontWeight: 700,
+                      marginBottom: "6px",
+                      display: "block",
+                    }}
+                  >
                     عدد الصفحات
                   </label>
                   <input
@@ -782,7 +858,14 @@ export default function MemosPage() {
                 </div>
 
                 <div>
-                  <label className="form-label" style={{ fontWeight: 700, marginBottom: "6px", display: "block" }}>
+                  <label
+                    className="form-label"
+                    style={{
+                      fontWeight: 700,
+                      marginBottom: "6px",
+                      display: "block",
+                    }}
+                  >
                     الحجم التقريبي (MB)
                   </label>
                   <input
@@ -802,7 +885,14 @@ export default function MemosPage() {
               </div>
 
               <div>
-                <label className="form-label" style={{ fontWeight: 700, marginBottom: "6px", display: "block" }}>
+                <label
+                  className="form-label"
+                  style={{
+                    fontWeight: 700,
+                    marginBottom: "6px",
+                    display: "block",
+                  }}
+                >
                   ملف PDF{" "}
                   <span style={{ color: "#ffffff" }} aria-hidden="true">
                     *
@@ -812,7 +902,9 @@ export default function MemosPage() {
                   type="file"
                   accept="application/pdf,.pdf"
                   onChange={handlePdfFileChange}
-                  required={!newMemoData.fileUrl.trim() && !getMemoFileUrl(editingMemo)}
+                  required={
+                    !newMemoData.fileUrl.trim() && !getMemoFileUrl(editingMemo)
+                  }
                   disabled={isReadingPdf || isProcessing}
                   className="form-input"
                   style={{ width: "100%" }}
@@ -830,7 +922,14 @@ export default function MemosPage() {
               </div>
 
               <div>
-                <label className="form-label" style={{ fontWeight: 700, marginBottom: "6px", display: "block" }}>
+                <label
+                  className="form-label"
+                  style={{
+                    fontWeight: 700,
+                    marginBottom: "6px",
+                    display: "block",
+                  }}
+                >
                   صورة الغلاف
                 </label>
                 <input
@@ -850,7 +949,14 @@ export default function MemosPage() {
               </div>
 
               <div>
-                <label className="form-label" style={{ fontWeight: 700, marginBottom: "6px", display: "block" }}>
+                <label
+                  className="form-label"
+                  style={{
+                    fontWeight: 700,
+                    marginBottom: "6px",
+                    display: "block",
+                  }}
+                >
                   رابط ملف PDF (بديل لرفع الملف)
                 </label>
                 <input
@@ -869,7 +975,14 @@ export default function MemosPage() {
               </div>
 
               <div>
-                <label className="form-label" style={{ fontWeight: 700, marginBottom: "6px", display: "block" }}>
+                <label
+                  className="form-label"
+                  style={{
+                    fontWeight: 700,
+                    marginBottom: "6px",
+                    display: "block",
+                  }}
+                >
                   رابط صورة الغلاف (اختياري)
                 </label>
                 <input
@@ -887,9 +1000,23 @@ export default function MemosPage() {
                 />
               </div>
 
-              <div className="grid-2col" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+              <div
+                className="grid-2col"
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: "1rem",
+                }}
+              >
                 <div>
-                  <label className="form-label" style={{ fontWeight: 700, marginBottom: "6px", display: "block" }}>
+                  <label
+                    className="form-label"
+                    style={{
+                      fontWeight: 700,
+                      marginBottom: "6px",
+                      display: "block",
+                    }}
+                  >
                     السنة
                   </label>
                   <input
@@ -903,7 +1030,14 @@ export default function MemosPage() {
                   />
                 </div>
                 <div>
-                  <label className="form-label" style={{ fontWeight: 700, marginBottom: "6px", display: "block" }}>
+                  <label
+                    className="form-label"
+                    style={{
+                      fontWeight: 700,
+                      marginBottom: "6px",
+                      display: "block",
+                    }}
+                  >
                     ترتيب العرض
                   </label>
                   <input
@@ -921,7 +1055,9 @@ export default function MemosPage() {
                 </div>
               </div>
 
-              <label style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <label
+                style={{ display: "flex", alignItems: "center", gap: "8px" }}
+              >
                 <input
                   type="checkbox"
                   checked={newMemoData.isActive === true}
@@ -947,7 +1083,9 @@ export default function MemosPage() {
                 </small>
               )}
 
-              <div style={{ display: "flex", gap: "0.75rem", marginTop: "1rem" }}>
+              <div
+                style={{ display: "flex", gap: "0.75rem", marginTop: "1rem" }}
+              >
                 <button
                   type="submit"
                   disabled={isProcessing || isReadingPdf}
@@ -956,7 +1094,8 @@ export default function MemosPage() {
                     flex: 1,
                     justifyContent: "center",
                     padding: "11px",
-                    background: "linear-gradient(135deg, #8b5cf6 0%, #06b6d4 100%)",
+                    background:
+                      "linear-gradient(135deg, #8b5cf6 0%, #06b6d4 100%)",
                   }}
                 >
                   {isProcessing
@@ -1014,7 +1153,14 @@ export default function MemosPage() {
               boxShadow: "0 24px 80px rgba(0,0,0,0.5)",
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "1rem" }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "12px",
+                marginBottom: "1rem",
+              }}
+            >
               <div
                 style={{
                   width: 44,
@@ -1032,13 +1178,22 @@ export default function MemosPage() {
                 <h3 style={{ margin: 0, color: "#fff", fontSize: "1.1rem" }}>
                   تأكيد حذف المذكرة
                 </h3>
-                <span style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>
+                <span
+                  style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}
+                >
                   إزالة الملف من مكتبة المذكرات
                 </span>
               </div>
             </div>
 
-            <p style={{ color: "var(--text-muted)", fontSize: "0.9rem", lineHeight: 1.7, margin: "0 0 1.25rem" }}>
+            <p
+              style={{
+                color: "var(--text-muted)",
+                fontSize: "0.9rem",
+                lineHeight: 1.7,
+                margin: "0 0 1.25rem",
+              }}
+            >
               هل أنت متأكد من حذف مذكرة:{" "}
               <strong style={{ color: "#fff" }}>
                 [ {deleteConfirmationMemo.title} ]

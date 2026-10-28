@@ -13,7 +13,11 @@ export default function Navbar({ student = {}, onOpenStudentModal, activeTab, se
   ];
 
   const studentName = student?.name || 'طالب متميز';
-  const studentGrade = student?.grade || 'الصف الثالث الثانوي';
+  const studentGrade =
+    student?.grade ||
+    student?.grade_name ||
+    student?.subscription?.grade?.name ||
+    '';
 
   return (
     <header className="sticky top-0 z-50 backdrop-blur-xl bg-[#070b14]/80 border-b border-white/10 transition-all duration-300">
@@ -83,12 +87,14 @@ export default function Navbar({ student = {}, onOpenStudentModal, activeTab, se
                   </span>
                   <Edit3 className="w-3.5 h-3.5 text-slate-400 group-hover:text-cyan-400 transition-colors" />
                 </div>
-                <div className="flex items-center gap-1 mt-0.5">
-                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                  <span className="text-[11px] font-medium text-cyan-300/90 bg-cyan-950/60 px-2 py-0.2 rounded-md border border-cyan-500/20">
-                    {studentGrade}
-                  </span>
-                </div>
+                {studentGrade && (
+                  <div className="flex items-center gap-1 mt-0.5">
+                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                    <span className="text-[11px] font-medium text-cyan-300/90 bg-cyan-950/60 px-2 py-0.2 rounded-md border border-cyan-500/20">
+                      {studentGrade}
+                    </span>
+                  </div>
+                )}
               </div>
 
               {/* Student Avatar Icon */}

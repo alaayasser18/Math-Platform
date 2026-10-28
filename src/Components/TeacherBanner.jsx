@@ -6,7 +6,11 @@ import { TEACHER_INFO } from "../data/platformData";
 export default function TeacherBanner() {
   const { student } = useStudent();
   const studentName = student?.name || "طالب متميز";
-  const studentGrade = student?.grade || "الصف الثالث الثانوي";
+  const studentGrade =
+    student?.grade ||
+    student?.grade_name ||
+    student?.subscription?.grade?.name ||
+    "";
 
   return (
     <div className="hero-card">
@@ -20,16 +24,18 @@ export default function TeacherBanner() {
             <span>
               أهلاً بك يا <strong>{studentName}</strong> في منصة الرياضيات
             </span>
-            <span
-              style={{
-                background: "rgba(6, 182, 212, 0.25)",
-                padding: "1px 6px",
-                borderRadius: "4px",
-                fontSize: "0.65rem",
-              }}
-            >
-              {studentGrade}
-            </span>
+            {studentGrade && (
+              <span
+                style={{
+                  background: "rgba(6, 182, 212, 0.25)",
+                  padding: "1px 6px",
+                  borderRadius: "4px",
+                  fontSize: "0.65rem",
+                }}
+              >
+                {studentGrade}
+              </span>
+            )}
           </div>
 
           <h1 className="hero-title">

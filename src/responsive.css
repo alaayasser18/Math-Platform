@@ -1,0 +1,268 @@
+/* ==========================================================================
+   responsive.css — طبقة الريسبونسيف (تتحمّل بعد index.css)
+   ========================================================================== */
+
+:root {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --topbar-h: 74px;
+  --gutter: clamp(0.75rem, 3.5vw, 1.5rem);
+  --fs-hero: clamp(1.65rem, 1.15rem + 2.4vw, 2.6rem);
+  --fs-section: clamp(1.2rem, 1.02rem + 0.9vw, 1.6rem);
+}
+
+@media (max-width: 768px) {
+  :root {
+    --topbar-h: 60px;
+  }
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  overflow-wrap: break-word;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ── Layout / Safe areas ── */
+.topbar {
+  height: calc(var(--topbar-h) + var(--safe-top));
+  padding-top: var(--safe-top);
+}
+
+.main-content {
+  padding-top: calc(var(--topbar-h) + var(--safe-top));
+  padding-bottom: calc(2rem + var(--safe-bottom));
+}
+
+.mobile-drawer-backdrop {
+  top: calc(var(--topbar-h) + var(--safe-top));
+}
+
+.mobile-drawer {
+  max-height: calc(100dvh - var(--topbar-h) - var(--safe-top));
+  padding-bottom: calc(1.5rem + var(--safe-bottom));
+}
+
+.mobile-nav-link {
+  min-height: 46px;
+}
+
+.container {
+  padding-inline: var(--gutter);
+}
+
+@media (min-width: 1600px) {
+  .container {
+    max-width: 1360px;
+  }
+}
+
+/* ── Topbar على الشاشات الصغيرة ── */
+@media (max-width: 640px) {
+  .topbar-inner {
+    gap: 0.5rem;
+  }
+  .topbar-actions {
+    gap: 0.5rem;
+  }
+}
+
+@media (max-width: 420px) {
+  .brand-title .badge-tag {
+    display: none;
+  }
+}
+
+/* ── Typography مرنة ── */
+.hero-title {
+  font-size: var(--fs-hero);
+}
+
+.section-title {
+  font-size: var(--fs-section);
+}
+
+.stat-box-val {
+  font-size: clamp(1.15rem, 1rem + 1vw, 1.4rem);
+}
+
+.lesson-title {
+  overflow-wrap: anywhere;
+}
+
+.lesson-meta {
+  flex-wrap: wrap;
+}
+
+/* ── Hero ── */
+.hero-card {
+  padding: clamp(1.1rem, 4vw, 2.25rem);
+  border-radius: clamp(18px, 3vw, 28px);
+  margin-top: clamp(1rem, 3vw, 1.5rem);
+}
+
+.hero-glow-edge {
+  width: 4px;
+}
+
+.teacher-img {
+  height: clamp(260px, 38vw, 380px);
+}
+
+@media (max-width: 480px) {
+  .hero-actions > * {
+    flex: 1 1 100%;
+    justify-content: center;
+  }
+}
+
+/* ── Feature cards: 3 → 2 → 1 ── */
+@media (max-width: 1024px) {
+  .features-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .features-grid > :last-child:nth-child(odd) {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 640px) {
+  .features-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Section header ── */
+@media (max-width: 640px) {
+  .section-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .section-header > .btn-secondary,
+  .section-header > .btn-primary {
+    width: 100%;
+  }
+}
+
+/* ── الجداول على التابلت: سكرول أفقي بدل ما الأعمدة تتخنق ── */
+.modern-table {
+  min-width: 640px;
+}
+
+/* ── Modal كـ Bottom Sheet على الموبايل ── */
+@media (max-width: 640px) {
+  .modal-overlay {
+    align-items: flex-end;
+    padding: 0;
+  }
+  .modal-overlay > .modal-content,
+  .modal-overlay > .modal-card {
+    width: 100%;
+    max-height: 94dvh !important;
+    border-radius: 20px 20px 0 0 !important;
+    padding-bottom: calc(1rem + var(--safe-bottom));
+  }
+}
+
+/* ── Toast ── */
+.toast-box {
+  z-index: 1200;
+}
+
+@media (max-width: 640px) {
+  .toast-box {
+    left: var(--gutter);
+    right: var(--gutter);
+    bottom: calc(16px + var(--safe-bottom));
+    justify-content: center;
+    text-align: center;
+  }
+}
+
+/* ── أجهزة اللمس: أزرار أكبر وبدون hover حركات ── */
+@media (pointer: coarse) {
+  .btn-primary,
+  .btn-secondary,
+  .tab-btn,
+  .nav-link,
+  .status-filter-btn,
+  .grade-filter-option {
+    min-height: 44px;
+  }
+}
+
+@media (hover: none) {
+  .feature-card:hover,
+  .lesson-card:hover,
+  .btn-primary:hover,
+  .student-pill:hover,
+  .brand-wrapper:hover,
+  .grade-filter-option:hover:not(:disabled),
+  .btn-quick-deactivated:hover {
+    transform: none;
+  }
+}
+
+/* ── مشغّل الفيديو (يحتاج الـ classNames في الخطوة 2) ── */
+.protected-player-root {
+  max-height: 80dvh;
+}
+
+@media (max-width: 640px) {
+  .pp-header {
+    height: 44px !important;
+    padding: 0 10px !important;
+  }
+  .pp-title {
+    max-width: 52vw !important;
+    font-size: 0.74rem !important;
+  }
+  .pp-teacher {
+    display: none !important;
+  }
+  .pp-controls {
+    padding: 8px 10px 8px !important;
+    gap: 4px !important;
+  }
+  .pp-time {
+    font-size: 0.68rem !important;
+  }
+  .pp-secure-badge {
+    font-size: 0.66rem !important;
+    padding: 4px 10px !important;
+    top: 8px !important;
+    right: 8px !important;
+  }
+  .pp-poster-title {
+    font-size: 0.95rem !important;
+    margin-top: 10px !important;
+  }
+}
+
+/* ── موبايل بالعرض (landscape) ── */
+@media (max-height: 480px) and (orientation: landscape) {
+  .modal-overlay > div {
+    max-height: 100dvh !important;
+  }
+  .protected-player-root {
+    max-height: 100dvh;
+  }
+  .mobile-drawer {
+    max-height: calc(100dvh - var(--topbar-h));
+  }
+}
+
+/* ── تقليل الحركة لمن يفضّل ذلك ── */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -6,17 +6,12 @@ import { useStudent } from "../context/useStudent";
 import { GRADES, BRANCHES } from "../data/platformData";
 import {
   Search,
-  BookOpen,
-  GraduationCap,
-  Shield,
-  RefreshCw,
   Plus,
   Video,
   X,
-  Trash2,
   AlertTriangle,
-  FileText,
-  Clock,
+  RefreshCw,
+  RotateCcw,
 } from "lucide-react";
 import { getYouTubeVideoId } from "../utils/youtube";
 
@@ -35,6 +30,17 @@ const LESSON_URL_SCHEMA = {
   },
 };
 
+const createEmptyLesson = () => ({
+  title: "",
+  branch: BRANCHES.find((b) => b !== "الكل") || "التفاضل والتكامل",
+  grade: GRADES[0].name,
+  gradeId: GRADES[0].id,
+  duration: "",
+  videoUrl: "",
+  pdfFile: "",
+  description: "",
+});
+
 export default function LessonsPage() {
   const {
     student,
@@ -45,7 +51,6 @@ export default function LessonsPage() {
     addLesson,
     deleteLesson,
     showToast,
-    saveAdminLessonQuiz,
   } = useStudent();
   const isTeacher = userRole === "teacher";
 
@@ -61,24 +66,10 @@ export default function LessonsPage() {
   // Teacher Add Lesson Modal State
   const [isAddLessonOpen, setIsAddLessonOpen] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [deleteConfirmationLesson, setDeleteConfirmationLesson] = useState(null);
+  const [deleteConfirmationLesson, setDeleteConfirmationLesson] =
+    useState(null);
 
-  const [newLessonData, setNewLessonData] = useState({
-    title: "",
-    branch: BRANCHES[0] || "التفاضل والتكامل",
-    grade: GRADES[0].name,
-    gradeId: GRADES[0].id,
-    duration: "",
-    videoUrl: "",
-    pdfFile: "",
-    description: "",
-    quizQuestion: "",
-    quizOption1: "",
-    quizOption2: "",
-    quizOption3: "",
-    quizOption4: "",
-    quizCorrectOption: 1,
-  });
+  const [newLessonData, setNewLessonData] = useState(createEmptyLesson);
   const [durationStatus, setDurationStatus] = useState("");
 
   useEffect(() => {
@@ -92,7 +83,10 @@ export default function LessonsPage() {
     let timeoutTimer;
     const saveDuration = (seconds) => {
       if (cancelled || !Number.isFinite(seconds) || seconds <= 0) return;
-      setNewLessonData((current) => ({ ...current, duration: `${Math.ceil(seconds / 60)} دقيقة` }));
+      setNewLessonData((current) => ({
+        ...current,
+        duration: `${Math.ceil(seconds / 60)} دقيقة`,
+      }));
       setDurationStatus("تم تحديد المدة تلقائيًا");
     };
 
@@ -102,20 +96,25 @@ export default function LessonsPage() {
         if (cancelled) return;
         setDurationStatus("جارٍ قراءة المدة من YouTube...");
         const container = document.createElement("div");
-        container.style.cssText = "position:fixed;left:-10000px;top:0;width:320px;height:180px";
+        container.style.cssText =
+          "position:fixed;left:-10000px;top:0;width:320px;height:180px";
         document.body.appendChild(container);
         player = new YT.Player(container, {
           videoId: youtubeId,
           events: {
             onReady: (event) => {
-              const readDuration = () => saveDuration(event.target.getDuration());
+              const readDuration = () =>
+                saveDuration(event.target.getDuration());
               readDuration();
               pollTimer = window.setInterval(readDuration, 500);
               timeoutTimer = window.setTimeout(() => {
                 window.clearInterval(pollTimer);
-                if (!cancelled) setDurationStatus((status) =>
-                  status === "تم تحديد المدة تلقائيًا" ? status : "تعذر قراءة المدة؛ تأكدي أن الفيديو متاح",
-                );
+                if (!cancelled)
+                  setDurationStatus((status) =>
+                    status === "تم تحديد المدة تلقائيًا"
+                      ? status
+                      : "تعذر قراءة المدة؛ تأكدي أن الفيديو متاح",
+                  );
               }, 8000);
             },
             onError: () => setDurationStatus("تعذر قراءة مدة هذا الفيديو"),
@@ -131,10 +130,15 @@ export default function LessonsPage() {
           previousReady?.();
           createPlayer(window.YT);
         };
-        if (!document.querySelector('script[src="https://www.youtube.com/iframe_api"]')) {
+        if (
+          !document.querySelector(
+            'script[src="https://www.youtube.com/iframe_api"]',
+          )
+        ) {
           const script = document.createElement("script");
           script.src = "https://www.youtube.com/iframe_api";
-          script.onerror = () => setDurationStatus("تعذر الاتصال بـ YouTube لقراءة المدة");
+          script.onerror = () =>
+            setDurationStatus("تعذر الاتصال بـ YouTube لقراءة المدة");
           document.head.appendChild(script);
         }
       }
@@ -165,7 +169,6 @@ export default function LessonsPage() {
   // If teacher, they can view all grades; if student, locked strictly to student's grade
   const effectiveGrade = isTeacher ? selectedGrade : studentGrade;
 
-
   const filteredLessons = useMemo(() => {
     return (lessonsList || []).filter((lesson) => {
       const matchGrade =
@@ -181,13 +184,15 @@ export default function LessonsPage() {
     });
   }, [lessonsList, effectiveGrade, selectedBranch, searchQuery]);
 
-  // Extract unique branches available for this grade
+  // Extract unique branches available for this grade (never duplicate "الكل")
   const gradeBranches = useMemo(() => {
     const branchesInGrade = new Set(
       (lessonsList || [])
-        .filter((l) => effectiveGrade === BRANCHES[0] || l.grade === effectiveGrade)
+        .filter(
+          (l) => effectiveGrade === BRANCHES[0] || l.grade === effectiveGrade,
+        )
         .map((l) => l.branch?.trim())
-        .filter(Boolean),
+        .filter((b) => b && b !== BRANCHES[0] && b !== "الكل"),
     );
     return [BRANCHES[0], ...Array.from(branchesInGrade)];
   }, [lessonsList, effectiveGrade]);
@@ -206,20 +211,16 @@ export default function LessonsPage() {
       showToast("يرجى كتابة عنوان المحاضرة أولاً", "error");
       return;
     }
-    const answerOptions = [1, 2, 3, 4].map((number) =>
-      String(newLessonData[`quizOption${number}`] || "").trim(),
-    );
-    const hasQuizContent = newLessonData.quizQuestion.trim() || answerOptions.some(Boolean);
-    if (hasQuizContent && (!newLessonData.quizQuestion.trim() || answerOptions.some((option) => !option))) {
-      showToast("لو هتضيفي سؤال، اكتبي السؤال والاختيارات الأربعة.", "error");
-      return;
-    }
     if (!newLessonData.duration) {
-      showToast("أدخلي رابط YouTube أو MP4 وانتظري قراءة مدة الفيديو تلقائيًا.", "error");
+      showToast(
+        "أدخلي رابط YouTube أو MP4 وانتظري قراءة مدة الفيديو تلقائيًا.",
+        "error",
+      );
       return;
     }
 
-    const matchedGrade = GRADES.find((g) => g.name === newLessonData.grade) || GRADES[0];
+    const matchedGrade =
+      GRADES.find((g) => g.name === newLessonData.grade) || GRADES[0];
 
     setIsProcessing(true);
     try {
@@ -231,53 +232,10 @@ export default function LessonsPage() {
       });
 
       if (res?.success) {
-        let quizError = "";
-        const lessonId = Number(res.data?.id);
-        if (hasQuizContent && lessonId) {
-          try {
-            const quizResult = await saveAdminLessonQuiz(lessonId, {
-              title: `اختبار محاضرة: ${newLessonData.title.trim()}`,
-              description: "",
-              duration_minutes: 10,
-              passing_percentage: 60,
-              questions: [
-                {
-                  question_text: newLessonData.quizQuestion.trim(),
-                  points: 1,
-                  sort_order: 1,
-                  options: answerOptions.map((optionText, index) => ({
-                    option_text: optionText,
-                    is_correct: newLessonData.quizCorrectOption === index + 1,
-                    sort_order: index + 1,
-                  })),
-                },
-              ],
-            });
-            if (!quizResult?.success) {
-              throw new Error(quizResult?.message || "لم يتم حفظ سؤال المحاضرة.");
-            }
-          } catch (error) {
-            quizError = error.message || "لم يتم حفظ سؤال المحاضرة.";
-          }
-        }
         setIsAddLessonOpen(false);
-        setNewLessonData({
-          title: "",
-          branch: BRANCHES[0] || "التفاضل والتكامل",
-          grade: GRADES[0].name,
-          gradeId: GRADES[0].id,
-          duration: "",
-          videoUrl: "",
-          pdfFile: "",
-          description: "",
-          quizQuestion: "",
-          quizOption1: "",
-          quizOption2: "",
-          quizOption3: "",
-          quizOption4: "",
-          quizCorrectOption: 1,
-        });
-        showToast(quizError || "تم رفع ونشر المحاضرة بنجاح 🎉", quizError ? "error" : "success");
+        setNewLessonData(createEmptyLesson());
+        setDurationStatus("");
+        showToast("تم رفع ونشر المحاضرة بنجاح 🎉");
         if (typeof fetchLessons === "function") {
           fetchLessons();
         }
@@ -314,196 +272,170 @@ export default function LessonsPage() {
       className="container"
       style={{ paddingTop: "1.5rem", paddingBottom: "3rem" }}
     >
-      {/* Header & Search */}
-      <div className="section-header" style={{ alignItems: "flex-start", gap: "1.25rem" }}>
+      {/* Header */}
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: "1.25rem",
+          flexWrap: "wrap",
+          gap: "1rem",
+        }}
+      >
         <div>
-          <div
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "6px",
-              fontSize: "0.75rem",
-              color: "var(--cyan)",
-              fontWeight: 700,
-              marginBottom: "6px",
-            }}
-          >
-            <BookOpen size={14} />
-            <span>المكتبة التعليمية ومحاضرات الفيديو</span>
-          </div>
           <h1 className="section-title">
-            {isTeacher
-              ? "معاينة وإدارة المحاضرات والدروس"
-              : `المحاضرات والشروحات المقررة لـ (${studentGrade})`}
+            {isTeacher ? "المحاضرات والدروس" : `دروس ${studentGrade}`}
           </h1>
           <p className="section-desc">
             {isTeacher
-              ? "تصفح المحاضرات المرفوعة، رفع شروحات جديدة، والتحكم في بنك الدروس"
-              : `محتوى مخصص ومقيد لـ: ${student?.name || "طالب المنصة"} • ${studentGrade}`}
+              ? "إدارة ورفع شروحات الفيديو وامتحانات الدروس"
+              : `المحاضرات والشروحات المقررة لـ ${student?.name || "طالب المنصة"}`}
           </p>
         </div>
 
-        {/* Action Buttons: Add Lesson (Teacher), Search, Refresh */}
-        <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
-          {isTeacher && (
-            <button
-              onClick={() => setIsAddLessonOpen(true)}
-              className="btn-primary"
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "8px",
-                fontSize: "0.85rem",
-                padding: "9px 18px",
-                boxShadow: "0 4px 14px rgba(6, 182, 212, 0.35)",
-              }}
-            >
-              <Plus size={17} />
-              <span>رفع درس جديد</span>
-            </button>
-          )}
-
-          <div style={{ position: "relative", flex: "1 1 200px", minWidth: 0 }}>
-            <input
-              type="text"
-              placeholder={isTeacher ? "ابحث في كل الدروس..." : "ابحث في دروس صفك..."}
-              value={searchQuery}
-              onChange={(e) => setUrlState({ search: e.target.value }, { replace: true })}
-              className="form-input"
-              style={{
-                paddingLeft: "1rem",
-                paddingRight: "2.5rem",
-                fontSize: "0.85rem",
-              }}
-            />
-            <Search
-              size={16}
-              style={{
-                position: "absolute",
-                right: "12px",
-                top: "50%",
-                transform: "translateY(-50%)",
-                color: "var(--text-dim)",
-              }}
-            />
-          </div>
-
+        {isTeacher && (
           <button
-            onClick={() => fetchLessons()}
-            className="btn-secondary"
-            title="تحديث قائمة الدروس من الخادم"
-            style={{ padding: "8px 12px" }}
-            disabled={isLoadingLessons}
+            onClick={() => setIsAddLessonOpen(true)}
+            className="btn-primary"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "8px",
+              fontSize: "0.85rem",
+              padding: "9px 18px",
+              boxShadow: "0 4px 14px rgba(6, 182, 212, 0.35)",
+            }}
           >
-            <RefreshCw
-              size={15}
-              className={isLoadingLessons ? "animate-spin" : ""}
-            />
+            <Plus size={17} />
+            <span>رفع درس جديد</span>
           </button>
-        </div>
+        )}
       </div>
 
-      {/* Grade Lock Indicator for Student */}
-      {!isTeacher && (
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            background:
-              "linear-gradient(90deg, rgba(79, 70, 229, 0.15) 0%, rgba(6, 182, 212, 0.1) 100%)",
-            border: "1px solid rgba(6, 182, 212, 0.25)",
-            borderRadius: "var(--radius-lg, 14px)",
-            padding: "12px 18px",
-            marginBottom: "1.5rem",
-            flexWrap: "wrap",
-            gap: "10px",
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-            <div
-              style={{
-                width: "38px",
-                height: "38px",
-                borderRadius: "10px",
-                background: "rgba(6, 182, 212, 0.2)",
-                color: "var(--cyan)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              <GraduationCap size={22} />
-            </div>
-            <div>
-              <div
-                style={{
-                  fontWeight: 800,
-                  color: "#ffffff",
-                  fontSize: "0.95rem",
-                }}
+      {/* Modern Unified Filter Bar */}
+      <div className="modern-filter-bar" style={{ marginBottom: "1.5rem" }}>
+        {/* Row 1: Search & Controls */}
+        <div className="modern-filter-row">
+          <div className="modern-search-box">
+            <span className="modern-search-icon">
+              <Search size={15} />
+            </span>
+            <input
+              type="text"
+              placeholder={
+                isTeacher
+                  ? "بحث في الدروس بالعنوان أو الفرع..."
+                  : "ابحث في دروس صفك..."
+              }
+              value={searchQuery}
+              onChange={(e) =>
+                setUrlState({ search: e.target.value }, { replace: true })
+              }
+              className="modern-search-input"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setUrlState({ search: "" }, { replace: true })}
+                className="modern-search-clear"
+                title="مسح البحث"
               >
-                المحتوى المعروض خاص بـ:{" "}
-                <span style={{ color: "var(--cyan)" }}>{studentGrade}</span>
-              </div>
-              <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
-                يتم عرض الشروحات والتمارين والواجبات الخاصة بمرحلتك الدراسية فقط
-              </div>
-            </div>
+                <X size={13} />
+              </button>
+            )}
           </div>
 
           <div
             style={{
               display: "flex",
               alignItems: "center",
-              gap: "6px",
-              fontSize: "0.75rem",
-              color: "var(--emerald)",
-              background: "rgba(16, 185, 129, 0.15)",
-              padding: "4px 12px",
-              borderRadius: "999px",
-              border: "1px solid rgba(16, 185, 129, 0.3)",
-              fontWeight: 700,
+              gap: "8px",
+              flexWrap: "wrap",
             }}
           >
-            <Shield size={13} />
-            <span>حساب موثق ومفعل</span>
+            <button
+              onClick={() => fetchLessons()}
+              className="btn-secondary"
+              title="تحديث قائمة الدروس من الخادم"
+              style={{ padding: "8px 14px", fontSize: "0.8rem", gap: "6px" }}
+              disabled={isLoadingLessons}
+            >
+              <RefreshCw
+                size={14}
+                className={isLoadingLessons ? "animate-spin" : ""}
+              />
+              <span>تحديث</span>
+            </button>
+
+            {(searchQuery ||
+              (isTeacher && selectedGrade !== BRANCHES[0]) ||
+              selectedBranch !== BRANCHES[0]) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setUrlState(
+                    {
+                      search: "",
+                      grade: BRANCHES[0],
+                      branch: BRANCHES[0],
+                    },
+                    { replace: true },
+                  );
+                }}
+                className="btn-secondary"
+                style={{ fontSize: "0.78rem", padding: "8px 12px", gap: "5px" }}
+                title="إلغاء جميع الفلاتر"
+              >
+                <RotateCcw size={13} />
+                <span>إعادة ضبط</span>
+              </button>
+            )}
           </div>
         </div>
-      )}
 
-      {/* Grade Tabs ONLY FOR TEACHER */}
-      {isTeacher && (
-        <GradeFilter
-          value={selectedGrade}
-          onChange={setSelectedGrade}
-          options={gradeOptions}
-          includeAll
-        />
-      )}
-
-      {/* Branch Tabs for current Grade */}
-      <div className="filter-tabs-row" style={{ marginBottom: "1.75rem" }}>
-        <span
+        {/* Row 2: Grade Tabs (Teacher only) & Branch Chips */}
+        <div
+          className="modern-filter-row"
           style={{
-            fontSize: "0.8rem",
-            fontWeight: 700,
-            color: "var(--text-muted)",
-            marginLeft: "8px",
+            paddingTop: "0.6rem",
+            borderTop: "1px solid rgba(148, 163, 184, 0.08)",
+            gap: "1rem",
+            flexWrap: "wrap",
+            alignItems: "center",
           }}
         >
-          الفرع:
-        </span>
-        {gradeBranches.map((branch) => (
-          <button
-            key={branch}
-            onClick={() => setSelectedBranch(branch)}
-            className={`tab-btn ${selectedBranch === branch ? "active" : ""}`}
-            style={{ fontSize: "0.75rem", padding: "4px 14px" }}
-          >
-            {branch}
-          </button>
-        ))}
+          {isTeacher && (
+            <GradeFilter
+              value={selectedGrade}
+              onChange={setSelectedGrade}
+              options={gradeOptions}
+              includeAll
+              showLabel={true}
+            />
+          )}
+
+          <div className="grade-filter" role="group" aria-label="أفرع المادة">
+            <span className="grade-filter-label" style={{ color: "#94a3b8" }}>
+              الفرع:
+            </span>
+            <div className="grade-filter-options">
+              {gradeBranches.map((branch) => {
+                const isActive = selectedBranch === branch;
+                return (
+                  <button
+                    key={branch}
+                    type="button"
+                    onClick={() => setSelectedBranch(branch)}
+                    className={`grade-filter-option ${isActive ? "is-active" : ""}`}
+                  >
+                    {branch}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Lessons List */}
@@ -518,7 +450,10 @@ export default function LessonsPage() {
               border: "1px solid var(--border-subtle)",
             }}
           >
-            <Video size={44} style={{ color: "var(--text-dim)", margin: "0 auto 1rem" }} />
+            <Video
+              size={44}
+              style={{ color: "var(--text-dim)", margin: "0 auto 1rem" }}
+            />
             <p
               style={{ fontWeight: 800, fontSize: "1.1rem", color: "#ffffff" }}
             >
@@ -547,7 +482,10 @@ export default function LessonsPage() {
             ) : (
               <button
                 onClick={() => {
-                  setUrlState({ branch: BRANCHES[0], search: "" }, { replace: true });
+                  setUrlState(
+                    { branch: BRANCHES[0], search: "" },
+                    { replace: true },
+                  );
                 }}
                 className="btn-primary"
                 style={{ marginTop: "1rem", fontSize: "0.8rem" }}
@@ -557,12 +495,16 @@ export default function LessonsPage() {
             )}
           </div>
         ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem" }}>
+          <div
+            style={{ display: "flex", flexDirection: "column", gap: "0.85rem" }}
+          >
             {filteredLessons.map((lesson) => (
               <LessonCard
                 key={lesson.id}
                 lesson={lesson}
-                onDelete={(lessonToDelete) => setDeleteConfirmationLesson(lessonToDelete)}
+                onDelete={(lessonToDelete) =>
+                  setDeleteConfirmationLesson(lessonToDelete)
+                }
               />
             ))}
           </div>
@@ -622,7 +564,14 @@ export default function LessonsPage() {
               <X size={20} />
             </button>
 
-            <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "1.25rem" }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "10px",
+                marginBottom: "1.25rem",
+              }}
+            >
               <div
                 style={{
                   width: "40px",
@@ -637,18 +586,41 @@ export default function LessonsPage() {
                 <Video size={22} />
               </div>
               <div>
-                <h2 style={{ fontSize: "1.2rem", fontWeight: 800, color: "#fff", margin: 0 }}>
+                <h2
+                  style={{
+                    fontSize: "1.2rem",
+                    fontWeight: 800,
+                    color: "#fff",
+                    margin: 0,
+                  }}
+                >
                   رفع محاضرة ودرس جديد
                 </h2>
-                <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", margin: "4px 0 0" }}>
+                <p
+                  style={{
+                    fontSize: "0.8rem",
+                    color: "var(--text-muted)",
+                    margin: "4px 0 0",
+                  }}
+                >
                   أدخل بيانات الدرس ورابط الفيديو، وستُحسب المدة تلقائيًا
                 </p>
               </div>
             </div>
 
-            <form onSubmit={handleSaveLesson} style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+            <form
+              onSubmit={handleSaveLesson}
+              style={{ display: "flex", flexDirection: "column", gap: "1rem" }}
+            >
               <div>
-                <label className="form-label" style={{ fontWeight: 700, marginBottom: "6px", display: "block" }}>
+                <label
+                  className="form-label"
+                  style={{
+                    fontWeight: 700,
+                    marginBottom: "6px",
+                    display: "block",
+                  }}
+                >
                   عنوان المحاضرة *
                 </label>
                 <input
@@ -657,22 +629,42 @@ export default function LessonsPage() {
                   placeholder="مثال: مقدمة في قواعد الاشتقاق وتطبيقاتها"
                   value={newLessonData.title}
                   onChange={(e) =>
-                    setNewLessonData({ ...newLessonData, title: e.target.value })
+                    setNewLessonData({
+                      ...newLessonData,
+                      title: e.target.value,
+                    })
                   }
                   className="form-input"
                   style={{ width: "100%" }}
                 />
               </div>
 
-              <div className="grid-2col" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+              <div
+                className="grid-2col"
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: "1rem",
+                }}
+              >
                 <div>
-                  <label className="form-label" style={{ fontWeight: 700, marginBottom: "6px", display: "block" }}>
+                  <label
+                    className="form-label"
+                    style={{
+                      fontWeight: 700,
+                      marginBottom: "6px",
+                      display: "block",
+                    }}
+                  >
                     المرحلة الدراسية *
                   </label>
                   <select
                     value={newLessonData.grade}
                     onChange={(e) =>
-                      setNewLessonData({ ...newLessonData, grade: e.target.value })
+                      setNewLessonData({
+                        ...newLessonData,
+                        grade: e.target.value,
+                      })
                     }
                     className="form-input"
                     style={{ width: "100%" }}
@@ -686,18 +678,28 @@ export default function LessonsPage() {
                 </div>
 
                 <div>
-                  <label className="form-label" style={{ fontWeight: 700, marginBottom: "6px", display: "block" }}>
+                  <label
+                    className="form-label"
+                    style={{
+                      fontWeight: 700,
+                      marginBottom: "6px",
+                      display: "block",
+                    }}
+                  >
                     الفرع *
                   </label>
                   <select
                     value={newLessonData.branch}
                     onChange={(e) =>
-                      setNewLessonData({ ...newLessonData, branch: e.target.value })
+                      setNewLessonData({
+                        ...newLessonData,
+                        branch: e.target.value,
+                      })
                     }
                     className="form-input"
                     style={{ width: "100%" }}
                   >
-                    {BRANCHES.map((b) => (
+                    {BRANCHES.filter((b) => b !== "الكل").map((b) => (
                       <option key={b} value={b}>
                         {b}
                       </option>
@@ -707,7 +709,14 @@ export default function LessonsPage() {
               </div>
 
               <div>
-                <label className="form-label" style={{ fontWeight: 700, marginBottom: "6px", display: "block" }}>
+                <label
+                  className="form-label"
+                  style={{
+                    fontWeight: 700,
+                    marginBottom: "6px",
+                    display: "block",
+                  }}
+                >
                   رابط الفيديو (YouTube / Embed / Direct URL)
                 </label>
                 <input
@@ -715,58 +724,39 @@ export default function LessonsPage() {
                   placeholder="https://www.youtube.com/watch?v=..."
                   value={newLessonData.videoUrl}
                   onChange={(e) => {
-                    setNewLessonData({ ...newLessonData, videoUrl: e.target.value, duration: "" });
+                    setNewLessonData({
+                      ...newLessonData,
+                      videoUrl: e.target.value,
+                      duration: "",
+                    });
                     setDurationStatus("");
                   }}
                   className="form-input"
-                  style={{ width: "100%", direction: "ltr", textAlign: "right" }}
+                  style={{
+                    width: "100%",
+                    direction: "ltr",
+                    textAlign: "right",
+                  }}
                 />
-                <div role="status" style={{ marginTop: "0.5rem", color: newLessonData.duration ? "var(--emerald)" : "var(--text-muted)", fontSize: "0.82rem" }}>
-                  {durationStatus || "مدة الشرح ستُحسب تلقائيًا من رابط الفيديو"}
+                <div
+                  role="status"
+                  style={{
+                    marginTop: "0.5rem",
+                    color: newLessonData.duration
+                      ? "var(--emerald)"
+                      : "var(--text-muted)",
+                    fontSize: "0.82rem",
+                  }}
+                >
+                  {durationStatus ||
+                    "مدة الشرح ستُحسب تلقائيًا من رابط الفيديو"}
                   {newLessonData.duration ? ` — ${newLessonData.duration}` : ""}
                 </div>
               </div>
 
-
-
-              <section style={{ padding: "1rem", border: "1px solid rgba(6, 182, 212, 0.25)", borderRadius: "12px", background: "rgba(15, 23, 42, 0.55)" }}>
-                <h3 style={{ color: "#fff", fontWeight: 800, margin: "0 0 0.75rem" }}>سؤال المحاضرة والاختيارات</h3>
-                <label className="form-label" htmlFor="lesson-question" style={{ display: "block", marginBottom: "6px" }}>السؤال *</label>
-                <textarea
-                  id="lesson-question"
-                  required={Boolean(newLessonData.quizQuestion.trim() || [1, 2, 3, 4].some((number) => newLessonData[`quizOption${number}`].trim()))}
-                  rows={3}
-                  className="form-input"
-                  style={{ width: "100%", resize: "vertical", marginBottom: "0.75rem" }}
-                  value={newLessonData.quizQuestion}
-                  onChange={(e) => setNewLessonData({ ...newLessonData, quizQuestion: e.target.value })}
-                  placeholder="اكتبي سؤالًا على محتوى المحاضرة"
-                />
-                {[1, 2, 3, 4].map((number) => (
-                  <div key={number} style={{ display: "flex", gap: "0.6rem", alignItems: "center", marginBottom: "0.6rem" }}>
-                    <input
-                      type="radio"
-                      name="lesson-correct-option"
-                      aria-label={`تحديد الاختيار ${number} كإجابة صحيحة`}
-                      checked={newLessonData.quizCorrectOption === number}
-                      onChange={() => setNewLessonData({ ...newLessonData, quizCorrectOption: number })}
-                    />
-                    <input
-                      type="text"
-                      required={Boolean(newLessonData.quizQuestion.trim() || [1, 2, 3, 4].some((optionNumber) => newLessonData[`quizOption${optionNumber}`].trim()))}
-                      className="form-input"
-                      aria-label={`الاختيار ${number}`}
-                      style={{ width: "100%" }}
-                      value={newLessonData[`quizOption${number}`]}
-                      onChange={(e) => setNewLessonData({ ...newLessonData, [`quizOption${number}`]: e.target.value })}
-                      placeholder={`الاختيار ${number}${newLessonData.quizCorrectOption === number ? " (الإجابة الصحيحة)" : ""}`}
-                    />
-                  </div>
-                ))}
-                <small style={{ color: "var(--text-muted)" }}>حددي الدائرة بجانب الإجابة الصحيحة.</small>
-              </section>
-
-              <div style={{ display: "flex", gap: "0.75rem", marginTop: "1rem" }}>
+              <div
+                style={{ display: "flex", gap: "0.75rem", marginTop: "1rem" }}
+              >
                 <button
                   type="submit"
                   disabled={isProcessing}
@@ -821,7 +811,14 @@ export default function LessonsPage() {
               boxShadow: "0 24px 80px rgba(0,0,0,0.5)",
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "1rem" }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "12px",
+                marginBottom: "1rem",
+              }}
+            >
               <div
                 style={{
                   width: 44,
@@ -839,13 +836,22 @@ export default function LessonsPage() {
                 <h3 style={{ margin: 0, color: "#fff", fontSize: "1.1rem" }}>
                   تأكيد حذف الدرس
                 </h3>
-                <span style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>
+                <span
+                  style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}
+                >
                   إزالة المحاضرة من المنصة
                 </span>
               </div>
             </div>
 
-            <p style={{ color: "var(--text-muted)", fontSize: "0.9rem", lineHeight: 1.7, margin: "0 0 1.25rem" }}>
+            <p
+              style={{
+                color: "var(--text-muted)",
+                fontSize: "0.9rem",
+                lineHeight: 1.7,
+                margin: "0 0 1.25rem",
+              }}
+            >
               هل أنت متأكد من حذف درس:{" "}
               <strong style={{ color: "#fff" }}>
                 [ {deleteConfirmationLesson.title} ]

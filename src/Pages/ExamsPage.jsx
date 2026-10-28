@@ -1,11 +1,10 @@
-﻿import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import { useStudent } from "../context/useStudent";
 import useUrlState from "../hooks/useUrlState";
 import {
   Timer,
   CheckCircle,
-  AlertCircle,
   Trophy,
   ArrowRight,
   ArrowLeft,
@@ -20,7 +19,6 @@ import {
   AlertTriangle,
   Play,
   HelpCircle,
-  Eye,
 } from "lucide-react";
 import confetti from "canvas-confetti";
 
@@ -36,7 +34,7 @@ function getNestedQuestionId(payload) {
 const EXAM_MANAGER_URL_SCHEMA = {
   expandedExam: {
     defaultValue: "",
-    normalize: (value) => value.length <= 100 ? value : null,
+    normalize: (value) => (value.length <= 100 ? value : null),
   },
 };
 
@@ -51,7 +49,7 @@ export default function ExamsPage() {
     studentExamsList,
     isLoadingStudentExams,
     fetchStudentExams,
-    getStudentExamAttempts,
+
     adminExamsList,
     isLoadingExams,
     fetchAdminExams,
@@ -63,53 +61,52 @@ export default function ExamsPage() {
     updateAdminQuestion,
     deleteAdminQuestion,
     createAdminOption,
+    updateAdminOption,
+    deleteAdminOption,
   } = useStudent();
 
   const isTeacher = userRole === "teacher";
   const studentGrade = student?.grade || "";
-  const [attemptsByExam, setAttemptsByExam] = useState({});
-  const [loadingAttempts, setLoadingAttempts] = useState({});
-
-  const loadAttempts = async (examId) => {
-    setLoadingAttempts((current) => ({ ...current, [examId]: true }));
-    try {
-      const attempts = await getStudentExamAttempts(examId);
-      setAttemptsByExam((current) => ({ ...current, [examId]: attempts }));
-    } catch (error) {
-      showToast(error?.message || "تعذر تحميل محاولات الاختبار", "error");
-    } finally {
-      setLoadingAttempts((current) => ({ ...current, [examId]: false }));
-    }
-  };
 
   const routeInfo = useMemo(() => {
     const gradeLessons = (lessonsList || []).filter(
       (lesson) => isTeacher || lesson.grade === studentGrade,
     );
-    const routeExam = !isTeacher
-      ? studentExamsList.find(
-          (exam) =>
-            String(exam.id || exam.exam_id) === String(id) ||
-            String(exam.lesson_id || exam.lesson?.id) === String(id),
-        )
-      : (adminExamsList || []).find(
-          (exam) =>
-            String(exam.id) === String(id) ||
-            String(exam.lesson_id) === String(id),
-        );
-    const linkedLessonId = routeExam?.lesson_id || routeExam?.lesson?.id;
+
+    // 1) Exact exam-id match first. Only fall back to lesson_id if no exam
+    //    has this id, so an exam id can never collide with a lesson id.
+    const examList = (isTeacher ? adminExamsList : studentExamsList) || [];
+    const examIdOf = (exam) => exam.id ?? exam.exam_id;
+    const routeExam =
+      examList.find((exam) => String(examIdOf(exam)) === String(id)) ||
+      examList.find(
+        (exam) => String(exam.lesson_id ?? exam.lesson?.id) === String(id),
+      );
+
+    const linkedLessonId = routeExam?.lesson_id ?? routeExam?.lesson?.id;
+
+    // 2) The lesson comes from the exam we found. We only match a lesson by
+    //    the raw route id when no exam was found.
     const matchedLesson = id
-      ? (lessonsList || []).find(
-          (lesson) =>
-            String(lesson.id) === String(id) ||
-            (linkedLessonId != null &&
-              String(lesson.id) === String(linkedLessonId)) ||
-            String(lesson.exam?.id) === String(id) ||
-            String(lesson.quiz?.id) === String(id),
-        )
+      ? (linkedLessonId != null
+          ? (lessonsList || []).find(
+              (lesson) => String(lesson.id) === String(linkedLessonId),
+            )
+          : undefined) ||
+        (!routeExam
+          ? (lessonsList || []).find(
+              (lesson) =>
+                String(lesson.id) === String(id) ||
+                String(lesson.exam?.id) === String(id) ||
+                String(lesson.quiz?.id) === String(id),
+            )
+          : undefined)
       : gradeLessons.find(
-          (lesson) => (lesson.quiz || lesson.exam) && (lesson.quiz || lesson.exam).questions?.length > 0,
+          (lesson) =>
+            (lesson.quiz || lesson.exam) &&
+            (lesson.quiz || lesson.exam).questions?.length > 0,
         ) || gradeLessons[0];
+
     const lesson =
       matchedLesson ||
       (routeExam
@@ -131,6 +128,7 @@ export default function ExamsPage() {
             exam: routeExam,
           }
         : null);
+
     const resolvedExamId =
       routeExam?.id ||
       routeExam?.exam_id ||
@@ -138,12 +136,18 @@ export default function ExamsPage() {
       lesson?.exam?.id ||
       lesson?.quiz?.id ||
       lesson?.exams?.[0]?.id ||
-      (isTeacher ? (lesson?.exam?.id || lesson?.quiz?.id || lesson?.id) : null);
+      (isTeacher ? lesson?.exam?.id || lesson?.quiz?.id || lesson?.id : null);
 
     return { lesson, resolvedExamId };
-  }, [id, isTeacher, lessonsList, studentExamsList, adminExamsList, studentGrade]);
+  }, [
+    id,
+    isTeacher,
+    lessonsList,
+    studentExamsList,
+    adminExamsList,
+    studentGrade,
+  ]);
 
-  // Teacher previewing an exam as a student
   // If teacher and NOT taking/previewing a specific exam, show TeacherExamsManager
   if (isTeacher && !id) {
     return (
@@ -159,20 +163,26 @@ export default function ExamsPage() {
         updateAdminQuestion={updateAdminQuestion}
         deleteAdminQuestion={deleteAdminQuestion}
         createAdminOption={createAdminOption}
+        updateAdminOption={updateAdminOption}
+        deleteAdminOption={deleteAdminOption}
         lessonsList={lessonsList}
         showToast={showToast}
-        onPreviewAsStudent={(chosenLesson) => navigate(`/quiz/${chosenLesson.id}`)}
       />
     );
   }
 
   if (!isTeacher && !id) {
     return (
-      <div className="container" style={{ paddingTop: "1.5rem", paddingBottom: "3rem" }}>
+      <div
+        className="container"
+        style={{ paddingTop: "1.5rem", paddingBottom: "3rem" }}
+      >
         <div className="section-header">
           <div>
             <h1 className="section-title">امتحانات صفك</h1>
-            <p className="section-desc">الاختبارات المتاحة وحالة التقدم من الخادم</p>
+            <p className="section-desc">
+              الاختبارات المتاحة وحالة التقدم من الخادم
+            </p>
           </div>
           <button
             type="button"
@@ -186,15 +196,32 @@ export default function ExamsPage() {
         </div>
 
         {isLoadingStudentExams ? (
-          <div role="status" style={{ padding: "3rem 1rem", textAlign: "center", color: "var(--text-muted)" }}>
+          <div
+            role="status"
+            style={{
+              padding: "3rem 1rem",
+              textAlign: "center",
+              color: "var(--text-muted)",
+            }}
+          >
             جارٍ تحميل الامتحانات من الخادم...
           </div>
         ) : studentExamsList.length === 0 ? (
-          <div className="feature-card" style={{ padding: "2rem", textAlign: "center" }}>
+          <div
+            className="feature-card"
+            style={{ padding: "2rem", textAlign: "center" }}
+          >
             لا توجد امتحانات متاحة لهذا الحساب حالياً.
           </div>
         ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(min(260px, 100%), 1fr))", gap: "1rem" }}>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns:
+                "repeat(auto-fill, minmax(min(260px, 100%), 1fr))",
+              gap: "1rem",
+            }}
+          >
             {studentExamsList.map((exam) => {
               const examId = exam.id || exam.exam_id;
               const isLocked =
@@ -205,64 +232,94 @@ export default function ExamsPage() {
                 exam.can_start === false ||
                 exam.is_unlocked === false ||
                 exam.is_unlocked === 0;
-              const attempts = attemptsByExam[examId];
+              const metaParts = [
+                exam.duration_minutes ? `${exam.duration_minutes} دقيقة` : "",
+                exam.total_questions ? `${exam.total_questions} سؤال` : "",
+                exam.attempts_count != null
+                  ? `المحاولات: ${exam.attempts_count}`
+                  : "",
+              ].filter(Boolean);
+
               return (
-                <article key={examId} className="feature-card" style={{ padding: "1.25rem" }}>
-                  <h2 style={{ margin: "0 0 6px", color: "#fff", fontSize: "1rem" }}>
+                <article
+                  key={examId}
+                  className="feature-card"
+                  style={{
+                    padding: "1.25rem",
+                    justifyContent: "flex-start",
+                    gap: "0.35rem",
+                  }}
+                >
+                  <h2
+                    style={{
+                      margin: 0,
+                      color: "#fff",
+                      fontSize: "1.05rem",
+                      lineHeight: 1.5,
+                    }}
+                  >
                     {exam.title || exam.name || "اختبار"}
                   </h2>
-                  <p style={{ color: "var(--text-muted)", fontSize: "0.8rem", margin: "0 0 12px" }}>
-                    {exam.lesson?.title || exam.lesson_title || exam.lesson_name || "اختبار المنهج"}
+                  <p
+                    style={{
+                      color: "var(--text-muted)",
+                      fontSize: "0.8rem",
+                      margin: 0,
+                    }}
+                  >
+                    {exam.lesson?.title ||
+                      exam.lesson_title ||
+                      exam.lesson_name ||
+                      "اختبار المنهج"}
                   </p>
-                  {(exam.duration_minutes || exam.total_questions) && (
-                    <p style={{ color: "var(--text-muted)", fontSize: "0.75rem" }}>
-                      {exam.duration_minutes ? `${exam.duration_minutes} دقيقة` : ""}
-                      {exam.duration_minutes && exam.total_questions ? " · " : ""}
-                      {exam.total_questions ? `${exam.total_questions} سؤال` : ""}
+                  {metaParts.length > 0 && (
+                    <p
+                      style={{
+                        color: "var(--cyan)",
+                        fontSize: "0.75rem",
+                        margin: "0.4rem 0 0",
+                      }}
+                    >
+                      {metaParts.join(" · ")}
                     </p>
                   )}
-                  {(exam.progress || exam.attempts_count != null) && (
-                    <p style={{ color: "var(--cyan)", fontSize: "0.75rem" }}>
-                      {exam.progress?.status || ""}
-                      {exam.attempts_count != null ? `المحاولات: ${exam.attempts_count}` : ""}
-                    </p>
-                  )}
-                  <div style={{ display: "flex", gap: "8px", marginTop: "1rem", flexWrap: "wrap" }}>
+
+                  <div style={{ marginTop: "auto", paddingTop: "1rem" }}>
                     {isLocked ? (
-                      <span className="badge-tag" style={{ color: "var(--amber)" }}>
+                      <div
+                        className="badge-tag"
+                        style={{
+                          display: "block",
+                          width: "100%",
+                          textAlign: "center",
+                          padding: "10px 12px",
+                          borderRadius: "var(--radius-md)",
+                          color: "var(--amber)",
+                          background: "rgba(245, 158, 11, 0.1)",
+                          borderColor: "rgba(245, 158, 11, 0.3)",
+                          fontSize: "0.78rem",
+                          lineHeight: 1.6,
+                        }}
+                      >
+                        🔒{" "}
                         {exam.lock_reason || "مقفل حتى استكمال مشاهدة الدروس"}
-                      </span>
+                      </div>
                     ) : (
                       <Link
                         to={`/quiz/${examId}`}
                         className="btn-primary"
-                        style={{ flex: 1, justifyContent: "center" }}
+                        style={{
+                          width: "100%",
+                          padding: "12px 18px",
+                          fontSize: "0.95rem",
+                          whiteSpace: "nowrap",
+                        }}
                       >
-                        <Play size={15} />
-                        بدء الاختبار
+                        <Play size={16} />
+                        <span>بدء الاختبار</span>
                       </Link>
                     )}
-                    <button
-                      type="button"
-                      className="btn-secondary"
-                      onClick={() => loadAttempts(examId)}
-                      disabled={loadingAttempts[examId]}
-                    >
-                      {loadingAttempts[examId] ? "جارٍ التحميل..." : "محاولاتي"}
-                    </button>
                   </div>
-                  {Array.isArray(attempts) && (
-                    <div style={{ marginTop: "12px", borderTop: "1px solid var(--border-subtle)", paddingTop: "10px" }}>
-                      {attempts.length ? attempts.map((attempt, index) => (
-                        <div key={attempt.id || attempt.attempt_id || index} style={{ display: "flex", justifyContent: "space-between", gap: "8px", color: "var(--text-muted)", fontSize: "0.75rem", padding: "4px 0" }}>
-                          <span>{attempt.created_at || attempt.submitted_at || `محاولة ${index + 1}`}</span>
-                          <span>{attempt.percentage ?? attempt.score ?? "—"}{attempt.percentage != null ? "%" : ""}</span>
-                        </div>
-                      )) : (
-                        <span style={{ color: "var(--text-muted)", fontSize: "0.75rem" }}>لا توجد محاولات سابقة.</span>
-                      )}
-                    </div>
-                  )}
                 </article>
               );
             })}
@@ -276,7 +333,11 @@ export default function ExamsPage() {
 
   if (!lesson && !isTeacher && id && isLoadingStudentExams) {
     return (
-      <div className="container" role="status" style={{ padding: "5rem 1rem", textAlign: "center" }}>
+      <div
+        className="container"
+        role="status"
+        style={{ padding: "5rem 1rem", textAlign: "center" }}
+      >
         جارٍ تحميل بيانات الاختبار من الخادم...
       </div>
     );
@@ -365,9 +426,19 @@ export default function ExamsPage() {
   }
 
   return (
-    <div className="container" style={{ paddingTop: "1rem", paddingBottom: "3rem" }}>
+    <div
+      className="container"
+      style={{ paddingTop: "1rem", paddingBottom: "3rem" }}
+    >
       {isTeacher && id && (
-        <div style={{ marginBottom: "1rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div
+          style={{
+            marginBottom: "1rem",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+          }}
+        >
           <button
             onClick={() => navigate("/exams")}
             className="btn-secondary"
@@ -385,6 +456,7 @@ export default function ExamsPage() {
             <span>العودة لإدارة بنك الامتحانات</span>
           </button>
           <span
+            className="student-preview-badge"
             style={{
               fontSize: "0.8rem",
               color: "var(--amber)",
@@ -427,9 +499,10 @@ function TeacherExamsManager({
   updateAdminQuestion,
   deleteAdminQuestion,
   createAdminOption,
+  updateAdminOption,
+  deleteAdminOption,
   lessonsList,
   showToast,
-  onPreviewAsStudent,
 }) {
   const [urlState, setUrlState] = useUrlState(EXAM_MANAGER_URL_SCHEMA);
   const expandedExamId = urlState.expandedExam || null;
@@ -444,7 +517,7 @@ function TeacherExamsManager({
     title: "",
     description: "",
     duration_minutes: 20,
-    passing_percentage: 60,
+    passing_percentage: "",
   });
 
   // Question Modal State (with Choices fields)
@@ -453,6 +526,7 @@ function TeacherExamsManager({
     isEdit: false,
     examId: null,
     questionId: null,
+    existingOptions: [],
     question_text: "",
     points: 1,
     opt1: "",
@@ -478,7 +552,7 @@ function TeacherExamsManager({
       title: "",
       description: "",
       duration_minutes: 20,
-      passing_percentage: 60,
+      passing_percentage: "",
     });
     setIsAddExamOpen(true);
   };
@@ -490,7 +564,7 @@ function TeacherExamsManager({
       title: exam.title || "",
       description: exam.description || "",
       duration_minutes: exam.duration_minutes || 20,
-      passing_percentage: exam.passing_percentage || 60,
+      passing_percentage: exam.passing_percentage || "",
     });
     setIsAddExamOpen(true);
   };
@@ -501,10 +575,20 @@ function TeacherExamsManager({
       showToast("يرجى كتابة عنوان الامتحان", "error");
       return;
     }
-
-    const duplicateExam = !editingExam && newExamData.lesson_id && adminExamsList.find(
-      (exam) => String(exam.lesson_id) === String(newExamData.lesson_id),
-    );
+    const payload = {
+      ...newExamData,
+      passing_percentage:
+        newExamData.passing_percentage === "" ||
+        newExamData.passing_percentage == null
+          ? null
+          : Number(newExamData.passing_percentage),
+    };
+    const duplicateExam =
+      !editingExam &&
+      newExamData.lesson_id &&
+      adminExamsList.find(
+        (exam) => String(exam.lesson_id) === String(newExamData.lesson_id),
+      );
     if (duplicateExam) {
       showToast(
         `تم إنشاء امتحان للدرس «${lessonsList.find((lesson) => String(lesson.id) === String(newExamData.lesson_id))?.title || duplicateExam.title}» بالفعل. يمكنك إضافة الأسئلة إلى الامتحان الموجود.`,
@@ -516,13 +600,17 @@ function TeacherExamsManager({
     setIsProcessing(true);
     try {
       const res = editingExam
-        ? await updateAdminExam(editingExam.id, newExamData)
-        : await createAdminExam(newExamData);
+        ? await updateAdminExam(editingExam.id, payload)
+        : await createAdminExam(payload);
 
       if (res?.success) {
         setIsAddExamOpen(false);
         setEditingExam(null);
-        showToast(editingExam ? "تم تحديث بيانات الامتحان بنجاح" : "تم إنشاء الامتحان بنجاح 🎉");
+        showToast(
+          editingExam
+            ? "تم تحديث بيانات الامتحان بنجاح"
+            : "تم إنشاء الامتحان بنجاح 🎉",
+        );
         if (typeof fetchAdminExams === "function") {
           await fetchAdminExams();
         }
@@ -541,6 +629,7 @@ function TeacherExamsManager({
       isEdit: false,
       examId,
       questionId: null,
+      existingOptions: [],
       question_text: "",
       points: 1,
       opt1: "",
@@ -548,6 +637,31 @@ function TeacherExamsManager({
       opt3: "",
       opt4: "",
       correctOption: 1,
+    });
+  };
+
+  const handleOpenEditQuestion = (examId, question) => {
+    const rawOptions = question.options || [];
+    const optTexts = rawOptions.map((opt) =>
+      typeof opt === "string" ? opt : opt.option_text || opt.text || "",
+    );
+    const correctIndex = rawOptions.findIndex((opt) =>
+      Boolean(typeof opt === "object" && opt.is_correct),
+    );
+
+    setQuestionModal({
+      isOpen: true,
+      isEdit: true,
+      examId,
+      questionId: question.id,
+      existingOptions: rawOptions,
+      question_text: question.question_text || question.question || "",
+      points: question.points || 1,
+      opt1: optTexts[0] || "",
+      opt2: optTexts[1] || "",
+      opt3: optTexts[2] || "",
+      opt4: optTexts[3] || "",
+      correctOption: correctIndex !== -1 ? correctIndex + 1 : 1,
     });
   };
 
@@ -588,12 +702,71 @@ function TeacherExamsManager({
     setIsProcessing(true);
     try {
       if (questionModal.isEdit) {
-        const updateResult = await updateAdminQuestion(questionModal.questionId, {
-          question_text: questionModal.question_text,
-          points: Number(questionModal.points) || 1,
-        });
+        const updateResult = await updateAdminQuestion(
+          questionModal.questionId,
+          {
+            question_text: questionModal.question_text,
+            points: Number(questionModal.points) || 1,
+          },
+        );
         if (!updateResult?.success) {
           throw new Error(updateResult?.message || "فشل حفظ تعديلات السؤال.");
+        }
+
+        const rawOptions = [
+          {
+            text: questionModal.opt1,
+            is_correct: questionModal.correctOption === 1,
+          },
+          {
+            text: questionModal.opt2,
+            is_correct: questionModal.correctOption === 2,
+          },
+          {
+            text: questionModal.opt3,
+            is_correct: questionModal.correctOption === 3,
+          },
+          {
+            text: questionModal.opt4,
+            is_correct: questionModal.correctOption === 4,
+          },
+        ];
+
+        const existing = questionModal.existingOptions || [];
+        const activeInputs = rawOptions.filter(
+          (opt) => opt.text && opt.text.trim(),
+        );
+
+        for (let i = 0; i < activeInputs.length; i++) {
+          const opt = activeInputs[i];
+          const existingOpt = existing[i];
+
+          if (
+            existingOpt &&
+            existingOpt.id &&
+            typeof updateAdminOption === "function"
+          ) {
+            await updateAdminOption(existingOpt.id, {
+              option_text: opt.text.trim(),
+              is_correct: Boolean(opt.is_correct),
+            });
+          } else if (typeof createAdminOption === "function") {
+            await createAdminOption(questionModal.questionId, {
+              option_text: opt.text.trim(),
+              is_correct: Boolean(opt.is_correct),
+            });
+          }
+        }
+
+        if (
+          existing.length > activeInputs.length &&
+          typeof deleteAdminOption === "function"
+        ) {
+          for (let i = activeInputs.length; i < existing.length; i++) {
+            if (existing[i]?.id) {
+              await deleteAdminOption(existing[i].id);
+            }
+          }
         }
       } else {
         const qRes = await createAdminQuestion(questionModal.examId, {
@@ -612,20 +785,29 @@ function TeacherExamsManager({
           // and recover its id from the question that was just submitted.
           const examDetails = await fetchAdminExamDetails(questionModal.examId);
           const refreshedExams = examDetails ? [] : await fetchAdminExams();
-          const currentExam = examDetails || refreshedExams?.find(
-            (exam) => String(exam.id) === String(questionModal.examId),
-          );
+          const currentExam =
+            examDetails ||
+            refreshedExams?.find(
+              (exam) => String(exam.id) === String(questionModal.examId),
+            );
           const savedQuestions =
-            currentExam?.questions || currentExam?.exam_questions || currentExam?.quiz?.questions || [];
+            currentExam?.questions ||
+            currentExam?.exam_questions ||
+            currentExam?.quiz?.questions ||
+            [];
           const submittedQuestion = [...savedQuestions]
             .reverse()
-            .find((question) =>
-              String(question.question_text || question.question || "").trim() ===
-              questionModal.question_text.trim(),
+            .find(
+              (question) =>
+                String(
+                  question.question_text || question.question || "",
+                ).trim() === questionModal.question_text.trim(),
             );
           newQuestionId = getNestedQuestionId(submittedQuestion);
           if (!newQuestionId) {
-            throw new Error("وصلت استجابة الخادم بدون معرّف السؤال، ولم يظهر السؤال بعد تحديث الامتحان.");
+            throw new Error(
+              "وصلت استجابة الخادم بدون معرّف السؤال، ولم يظهر السؤال بعد تحديث الامتحان.",
+            );
           }
         }
 
@@ -657,7 +839,9 @@ function TeacherExamsManager({
                 is_correct: Boolean(opt.is_correct),
               });
               if (!optionResult?.success) {
-                throw new Error(optionResult?.message || "فشل حفظ أحد الاختيارات.");
+                throw new Error(
+                  optionResult?.message || "فشل حفظ أحد الاختيارات.",
+                );
               }
             }
           }
@@ -669,6 +853,7 @@ function TeacherExamsManager({
         isEdit: false,
         examId: null,
         questionId: null,
+        existingOptions: [],
         question_text: "",
         points: 1,
         opt1: "",
@@ -680,11 +865,17 @@ function TeacherExamsManager({
 
       if (typeof fetchAdminExamDetails === "function") {
         const updatedExam = await fetchAdminExamDetails(questionModal.examId);
-        if (!updatedExam) await fetchAdminExams();
+        if (!updatedExam && typeof fetchAdminExams === "function") {
+          await fetchAdminExams();
+        }
       } else if (typeof fetchAdminExams === "function") {
         await fetchAdminExams();
       }
-      showToast("تم حفظ السؤال وخياراته بنجاح 🎉");
+      showToast(
+        questionModal.isEdit
+          ? "تم حفظ تعديل السؤال وخياراته بنجاح 🎉"
+          : "تم حفظ السؤال وخياراته بنجاح 🎉",
+      );
     } catch (err) {
       console.error(err);
       showToast(err?.message || "حدث خطأ أثناء حفظ السؤال والخيارات", "error");
@@ -722,7 +913,10 @@ function TeacherExamsManager({
       style={{ paddingTop: "1.5rem", paddingBottom: "3rem" }}
     >
       {/* Header */}
-      <div className="section-header" style={{ alignItems: "flex-start", gap: "1.25rem" }}>
+      <div
+        className="section-header"
+        style={{ alignItems: "flex-start", gap: "1.25rem" }}
+      >
         <div>
           <div
             style={{
@@ -738,14 +932,24 @@ function TeacherExamsManager({
             <FileQuestion size={15} />
             <span>نظام بنك الأسئلة والاختبارات التفاعلية</span>
           </div>
-          <h1 className="section-title">معاينة وإدارة الامتحانات وبنك الأسئلة</h1>
+          <h1 className="section-title">
+            معاينة وإدارة الامتحانات وبنك الأسئلة
+          </h1>
           <p className="section-desc">
-            إنشاء وتعديل الامتحانات، ربطها بالمحاضرات، وإضافة أسئلة الاختيار من متعدد وتحديد الإجابات الصحيحة
+            إنشاء وتعديل الامتحانات، ربطها بالمحاضرات، وإضافة أسئلة الاختيار من
+            متعدد وتحديد الإجابات الصحيحة
           </p>
         </div>
 
         {/* Action Buttons */}
-        <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
+        <div
+          style={{
+            display: "flex",
+            gap: "8px",
+            alignItems: "center",
+            flexWrap: "wrap",
+          }}
+        >
           <button
             onClick={handleOpenAddExam}
             className="btn-primary"
@@ -792,7 +996,9 @@ function TeacherExamsManager({
             className="animate-spin"
             style={{ margin: "0 auto 12px" }}
           />
-          <p style={{ fontWeight: 700 }}>جاري تحميل الامتحانات وبنك الأسئلة...</p>
+          <p style={{ fontWeight: 700 }}>
+            جاري تحميل الامتحانات وبنك الأسئلة...
+          </p>
         </div>
       ) : adminExamsList.length === 0 ? (
         <div
@@ -804,12 +1010,22 @@ function TeacherExamsManager({
             border: "1px solid var(--border-subtle)",
           }}
         >
-          <FileQuestion size={48} style={{ color: "var(--text-dim)", margin: "0 auto 1rem" }} />
+          <FileQuestion
+            size={48}
+            style={{ color: "var(--text-dim)", margin: "0 auto 1rem" }}
+          />
           <h3 style={{ color: "#fff", fontSize: "1.15rem", fontWeight: 800 }}>
             لا توجد امتحانات مسجلة حالياً
           </h3>
-          <p style={{ color: "var(--text-muted)", fontSize: "0.85rem", marginTop: "6px" }}>
-            اضغط على زر "إنشاء امتحان جديد" لإضافة أول امتحان وربطه بالمحاضرة وإضافة أسئلته
+          <p
+            style={{
+              color: "var(--text-muted)",
+              fontSize: "0.85rem",
+              marginTop: "6px",
+            }}
+          >
+            اضغط على زر "إنشاء امتحان جديد" لإضافة أول امتحان وربطه بالمحاضرة
+            وإضافة أسئلته
           </p>
           <button
             onClick={handleOpenAddExam}
@@ -821,11 +1037,16 @@ function TeacherExamsManager({
           </button>
         </div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
+        <div
+          style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}
+        >
           {adminExamsList.map((exam) => {
             const isExpanded = String(expandedExamId) === String(exam.id);
             const questions =
-              exam.questions || exam.exam_questions || exam.quiz?.questions || [];
+              exam.questions ||
+              exam.exam_questions ||
+              exam.quiz?.questions ||
+              [];
             const linkedLesson = lessonsList.find(
               (l) => String(l.id) === String(exam.lesson_id),
             );
@@ -890,7 +1111,10 @@ function TeacherExamsManager({
 
                       <span
                         className="badge-tag"
-                        style={{ color: "var(--cyan)", background: "rgba(6, 182, 212, 0.12)" }}
+                        style={{
+                          color: "var(--cyan)",
+                          background: "rgba(6, 182, 212, 0.12)",
+                        }}
                       >
                         {linkedLesson?.title || `المحاضرة #${exam.lesson_id}`}
                       </span>
@@ -908,18 +1132,20 @@ function TeacherExamsManager({
                         {exam.duration_minutes || 20} دقيقة
                       </span>
 
-                      <span
-                        style={{
-                          fontSize: "0.8rem",
-                          color: "var(--emerald)",
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: "4px",
-                        }}
-                      >
-                        <CheckCircle2 size={13} />
-                        نسبة النجاح: {exam.passing_percentage || 60}%
-                      </span>
+                      {exam.passing_percentage != null && (
+                        <span
+                          style={{
+                            fontSize: "0.8rem",
+                            color: "var(--emerald)",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "4px",
+                          }}
+                        >
+                          <CheckCircle2 size={13} />
+                          نسبة النجاح: {exam.passing_percentage}%
+                        </span>
+                      )}
 
                       <span
                         style={{
@@ -976,36 +1202,9 @@ function TeacherExamsManager({
                       className={isExpanded ? "btn-primary" : "btn-secondary"}
                       style={{ fontSize: "0.8rem", padding: "7px 14px" }}
                     >
-                      {isExpanded ? "إغلاق الأسئلة" : `إدارة الأسئلة (${questions.length})`}
-                    </button>
-
-                    <button
-                      onClick={() => {
-                        const targetLesson = linkedLesson || {
-                          id: exam.lesson_id,
-                          title: exam.title,
-                          grade: "الصف الثالث الثانوي",
-                          quiz: {
-                            id: exam.id,
-                            title: exam.title,
-                            durationMinutes: exam.duration_minutes,
-                            passingScore: exam.passing_percentage,
-                            questions: exam.questions || [],
-                          },
-                        };
-                        onPreviewAsStudent(targetLesson);
-                      }}
-                      className="btn-secondary"
-                      style={{
-                        fontSize: "0.8rem",
-                        padding: "7px 12px",
-                        color: "var(--cyan)",
-                        borderColor: "rgba(6, 182, 212, 0.35)",
-                      }}
-                      title="تجربة حل الامتحان كطالب"
-                    >
-                      <Eye size={14} style={{ marginLeft: "4px" }} />
-                      <span>تجربة كطالب</span>
+                      {isExpanded
+                        ? "إغلاق الأسئلة"
+                        : `إدارة الأسئلة (${questions.length})`}
                     </button>
 
                     <button
@@ -1052,8 +1251,17 @@ function TeacherExamsManager({
                         gap: "8px",
                       }}
                     >
-                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                        <HelpCircle size={16} style={{ color: "var(--cyan)" }} />
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "8px",
+                        }}
+                      >
+                        <HelpCircle
+                          size={16}
+                          style={{ color: "var(--cyan)" }}
+                        />
                         <h4
                           style={{
                             fontSize: "0.95rem",
@@ -1099,7 +1307,8 @@ function TeacherExamsManager({
                             margin: 0,
                           }}
                         >
-                          لا توجد أسئلة مضافة لهذا الامتحان بعد. اضغط على "+ إضافة سؤال مع اختياراته" للبدء.
+                          لا توجد أسئلة مضافة لهذا الامتحان بعد. اضغط على "+
+                          إضافة سؤال مع اختياراته" للبدء.
                         </p>
                       </div>
                     ) : (
@@ -1131,7 +1340,13 @@ function TeacherExamsManager({
                                   marginBottom: "0.75rem",
                                 }}
                               >
-                                <div style={{ display: "flex", gap: "10px", alignItems: "flex-start" }}>
+                                <div
+                                  style={{
+                                    display: "flex",
+                                    gap: "10px",
+                                    alignItems: "flex-start",
+                                  }}
+                                >
                                   <span
                                     style={{
                                       width: "24px",
@@ -1174,24 +1389,48 @@ function TeacherExamsManager({
                                   </div>
                                 </div>
 
-                                <button
-                                  onClick={() =>
-                                    setDeleteConfirmation({
-                                      type: "question",
-                                      id: q.id,
-                                      title: q.question_text || q.question,
-                                    })
-                                  }
-                                  className="btn-secondary"
+                                <div
                                   style={{
-                                    padding: "5px 8px",
-                                    color: "#fb7185",
-                                    borderColor: "rgba(244, 63, 94, 0.25)",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: "6px",
                                   }}
-                                  title="حذف هذا السؤال"
                                 >
-                                  <Trash2 size={13} />
-                                </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleOpenEditQuestion(exam.id, q)
+                                    }
+                                    className="btn-secondary"
+                                    style={{
+                                      padding: "5px 8px",
+                                      color: "var(--cyan)",
+                                      borderColor: "rgba(6, 182, 212, 0.3)",
+                                    }}
+                                    title="تعديل هذا السؤال"
+                                  >
+                                    <Edit3 size={13} />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setDeleteConfirmation({
+                                        type: "question",
+                                        id: q.id,
+                                        title: q.question_text || q.question,
+                                      })
+                                    }
+                                    className="btn-secondary"
+                                    style={{
+                                      padding: "5px 8px",
+                                      color: "#fb7185",
+                                      borderColor: "rgba(244, 63, 94, 0.25)",
+                                    }}
+                                    title="حذف هذا السؤال"
+                                  >
+                                    <Trash2 size={13} />
+                                  </button>
+                                </div>
                               </div>
 
                               {/* Question Choices / Options Area */}
@@ -1210,7 +1449,8 @@ function TeacherExamsManager({
                                 <div
                                   style={{
                                     display: "grid",
-                                    gridTemplateColumns: "repeat(auto-fill, minmax(min(200px, 100%), 1fr))",
+                                    gridTemplateColumns:
+                                      "repeat(auto-fill, minmax(min(200px, 100%), 1fr))",
                                     gap: "8px",
                                   }}
                                 >
@@ -1223,7 +1463,13 @@ function TeacherExamsManager({
                                       typeof opt === "object" && opt.is_correct,
                                     );
 
-                                    const optionLetters = ["أ", "ب", "جـ", "د", "هـ"];
+                                    const optionLetters = [
+                                      "أ",
+                                      "ب",
+                                      "جـ",
+                                      "د",
+                                      "هـ",
+                                    ];
 
                                     return (
                                       <div
@@ -1242,10 +1488,18 @@ function TeacherExamsManager({
                                           border: isCorrect
                                             ? "1px solid rgba(16, 185, 129, 0.4)"
                                             : "1px solid rgba(255,255,255,0.06)",
-                                          color: isCorrect ? "#34d399" : "#e2e8f0",
+                                          color: isCorrect
+                                            ? "#34d399"
+                                            : "#e2e8f0",
                                         }}
                                       >
-                                        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                                        <div
+                                          style={{
+                                            display: "flex",
+                                            alignItems: "center",
+                                            gap: "8px",
+                                          }}
+                                        >
                                           <span
                                             style={{
                                               width: "20px",
@@ -1258,10 +1512,13 @@ function TeacherExamsManager({
                                               placeItems: "center",
                                               fontSize: "0.75rem",
                                               fontWeight: 800,
-                                              color: isCorrect ? "#fff" : "var(--text-muted)",
+                                              color: isCorrect
+                                                ? "#fff"
+                                                : "var(--text-muted)",
                                             }}
                                           >
-                                            {optionLetters[optIdx] || optIdx + 1}
+                                            {optionLetters[optIdx] ||
+                                              optIdx + 1}
                                           </span>
                                           <span>{optText}</span>
                                         </div>
@@ -1274,7 +1531,8 @@ function TeacherExamsManager({
                                               display: "flex",
                                               alignItems: "center",
                                               gap: "2px",
-                                              background: "rgba(16, 185, 129, 0.2)",
+                                              background:
+                                                "rgba(16, 185, 129, 0.2)",
                                               padding: "2px 6px",
                                               borderRadius: "4px",
                                             }}
@@ -1353,7 +1611,14 @@ function TeacherExamsManager({
               <X size={20} />
             </button>
 
-            <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "1.25rem" }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "10px",
+                marginBottom: "1.25rem",
+              }}
+            >
               <div
                 style={{
                   width: "40px",
@@ -1368,18 +1633,41 @@ function TeacherExamsManager({
                 <FileQuestion size={22} />
               </div>
               <div>
-                <h2 style={{ fontSize: "1.2rem", fontWeight: 800, color: "#fff", margin: 0 }}>
+                <h2
+                  style={{
+                    fontSize: "1.2rem",
+                    fontWeight: 800,
+                    color: "#fff",
+                    margin: 0,
+                  }}
+                >
                   {editingExam ? "تعديل بيانات الامتحان" : "إنشاء امتحان جديد"}
                 </h2>
-                <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", margin: "4px 0 0" }}>
+                <p
+                  style={{
+                    fontSize: "0.8rem",
+                    color: "var(--text-muted)",
+                    margin: "4px 0 0",
+                  }}
+                >
                   قم بضبط المحاضرة المرتبطة ووقت الامتحان ونسبة النجاح
                 </p>
               </div>
             </div>
 
-            <form onSubmit={handleSaveExam} style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+            <form
+              onSubmit={handleSaveExam}
+              style={{ display: "flex", flexDirection: "column", gap: "1rem" }}
+            >
               <div>
-                <label className="form-label" style={{ fontWeight: 700, marginBottom: "6px", display: "block" }}>
+                <label
+                  className="form-label"
+                  style={{
+                    fontWeight: 700,
+                    marginBottom: "6px",
+                    display: "block",
+                  }}
+                >
                   عنوان الامتحان *
                 </label>
                 <input
@@ -1396,7 +1684,14 @@ function TeacherExamsManager({
               </div>
 
               <div>
-                <label className="form-label" style={{ fontWeight: 700, marginBottom: "6px", display: "block" }}>
+                <label
+                  className="form-label"
+                  style={{
+                    fontWeight: 700,
+                    marginBottom: "6px",
+                    display: "block",
+                  }}
+                >
                   ربط بالمحاضرة (اختياري)
                 </label>
                 <select
@@ -1421,9 +1716,23 @@ function TeacherExamsManager({
                 </select>
               </div>
 
-              <div className="grid-2col" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+              <div
+                className="grid-2col"
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: "1rem",
+                }}
+              >
                 <div>
-                  <label className="form-label" style={{ fontWeight: 700, marginBottom: "6px", display: "block" }}>
+                  <label
+                    className="form-label"
+                    style={{
+                      fontWeight: 700,
+                      marginBottom: "6px",
+                      display: "block",
+                    }}
+                  >
                     المدة بالدقائق
                   </label>
                   <input
@@ -1443,18 +1752,27 @@ function TeacherExamsManager({
                 </div>
 
                 <div>
-                  <label className="form-label" style={{ fontWeight: 700, marginBottom: "6px", display: "block" }}>
-                    نسبة النجاح (%)
+                  <label
+                    className="form-label"
+                    style={{
+                      fontWeight: 700,
+                      marginBottom: "6px",
+                      display: "block",
+                    }}
+                  >
+                    نسبة النجاح % (اختياري)
                   </label>
                   <input
                     type="number"
-                    min="10"
+                    min="0"
                     max="100"
-                    value={newExamData.passing_percentage}
+                    placeholder="بدون نسبة"
+                    value={newExamData.passing_percentage ?? ""}
                     onChange={(e) =>
                       setNewExamData({
                         ...newExamData,
-                        passing_percentage: Number(e.target.value),
+                        passing_percentage:
+                          e.target.value === "" ? "" : Number(e.target.value),
                       })
                     }
                     className="form-input"
@@ -1464,7 +1782,14 @@ function TeacherExamsManager({
               </div>
 
               <div>
-                <label className="form-label" style={{ fontWeight: 700, marginBottom: "6px", display: "block" }}>
+                <label
+                  className="form-label"
+                  style={{
+                    fontWeight: 700,
+                    marginBottom: "6px",
+                    display: "block",
+                  }}
+                >
                   وصف الامتحان (اختياري)
                 </label>
                 <textarea
@@ -1482,7 +1807,9 @@ function TeacherExamsManager({
                 />
               </div>
 
-              <div style={{ display: "flex", gap: "0.75rem", marginTop: "1rem" }}>
+              <div
+                style={{ display: "flex", gap: "0.75rem", marginTop: "1rem" }}
+              >
                 <button
                   type="submit"
                   disabled={isProcessing}
@@ -1565,7 +1892,14 @@ function TeacherExamsManager({
               <X size={20} />
             </button>
 
-            <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "1.25rem" }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "10px",
+                marginBottom: "1.25rem",
+              }}
+            >
               <div
                 style={{
                   width: "40px",
@@ -1580,18 +1914,44 @@ function TeacherExamsManager({
                 <HelpCircle size={22} />
               </div>
               <div>
-                <h2 style={{ fontSize: "1.2rem", fontWeight: 800, color: "#fff", margin: 0 }}>
-                  إضافة سؤال وتعيين اختيارات الإجابة
+                <h2
+                  style={{
+                    fontSize: "1.2rem",
+                    fontWeight: 800,
+                    color: "#fff",
+                    margin: 0,
+                  }}
+                >
+                  {questionModal.isEdit
+                    ? "تعديل السؤال واختيارات الإجابة"
+                    : "إضافة سؤال وتعيين اختيارات الإجابة"}
                 </h2>
-                <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", margin: "4px 0 0" }}>
-                  أدخل نص السؤال، وضع اختيارات الإجابة (أ، ب، جـ، د)، وحدد الإجابة الصحيحة
+                <p
+                  style={{
+                    fontSize: "0.8rem",
+                    color: "var(--text-muted)",
+                    margin: "4px 0 0",
+                  }}
+                >
+                  أدخل نص السؤال، وضع اختيارات الإجابة (أ، ب، جـ، د)، وحدد
+                  الإجابة الصحيحة
                 </p>
               </div>
             </div>
 
-            <form onSubmit={handleSaveQuestion} style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+            <form
+              onSubmit={handleSaveQuestion}
+              style={{ display: "flex", flexDirection: "column", gap: "1rem" }}
+            >
               <div>
-                <label className="form-label" style={{ fontWeight: 700, marginBottom: "6px", display: "block" }}>
+                <label
+                  className="form-label"
+                  style={{
+                    fontWeight: 700,
+                    marginBottom: "6px",
+                    display: "block",
+                  }}
+                >
                   نص السؤال *
                 </label>
                 <textarea
@@ -1611,7 +1971,14 @@ function TeacherExamsManager({
               </div>
 
               <div>
-                <label className="form-label" style={{ fontWeight: 700, marginBottom: "6px", display: "block" }}>
+                <label
+                  className="form-label"
+                  style={{
+                    fontWeight: 700,
+                    marginBottom: "6px",
+                    display: "block",
+                  }}
+                >
                   درجة السؤال (النقاط)
                 </label>
                 <input
@@ -1639,16 +2006,34 @@ function TeacherExamsManager({
                   padding: "1rem",
                 }}
               >
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem" }}>
-                  <label className="form-label" style={{ fontWeight: 800, color: "var(--cyan)", margin: 0 }}>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    marginBottom: "0.75rem",
+                  }}
+                >
+                  <label
+                    className="form-label"
+                    style={{ fontWeight: 800, color: "var(--cyan)", margin: 0 }}
+                  >
                     اختيارات السؤال وتحديد الإجابة الصحيحة *
                   </label>
-                  <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                  <span
+                    style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}
+                  >
                     اختر الدائرة للإجابة الصحيحة
                   </span>
                 </div>
 
-                <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "0.75rem",
+                  }}
+                >
                   {/* OPTION 1 */}
                   <div
                     style={{
@@ -1675,14 +2060,21 @@ function TeacherExamsManager({
                       onChange={() =>
                         setQuestionModal({ ...questionModal, correctOption: 1 })
                       }
-                      style={{ cursor: "pointer", width: "18px", height: "18px" }}
+                      style={{
+                        cursor: "pointer",
+                        width: "18px",
+                        height: "18px",
+                      }}
                     />
                     <label
                       htmlFor="opt-radio-1"
                       style={{
                         fontSize: "0.85rem",
                         fontWeight: 700,
-                        color: questionModal.correctOption === 1 ? "var(--emerald)" : "var(--text-muted)",
+                        color:
+                          questionModal.correctOption === 1
+                            ? "var(--emerald)"
+                            : "var(--text-muted)",
                         minWidth: "60px",
                         cursor: "pointer",
                       }}
@@ -1731,14 +2123,21 @@ function TeacherExamsManager({
                       onChange={() =>
                         setQuestionModal({ ...questionModal, correctOption: 2 })
                       }
-                      style={{ cursor: "pointer", width: "18px", height: "18px" }}
+                      style={{
+                        cursor: "pointer",
+                        width: "18px",
+                        height: "18px",
+                      }}
                     />
                     <label
                       htmlFor="opt-radio-2"
                       style={{
                         fontSize: "0.85rem",
                         fontWeight: 700,
-                        color: questionModal.correctOption === 2 ? "var(--emerald)" : "var(--text-muted)",
+                        color:
+                          questionModal.correctOption === 2
+                            ? "var(--emerald)"
+                            : "var(--text-muted)",
                         minWidth: "60px",
                         cursor: "pointer",
                       }}
@@ -1787,14 +2186,21 @@ function TeacherExamsManager({
                       onChange={() =>
                         setQuestionModal({ ...questionModal, correctOption: 3 })
                       }
-                      style={{ cursor: "pointer", width: "18px", height: "18px" }}
+                      style={{
+                        cursor: "pointer",
+                        width: "18px",
+                        height: "18px",
+                      }}
                     />
                     <label
                       htmlFor="opt-radio-3"
                       style={{
                         fontSize: "0.85rem",
                         fontWeight: 700,
-                        color: questionModal.correctOption === 3 ? "var(--emerald)" : "var(--text-muted)",
+                        color:
+                          questionModal.correctOption === 3
+                            ? "var(--emerald)"
+                            : "var(--text-muted)",
                         minWidth: "60px",
                         cursor: "pointer",
                       }}
@@ -1842,14 +2248,21 @@ function TeacherExamsManager({
                       onChange={() =>
                         setQuestionModal({ ...questionModal, correctOption: 4 })
                       }
-                      style={{ cursor: "pointer", width: "18px", height: "18px" }}
+                      style={{
+                        cursor: "pointer",
+                        width: "18px",
+                        height: "18px",
+                      }}
                     />
                     <label
                       htmlFor="opt-radio-4"
                       style={{
                         fontSize: "0.85rem",
                         fontWeight: 700,
-                        color: questionModal.correctOption === 4 ? "var(--emerald)" : "var(--text-muted)",
+                        color:
+                          questionModal.correctOption === 4
+                            ? "var(--emerald)"
+                            : "var(--text-muted)",
                         minWidth: "60px",
                         cursor: "pointer",
                       }}
@@ -1873,14 +2286,20 @@ function TeacherExamsManager({
                 </div>
               </div>
 
-              <div style={{ display: "flex", gap: "0.75rem", marginTop: "1rem" }}>
+              <div
+                style={{ display: "flex", gap: "0.75rem", marginTop: "1rem" }}
+              >
                 <button
                   type="submit"
                   disabled={isProcessing}
                   className="btn-primary"
                   style={{ flex: 1, justifyContent: "center", padding: "11px" }}
                 >
-                  {isProcessing ? "جاري الحفظ..." : "حفظ السؤال والخيارات"}
+                  {isProcessing
+                    ? "جاري الحفظ..."
+                    : questionModal.isEdit
+                      ? "حفظ تعديل السؤال"
+                      : "حفظ السؤال والخيارات"}
                 </button>
                 <button
                   type="button"
@@ -1930,7 +2349,14 @@ function TeacherExamsManager({
               boxShadow: "0 24px 80px rgba(0,0,0,0.5)",
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "1rem" }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "12px",
+                marginBottom: "1rem",
+              }}
+            >
               <div
                 style={{
                   width: 44,
@@ -1946,15 +2372,26 @@ function TeacherExamsManager({
               </div>
               <div>
                 <h3 style={{ margin: 0, color: "#fff", fontSize: "1.1rem" }}>
-                  {deleteConfirmation.type === "exam" ? "تأكيد حذف الامتحان" : "تأكيد حذف السؤال"}
+                  {deleteConfirmation.type === "exam"
+                    ? "تأكيد حذف الامتحان"
+                    : "تأكيد حذف السؤال"}
                 </h3>
-                <span style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>
+                <span
+                  style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}
+                >
                   عملية الحذف لا يمكن التراجع عنها
                 </span>
               </div>
             </div>
 
-            <p style={{ color: "var(--text-muted)", fontSize: "0.9rem", lineHeight: 1.7, margin: "0 0 1.25rem" }}>
+            <p
+              style={{
+                color: "var(--text-muted)",
+                fontSize: "0.9rem",
+                lineHeight: 1.7,
+                margin: "0 0 1.25rem",
+              }}
+            >
               هل أنت متأكد من حذف:{" "}
               <strong style={{ color: "#fff" }}>
                 [ {deleteConfirmation.title} ]
@@ -2001,6 +2438,10 @@ function TeacherExamsManager({
    QUIZ VIEW COMPONENT (FOR STUDENTS OR TEACHER TEST-DRIVE)
    ========================================================================= */
 
+function firstArray(...candidates) {
+  return candidates.find(Array.isArray) || [];
+}
+
 function normalizeExamQuestion(question) {
   const options = Array.isArray(question.options) ? question.options : [];
   const correctIndex = Number.isInteger(question.correctIndex)
@@ -2026,20 +2467,129 @@ function normalizeExamQuestion(question) {
   };
 }
 
+// Latest attempt the student already SUBMITTED (GET /student/exams/{exam}/attempts).
+// An attempt that is only started / in progress must never count as submitted,
+// otherwise starting a fresh exam would reopen it as "already solved".
+function pickSubmittedAttempt(attempts, examId) {
+  const list = Array.isArray(attempts)
+    ? attempts
+    : firstArray(attempts?.attempts, attempts?.data);
+  const IN_PROGRESS = [
+    "in_progress",
+    "started",
+    "active",
+    "ongoing",
+    "pending",
+  ];
+  const DONE = [
+    "submitted",
+    "completed",
+    "finished",
+    "graded",
+    "passed",
+    "failed",
+  ];
+  const submitted = list.filter((attempt) => {
+    const status = String(attempt?.status ?? "").toLowerCase();
+    if (IN_PROGRESS.includes(status)) return false;
+    const attemptExamId = attempt?.exam_id ?? attempt?.exam?.id;
+    if (
+      attemptExamId != null &&
+      examId != null &&
+      String(attemptExamId) !== String(examId)
+    ) {
+      return false;
+    }
+    return Boolean(
+      attempt?.submitted_at ||
+      attempt?.finished_at ||
+      attempt?.completed_at ||
+      DONE.includes(status),
+    );
+  });
+  if (submitted.length === 0) return null;
+  const idOf = (attempt) => Number(attempt.id ?? attempt.attempt_id);
+  return submitted.reduce(
+    (latest, attempt) => (idOf(attempt) > idOf(latest) ? attempt : latest),
+    submitted[0],
+  );
+}
+
+// Reads GET /student/lessons/{lesson}/quiz/answers into
+// { questionId -> { selectedId, correctId, isCorrect } }
+function buildReviewMap(data) {
+  const attempt = data?.attempt || data;
+  const list = firstArray(
+    attempt?.answers,
+    data?.answers,
+    data?.quiz_answers,
+    attempt?.quiz_answers,
+    data?.questions,
+  );
+  const map = new Map();
+  list.forEach((item) => {
+    const questionId = item.question_id ?? item.question?.id ?? item.id;
+    if (questionId == null) return;
+    const options = item.options || item.question?.options || [];
+    const selectedId =
+      item.selected_option_id ??
+      item.option_id ??
+      item.selected_option?.id ??
+      item.option?.id;
+    const correctId =
+      item.correct_option_id ??
+      item.correct_option?.id ??
+      options.find((option) => option?.is_correct)?.id;
+    const isCorrect =
+      item.is_correct ??
+      (selectedId != null && correctId != null
+        ? String(selectedId) === String(correctId)
+        : undefined);
+    map.set(String(questionId), { selectedId, correctId, isCorrect });
+  });
+  return map;
+}
+
+// Fallback when the exam questions can't be loaded again for a solved exam
+function questionsFromReview(data) {
+  const attempt = data?.attempt || data;
+  return firstArray(
+    attempt?.answers,
+    data?.answers,
+    data?.quiz_answers,
+    data?.questions,
+  )
+    .map((item) => ({
+      id: item.question_id ?? item.question?.id ?? item.id,
+      question_text: item.question_text ?? item.question?.question_text ?? "",
+      options: item.options || item.question?.options || [],
+    }))
+    .filter((question) => question.id != null && question.options.length > 0);
+}
+
+function findOptionIndex(optionIds, target) {
+  if (target == null) return -1;
+  return optionIds.findIndex(
+    (optionId) => optionId != null && String(optionId) === String(target),
+  );
+}
+
 function QuizView({ lesson, examId, isTeacher, student, showToast }) {
   const {
     startExamAttempt,
     submitExamAttempt,
     getStudentExam,
+    getStudentExamAttempts,
     getStudentLessonQuizAnswers,
-    fetchAdminExamDetails,
   } = useStudent();
   const initialQuiz = lesson?.quiz || lesson?.exam || null;
-  const [examData, setExamData] = useState(
-    isTeacher ? initialQuiz : null,
-  );
+  const [examData, setExamData] = useState(isTeacher ? initialQuiz : null);
   const [examLoadState, setExamLoadState] = useState(
-    isTeacher ? (initialQuiz?.questions?.length ? "ready" : "loading") : "loading",
+    isTeacher
+      ? initialQuiz?.questions?.length
+        ? "ready"
+        : "loading"
+      : "loading",
   );
   const [examLoadError, setExamLoadError] = useState("");
   const [serverResult, setServerResult] = useState(null);
@@ -2052,105 +2602,180 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
   const [currentIdx, setCurrentIdx] = useState(0);
   const [selectedAnswers, setSelectedAnswers] = useState({});
   const [isSubmitted, setIsSubmitted] = useState(false);
-  const [timeLeft, setTimeLeft] = useState(null);
+  const [timeLeft, setTimeLeft] = useState(
+    (lesson?.quiz?.durationMinutes || 10) * 60,
+  );
   const [attemptId, setAttemptId] = useState(null);
 
-  useEffect(() => {
-    let isMounted = true;
+  const isMountedRef = useRef(true);
+  // Always points to the latest loadExam so the effect below can call it
+  // without listing it as a dependency (and without re-running every render).
+  const loadExamRef = useRef(null);
+  // Prevents loading (and starting an attempt) twice for the same exam.
+  const loadedKeyRef = useRef(null);
+  const examLessonIdRef = useRef(lesson?.id);
+  const loadExam = async () => {
+    const isMounted = () => isMountedRef.current;
 
-    const loadExam = async () => {
-      if (isTeacher) {
-        const teacherQuiz = lesson?.quiz || lesson?.exam;
-        if (teacherQuiz && Array.isArray(teacherQuiz.questions) && teacherQuiz.questions.length > 0) {
-          setExamData(teacherQuiz);
-          setExamLoadState("ready");
-          setTimeLeft((teacherQuiz?.duration_minutes || teacherQuiz?.durationMinutes || 10) * 60);
-          return;
-        }
+    if (isTeacher) {
+      setExamData(lesson?.quiz || null);
+      setExamLoadState("ready");
+      return;
+    }
 
-        const targetExamId = examId || teacherQuiz?.id || lesson?.exam?.id || lesson?.id;
-        if (targetExamId && typeof fetchAdminExamDetails === 'function') {
+    setExamLoadState("loading");
+
+    try {
+      if (!examId) throw new Error("معرّف الاختبار غير متاح من الخادم");
+
+      // 1. Ask the backend for the exam FIRST. If it is locked the backend
+      //    answers 403 and we show the lock screen, never a review.
+      const response = await getStudentExam(examId);
+      const exam =
+        response?.exam ||
+        response?.data?.exam ||
+        response?.data?.data ||
+        response?.data ||
+        response;
+      if (!isMounted()) return;
+
+      const examLessonId = exam?.lesson_id ?? exam?.lesson?.id ?? lesson?.id;
+      examLessonIdRef.current = examLessonId;
+
+      // 2. Did the student already submit THIS exam?
+      let previousAttempt = null;
+      try {
+        previousAttempt = pickSubmittedAttempt(
+          await getStudentExamAttempts(examId),
+          examId,
+        );
+      } catch {
+        previousAttempt = null;
+      }
+
+      if (previousAttempt) {
+        const previousId = previousAttempt.id ?? previousAttempt.attempt_id;
+
+        let reviewData = null;
+        if (examLessonId) {
           try {
-            setExamLoadState("loading");
-            const detail = await fetchAdminExamDetails(targetExamId);
-            if (isMounted && detail) {
-              setExamData(detail);
-              setExamLoadState("ready");
-              setTimeLeft((detail?.duration_minutes || detail?.durationMinutes || 10) * 60);
-              return;
-            }
-          } catch (e) {
-            console.warn("Could not fetch admin exam details:", e);
+            const reviewRes = await getStudentLessonQuizAnswers(
+              examLessonId,
+              previousId,
+            );
+            reviewData = reviewRes?.data ?? null;
+          } catch {
+            reviewData = null;
           }
         }
 
-        if (isMounted) {
-          setExamData(teacherQuiz || null);
-          setTimeLeft(((teacherQuiz?.duration_minutes || teacherQuiz?.durationMinutes || 10)) * 60);
-          setExamLoadState("ready");
-          setTimeLeft(((teacherQuiz?.duration_minutes || teacherQuiz?.durationMinutes || 10)) * 60);
+        // Never show a review that belongs to another exam
+        const reviewExamId =
+          reviewData?.attempt?.exam_id ??
+          reviewData?.exam_id ??
+          reviewData?.exam?.id;
+        if (reviewExamId != null && String(reviewExamId) !== String(examId)) {
+          reviewData = null;
         }
+
+        if (!isMounted()) return;
+
+        const examQuestions = exam?.questions?.length
+          ? exam.questions
+          : questionsFromReview(reviewData);
+        setExamData({ ...exam, questions: examQuestions });
+
+        const reviewMap = buildReviewMap(
+          reviewData || { answers: previousAttempt.answers },
+        );
+        const reconstructed = {};
+        examQuestions.map(normalizeExamQuestion).forEach((question, idx) => {
+          const entry = reviewMap.get(String(question.id));
+          const optionIdx = findOptionIndex(
+            question.optionIds,
+            entry?.selectedId,
+          );
+          if (optionIdx >= 0) reconstructed[idx] = optionIdx;
+        });
+
+        setSelectedAnswers(reconstructed);
+        setServerResult({
+          ...previousAttempt,
+          ...(reviewData?.attempt || {}),
+          ...(reviewData || {}),
+        });
+        setAttemptId(previousId ?? null);
+        setIsSubmitted(true);
+        setExamLoadState("ready");
         return;
       }
 
-      setExamLoadState("loading");
-
-      try {
-        if (!examId) throw new Error("معرّف الاختبار غير متاح من الخادم");
-        const response = await getStudentExam(examId);
-        const exam =
-          response?.exam ||
-          response?.data?.exam ||
-          response?.data?.data ||
-          response?.data ||
-          response;
-
-        if (!Array.isArray(exam?.questions) || exam.questions.length === 0) {
-          throw new Error("لم يُرجع الخادم أسئلة هذا الاختبار");
-        }
-        if (!isMounted) return;
-        setExamData(exam);
-        setTimeLeft((exam?.duration_minutes || exam?.durationMinutes || 10) * 60);
-
-        const attempt = await startExamAttempt(examId);
-        if (!attempt?.success && attempt?.success !== undefined) {
-          throw new Error(attempt.message || "تعذر بدء الاختبار");
-        }
-
-        const startedAttemptId =
-          attempt?.attempt_id ||
-          attempt?.attempt?.id ||
-          attempt?.data?.attempt_id ||
-          attempt?.data?.attempt?.id ||
-          attempt?.data?.id;
-
-        if (!startedAttemptId) {
-          throw new Error("لم يُرجع الخادم رقم محاولة الاختبار");
-        }
-
-        if (isMounted) {
-          setAttemptId(startedAttemptId);
-          setExamLoadState("ready");
-        }
-      } catch (error) {
-        if (isMounted) {
-          setExamLoadError(error.message || "تعذر تحميل الاختبار");
-          setExamLoadState(
-            error.isLocked || error.status === 403 ? "locked" : "error",
-          );
-        }
+      // 3. Not solved yet: fresh attempt
+      if (!Array.isArray(exam?.questions) || exam.questions.length === 0) {
+        throw new Error("لم يُرجع الخادم أسئلة هذا الاختبار");
       }
-    };
+      setExamData(exam);
+      setTimeLeft((exam?.duration_minutes || exam?.durationMinutes || 10) * 60);
 
-    loadExam();
+      const attempt = await startExamAttempt(examId);
+      if (!attempt?.success && attempt?.success !== undefined) {
+        throw new Error(attempt.message || "تعذر بدء الاختبار");
+      }
 
-    return () => {
-      isMounted = false;
-    };
-  }, [examId, getStudentExam, isTeacher, lesson, startExamAttempt]);
+      const startedAttemptId =
+        attempt?.attempt_id ||
+        attempt?.attempt?.id ||
+        attempt?.data?.attempt_id ||
+        attempt?.data?.attempt?.id ||
+        attempt?.data?.id;
+
+      if (!startedAttemptId) {
+        throw new Error("لم يُرجع الخادم رقم محاولة الاختبار");
+      }
+
+      if (isMounted()) {
+        setAttemptId(startedAttemptId);
+        setExamLoadState("ready");
+      }
+    } catch (error) {
+      if (isMounted()) {
+        setExamLoadError(error.message || "تعذر تحميل الاختبار");
+        setExamLoadState(
+          error.isLocked || error.status === 403 ? "locked" : "error",
+        );
+      }
+    }
+  };
+
+  // Keep the ref pointing at the newest loadExam after every render.
+  useEffect(() => {
+    loadExamRef.current = loadExam;
+  });
 
   useEffect(() => {
-    if (examLoadState !== "ready" || isSubmitted || timeLeft === null || timeLeft <= 0) return;
+    isMountedRef.current = true;
+
+    if (typeof loadExamRef.current === "function") {
+      if (isTeacher) {
+        loadExamRef.current();
+      } else {
+        // Student: run once per exam, even if `lesson` changes identity or
+        // React StrictMode re-runs the effect.
+        const key = String(examId);
+        if (loadedKeyRef.current !== key) {
+          loadedKeyRef.current = key;
+          loadExamRef.current();
+        }
+      }
+    }
+
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, [examId, isTeacher, lesson]);
+
+  useEffect(() => {
+    if (examLoadState !== "ready" || isSubmitted || timeLeft <= 0) return;
     const timer = setInterval(() => {
       setTimeLeft((prev) => {
         if (prev <= 1) {
@@ -2195,7 +2820,9 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
         const answersPayload = questions.map((question, index) => {
           const optionId = question.optionIds[selectedAnswers[index]];
           if (!question.id || !optionId) {
-            throw new Error("تعذر إرسال إجابة دون معرّفات السؤال والاختيار من الخادم");
+            throw new Error(
+              "تعذر إرسال إجابة دون معرّفات السؤال والاختيار من الخادم",
+            );
           }
           return { question_id: question.id, option_id: optionId };
         });
@@ -2237,15 +2864,15 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
             resultAttempt?.percentage_score ??
             resultAttempt?.score_percentage,
         );
-        const reportedScore = Number(
+        const submittedScore = Number(
           resultAttempt?.score ??
             resultAttempt?.correct_answers ??
             resultAttempt?.correctAnswers,
         );
         submittedPercentage = Number.isFinite(reportedPercentage)
           ? reportedPercentage
-          : Number.isFinite(reportedScore)
-            ? Math.round((reportedScore / (totalQuestions || 1)) * 100)
+          : Number.isFinite(submittedScore)
+            ? Math.round((submittedScore / (totalQuestions || 1)) * 100)
             : null;
       } catch (error) {
         showToast(error.message || "تعذر تسليم إجابات الاختبار", "error");
@@ -2274,7 +2901,7 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
         `أحسنت يا ${student?.name || "بطل الرياضيات"}! نتيجتك: ${percentage}% 🏆`,
       );
     } else if (percentage !== null) {
-      showToast(`درجتك ${percentage}%، راجع الشرح وأعد المحاولة 💪`);
+      showToast(`درجتك ${percentage}%، راجع الشرح 💪`);
     } else {
       showToast("تم تسليم إجاباتك بنجاح");
     }
@@ -2286,6 +2913,15 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
     return `${m}:${s < 10 ? "0" : ""}${s}`;
   };
 
+  // Correct / wrong answers per question, as saved by the backend
+  const reviewMap = buildReviewMap(serverResult);
+  const reviewEntries = [...reviewMap.values()];
+  const reviewCorrectCount =
+    reviewEntries.length > 0 &&
+    reviewEntries.every((entry) => entry.isCorrect !== undefined)
+      ? reviewEntries.filter((entry) => entry.isCorrect).length
+      : null;
+
   const localScore = isTeacher ? calculateScore() : null;
   const reportedScore = Number(
     serverResult?.score ??
@@ -2296,13 +2932,13 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
     ? reportedScore
     : isTeacher && hasAnswerKey
       ? localScore
+      : reviewCorrectCount;
+  const reportedPercentage = Number(serverResult?.percentage);
+  const percentage = Number.isFinite(reportedPercentage)
+    ? Math.round(reportedPercentage)
+    : score !== null
+      ? Math.round((score / (totalQuestions || 1)) * 100)
       : null;
-  const percentage =
-    typeof serverResult?.percentage === "number"
-      ? serverResult.percentage
-      : score !== null
-        ? Math.round((score / (totalQuestions || 1)) * 100)
-        : null;
 
   if (examLoadState === "loading") {
     return (
@@ -2533,7 +3169,7 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
             {percentage !== null
               ? percentage >= 50
                 ? "مبروك! اجتزت الاختبار بنجاح 🎉"
-                : "حاول مرة أخرى لتحسين نتيجتك 💪"
+                : "راجع إجاباتك وتعلّم من أخطائك 💪"
               : "تم إرسال إجابات الاختبار بنجاح"}
           </h2>
 
@@ -2563,33 +3199,70 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
               : "تم تسجيل إجاباتك في السيرفر بنجاح."}
           </p>
 
-          <section className="exam-answer-review" aria-labelledby="exam-review-title">
-            <h3 id="exam-review-title">{"\u0645\u0631\u0627\u062c\u0639\u0629 \u0625\u062c\u0627\u0628\u0627\u062a\u0643"}</h3>
+          <section
+            className="exam-answer-review"
+            aria-labelledby="exam-review-title"
+          >
+            <h3 id="exam-review-title">مراجعة إجاباتك</h3>
             <div className="exam-answer-review__list">
               {questions.map((question, index) => {
-                const correctIndex = question.correctIndex;
-                const hasCorrectOption = Number.isInteger(correctIndex) && correctIndex >= 0;
-                const selectedIndex = selectedAnswers[index];
-                const isCorrect = hasCorrectOption && selectedIndex === correctIndex;
+                const entry = reviewMap.get(String(question.id));
+
+                // Student's answer: from the saved selection / the backend
+                const selectedFromBackend = findOptionIndex(
+                  question.optionIds,
+                  entry?.selectedId,
+                );
+                const selectedIndex =
+                  selectedAnswers[index] !== undefined
+                    ? selectedAnswers[index]
+                    : selectedFromBackend >= 0
+                      ? selectedFromBackend
+                      : undefined;
+
+                // Correct answer: the backend review first, then the exam data
+                const correctFromBackend = findOptionIndex(
+                  question.optionIds,
+                  entry?.correctId,
+                );
+                const correctIndex =
+                  correctFromBackend >= 0
+                    ? correctFromBackend
+                    : question.correctIndex;
+                const hasCorrectOption =
+                  Number.isInteger(correctIndex) && correctIndex >= 0;
+
+                const isCorrect =
+                  entry?.isCorrect !== undefined
+                    ? Boolean(entry.isCorrect)
+                    : hasCorrectOption && selectedIndex === correctIndex;
+                const hasVerdict =
+                  entry?.isCorrect !== undefined || hasCorrectOption;
 
                 return (
-                  <article className="exam-review-question" key={question.id || index}>
+                  <article
+                    className="exam-review-question"
+                    key={question.id || index}
+                  >
                     <div className="exam-review-question__header">
                       <h4>
-                        {"\u0627\u0644\u0633\u0624\u0627\u0644"} {index + 1}: {question.question}
+                        السؤال {index + 1}: {question.question}
                       </h4>
-                      <span className={`exam-review-status ${!hasCorrectOption ? "is-pending" : isCorrect ? "is-correct" : "is-incorrect"}`}>
-                        {hasCorrectOption
+                      <span
+                        className={`exam-review-status ${!hasVerdict ? "is-pending" : isCorrect ? "is-correct" : "is-incorrect"}`}
+                      >
+                        {hasVerdict
                           ? isCorrect
-                            ? "\u0625\u062c\u0627\u0628\u0629 \u0635\u062d\u064a\u062d\u0629"
-                            : "\u0625\u062c\u0627\u0628\u0629 \u063a\u064a\u0631 \u0635\u062d\u064a\u062d\u0629"
-                          : "\u0627\u0644\u0625\u062c\u0627\u0628\u0629 \u0627\u0644\u0646\u0645\u0648\u0630\u062c\u064a\u0629 \u063a\u064a\u0631 \u0645\u062a\u0627\u062d\u0629"}
+                            ? "إجابة صحيحة"
+                            : "إجابة غير صحيحة"
+                          : "الإجابة النموذجية غير متاحة"}
                       </span>
                     </div>
                     <div className="exam-review-options">
                       {question.options.map((option, optionIndex) => {
                         const isSelected = selectedIndex === optionIndex;
-                        const isCorrectOption = hasCorrectOption && correctIndex === optionIndex;
+                        const isCorrectOption =
+                          hasCorrectOption && correctIndex === optionIndex;
                         const optionClass = isCorrectOption
                           ? "is-correct"
                           : isSelected
@@ -2597,16 +3270,25 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
                             : "";
 
                         return (
-                          <div className={`exam-review-option ${optionClass}`} key={question.optionIds[optionIndex] || optionIndex}>
+                          <div
+                            className={`exam-review-option ${optionClass}`}
+                            key={question.optionIds[optionIndex] || optionIndex}
+                          >
                             <span>{option}</span>
                             {isSelected && isCorrectOption && (
-                              <span className="exam-review-option__label">{"\u0625\u062c\u0627\u0628\u062a\u0643 \u0627\u0644\u0635\u062d\u064a\u062d\u0629"}</span>
+                              <span className="exam-review-option__label">
+                                إجابتك الصحيحة
+                              </span>
                             )}
                             {isSelected && !isCorrectOption && (
-                              <span className="exam-review-option__label">{"\u0625\u062c\u0627\u0628\u062a\u0643"}</span>
+                              <span className="exam-review-option__label">
+                                إجابتك
+                              </span>
                             )}
                             {isCorrectOption && !isSelected && (
-                              <span className="exam-review-option__label">{"\u0627\u0644\u0625\u062c\u0627\u0628\u0629 \u0627\u0644\u0635\u062d\u064a\u062d\u0629"}</span>
+                              <span className="exam-review-option__label">
+                                الإجابة الصحيحة
+                              </span>
                             )}
                           </div>
                         );
@@ -2618,15 +3300,31 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
             </div>
           </section>
 
-          <div className="exam-result-actions">
-            <Link to="/lessons" className="btn-primary">
-              {"\u0627\u0644\u0639\u0648\u062f\u0629 \u0644\u0644\u062f\u0631\u0648\u0633"}
+          <div
+            className="exam-result-actions"
+            style={{
+              display: "flex",
+              gap: "12px",
+              justifyContent: "center",
+              flexWrap: "wrap",
+              marginTop: "2rem",
+            }}
+          >
+            <Link
+              to="/lessons"
+              className="btn-primary"
+              style={{ padding: "10px 24px" }}
+            >
+              العودة للدروس
             </Link>
           </div>
         </div>
       ) : (
         /* Questions Stepper & Current Question */
-        <div className="form-card" style={{ padding: "clamp(1rem, 4vw, 2rem)" }}>
+        <div
+          className="form-card"
+          style={{ padding: "clamp(1rem, 4vw, 2rem)" }}
+        >
           {/* Progress Bar & Indicators */}
           <div style={{ marginBottom: "1.75rem" }}>
             <div
@@ -2790,7 +3488,10 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
               <button
                 onClick={() => {
                   if (!isTeacher && selectedAnswers[currentIdx] === undefined) {
-                    showToast("أجب عن هذا السؤال قبل الانتقال إلى السؤال التالي", "error");
+                    showToast(
+                      "أجب عن هذا السؤال قبل الانتقال إلى السؤال التالي",
+                      "error",
+                    );
                     return;
                   }
                   setCurrentIdx((p) => Math.min(totalQuestions - 1, p + 1));

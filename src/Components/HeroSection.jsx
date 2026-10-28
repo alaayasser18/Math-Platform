@@ -3,7 +3,11 @@ import { TEACHER_INFO } from '../data/platformData';
 
 export default function HeroSection({ student = {}, onExploreLessons }) {
   const studentName = student?.name || 'طالب متميز';
-  const studentGrade = student?.grade || 'الصف الثالث الثانوي';
+  const studentGrade =
+    student?.grade ||
+    student?.grade_name ||
+    student?.subscription?.grade?.name ||
+    '';
 
   return (
     <section className="relative pt-6 pb-12 overflow-hidden">
@@ -28,9 +32,11 @@ export default function HeroSection({ student = {}, onExploreLessons }) {
               <div className="inline-flex flex-wrap items-center gap-2 px-3 sm:px-3.5 py-1.5 rounded-2xl sm:rounded-full bg-cyan-950/60 border border-cyan-400/30 text-cyan-300 text-xs font-semibold shadow-inner max-w-full">
                 <Sparkles className="w-4 h-4 text-cyan-400 animate-spin shrink-0" style={{ animationDuration: '6s' }} />
                 <span className="break-words">أهلاً بك يا <strong className="text-white underline decoration-cyan-400">{studentName}</strong> في منصة الرياضيات</span>
-                <span className="text-[11px] bg-cyan-500/20 text-cyan-200 px-2 py-0.5 rounded-full border border-cyan-400/30 shrink-0">
-                  {studentGrade}
-                </span>
+                {studentGrade && (
+                  <span className="text-[11px] bg-cyan-500/20 text-cyan-200 px-2 py-0.5 rounded-full border border-cyan-400/30 shrink-0">
+                    {studentGrade}
+                  </span>
+                )}
               </div>
 
               {/* Main Teacher Headline */}
