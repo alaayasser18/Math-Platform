@@ -517,7 +517,7 @@ function TeacherExamsManager({
     title: "",
     description: "",
     duration_minutes: 20,
-    passing_percentage: 60,
+    passing_percentage: "",
   });
 
   // Question Modal State (with Choices fields)
@@ -552,7 +552,7 @@ function TeacherExamsManager({
       title: "",
       description: "",
       duration_minutes: 20,
-      passing_percentage: 60,
+      passing_percentage: "",
     });
     setIsAddExamOpen(true);
   };
@@ -564,7 +564,7 @@ function TeacherExamsManager({
       title: exam.title || "",
       description: exam.description || "",
       duration_minutes: exam.duration_minutes || 20,
-      passing_percentage: exam.passing_percentage || 60,
+      passing_percentage: exam.passing_percentage || "",
     });
     setIsAddExamOpen(true);
   };
@@ -575,7 +575,14 @@ function TeacherExamsManager({
       showToast("يرجى كتابة عنوان الامتحان", "error");
       return;
     }
-
+    const payload = {
+      ...newExamData,
+      passing_percentage:
+        newExamData.passing_percentage === "" ||
+        newExamData.passing_percentage == null
+          ? null
+          : Number(newExamData.passing_percentage),
+    };
     const duplicateExam =
       !editingExam &&
       newExamData.lesson_id &&
@@ -593,8 +600,8 @@ function TeacherExamsManager({
     setIsProcessing(true);
     try {
       const res = editingExam
-        ? await updateAdminExam(editingExam.id, newExamData)
-        : await createAdminExam(newExamData);
+        ? await updateAdminExam(editingExam.id, payload)
+        : await createAdminExam(payload);
 
       if (res?.success) {
         setIsAddExamOpen(false);
@@ -1125,18 +1132,20 @@ function TeacherExamsManager({
                         {exam.duration_minutes || 20} دقيقة
                       </span>
 
-                      <span
-                        style={{
-                          fontSize: "0.8rem",
-                          color: "var(--emerald)",
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: "4px",
-                        }}
-                      >
-                        <CheckCircle2 size={13} />
-                        نسبة النجاح: {exam.passing_percentage || 60}%
-                      </span>
+                      {exam.passing_percentage != null && (
+                        <span
+                          style={{
+                            fontSize: "0.8rem",
+                            color: "var(--emerald)",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "4px",
+                          }}
+                        >
+                          <CheckCircle2 size={13} />
+                          نسبة النجاح: {exam.passing_percentage}%
+                        </span>
+                      )}
 
                       <span
                         style={{
@@ -1751,17 +1760,19 @@ function TeacherExamsManager({
                       display: "block",
                     }}
                   >
-                    نسبة النجاح (%)
+                    نسبة النجاح % (اختياري)
                   </label>
                   <input
                     type="number"
-                    min="10"
+                    min="0"
                     max="100"
-                    value={newExamData.passing_percentage}
+                    placeholder="بدون نسبة"
+                    value={newExamData.passing_percentage ?? ""}
                     onChange={(e) =>
                       setNewExamData({
                         ...newExamData,
-                        passing_percentage: Number(e.target.value),
+                        passing_percentage:
+                          e.target.value === "" ? "" : Number(e.target.value),
                       })
                     }
                     className="form-input"
