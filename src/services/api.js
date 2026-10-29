@@ -158,14 +158,16 @@ export const getGradeIdByName = (name) => GRADE_ID_MAP[name] || 1;
 function translateApiError(message) {
   if (typeof message !== "string") return message;
 
-  const normalized = message.trim().toLowerCase().replace(/[.!؟]+$/g, "");
+  const normalized = message
+    .trim()
+    .toLowerCase()
+    .replace(/[.!؟]+$/g, "");
   const translations = {
     "this subscription is not active": "الاشتراك ده غير نشط.",
     "this subscription does not have an active trusted device":
       "الاشتراك ده مفيهوش جهاز موثوق نشط لإعادة ضبطه.",
     "invalid subscription code": "كود الاشتراك غير صحيح.",
-    "no active trusted device":
-      "مفيش جهاز موثوق نشط للاشتراك ده.",
+    "no active trusted device": "مفيش جهاز موثوق نشط للاشتراك ده.",
     "subscription not found": "الاشتراك ده غير موجود.",
     unauthenticated: "انتهت الجلسة. يلزم تسجيل الدخول مرة أخرى.",
     "admin access required": "العملية دي متاحة لحساب الإدارة فقط.",
@@ -236,6 +238,7 @@ async function request(endpoint, options = {}, authType = null) {
       response = await fetch(url, {
         ...fetchOptions,
         headers,
+        cache: "no-store", // يمنع المتصفح يرجّع نسخة قديمة من الأكواد
         signal: controller.signal,
       });
     } finally {
@@ -245,6 +248,7 @@ async function request(endpoint, options = {}, authType = null) {
     const data = await response.json().catch(() => null);
 
     if (!response.ok) {
+      console.error("[API_DEBUG]", fetchOptions.method, url, response.status, data);
       let errorMsg =
         data?.message ||
         data?.error ||
@@ -311,10 +315,9 @@ async function requestStudentFile(endpoint) {
     });
   } catch (error) {
     if (error.name === "AbortError") {
-      throw new Error(
-        "انتهت مهلة تنزيل الملف. يُرجى المحاولة مرة أخرى.",
-        { cause: error },
-      );
+      throw new Error("انتهت مهلة تنزيل الملف. يُرجى المحاولة مرة أخرى.", {
+        cause: error,
+      });
     }
     throw error;
   } finally {
@@ -324,7 +327,9 @@ async function requestStudentFile(endpoint) {
   if (!response.ok) {
     const data = await response.json().catch(() => null);
     const message = translateApiError(
-      data?.message || data?.error || `خطأ ${response.status}: تعذر تنزيل الملف`,
+      data?.message ||
+        data?.error ||
+        `خطأ ${response.status}: تعذر تنزيل الملف`,
     );
     const error = new Error(message);
     error.status = response.status;
@@ -847,7 +852,11 @@ export const api = {
 
     return res.success
       ? normalizeApiSuccess(res)
-      : { ...res, success: false, error: res.error || "Failed to delete student" };
+      : {
+          ...res,
+          success: false,
+          error: res.error || "Failed to delete student",
+        };
   },
 
   /**
@@ -868,7 +877,11 @@ export const api = {
 
     return res.success
       ? normalizeApiSuccess(res)
-      : { ...res, success: false, error: res.error || "Failed to delete subscription" };
+      : {
+          ...res,
+          success: false,
+          error: res.error || "Failed to delete subscription",
+        };
   },
 
   // Alias used by StudentContext
@@ -971,7 +984,9 @@ export const api = {
         success: true,
         data: list,
         current_page:
-          payload?.current_page ?? res.data?.current_page ?? (Number(page) || 1),
+          payload?.current_page ??
+          res.data?.current_page ??
+          (Number(page) || 1),
         last_page: payload?.last_page ?? res.data?.last_page ?? 1,
         total: payload?.total ?? res.data?.total ?? list.length,
       };
@@ -1692,9 +1707,7 @@ export const api = {
    */
   async getStudentLessonQuizAnswers(lessonId, attemptId) {
     const query =
-      attemptId == null
-        ? ""
-        : `?attempt_id=${encodeURIComponent(attemptId)}`;
+      attemptId == null ? "" : `?attempt_id=${encodeURIComponent(attemptId)}`;
     const res = await request(
       `/api/v1/student/lessons/${encodeURIComponent(lessonId)}/quiz/answers${query}`,
       { method: "GET" },

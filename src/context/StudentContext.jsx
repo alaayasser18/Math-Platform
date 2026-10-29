@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { GRADES, TEACHER_INFO } from "../data/platformData";
 
@@ -11,6 +11,52 @@ import {
 } from "../services/api";
 
 import { StudentContext } from "./StudentContextValue";
+
+// ============================================================
+// HELPERS (pure functions, no state)
+// ============================================================
+
+const normalizeLesson = (lesson, index, { forStudent = false } = {}) => {
+  const video = lesson.video || lesson.videos?.[0] || null;
+  const sectionName =
+    lesson.section_name || lesson.section?.name || lesson.branch || "";
+  const gradeId =
+    lesson.grade_id ||
+    lesson.gradeId ||
+    lesson.section?.grade_id ||
+    lesson.grade?.id;
+
+  return {
+    ...lesson,
+    video,
+    videoId: video?.id || lesson.video_id || lesson.videoId || null,
+    id: lesson.id,
+    number: index + 1,
+    title: lesson.title || "درس رياضيات",
+    branch: sectionName,
+    grade:
+      lesson.grade?.name ||
+      lesson.grade_name ||
+      (gradeId ? getGradeNameById(gradeId) : ""),
+    gradeId: gradeId || null,
+    description: lesson.description || "",
+    duration: video?.duration || lesson.duration || "",
+    videoUrl:
+      video?.video_url ||
+      video?.url ||
+      lesson.video_url ||
+      lesson.videoUrl ||
+      "",
+    ...(forStudent
+      ? {
+          isCompleted: Boolean(lesson.is_completed),
+          progress: lesson.progress || 0,
+          accessStatus: lesson.access_status || "",
+        }
+      : {}),
+    quiz: lesson.quiz || lesson.exam || null,
+  };
+};
 
 export const StudentProvider = ({ children }) => {
   // ============================================================
@@ -25,8 +71,6 @@ export const StudentProvider = ({ children }) => {
   });
 
   const [student, setStudent] = useState(null);
-
-  const [studentsList, setStudentsList] = useState([]);
 
   // ============================================================
   // REQUESTS / SUBSCRIPTIONS
@@ -51,6 +95,8 @@ export const StudentProvider = ({ children }) => {
 
   const [subscriptionCodesList, setSubscriptionCodesList] = useState([]);
   const [isLoadingCodes, setIsLoadingCodes] = useState(false);
+  // آخر صف تم تحميل أكواده، عشان نقدر نعمل refetch لنفس الصف بعد أي تعديل
+  const codesGradeRef = useRef(1);
 
   // ============================================================
   // ADMIN PAGINATED STUDENTS
@@ -63,6 +109,9 @@ export const StudentProvider = ({ children }) => {
     total: 0,
   });
   const [isLoadingStudents, setIsLoadingStudents] = useState(false);
+  // آخر صفحة تم تحميلها، عشان الـ refetch مايرجعش لصفحة 1
+  const studentsPageRef = useRef(1);
+
   const [isLoadingLessons, setIsLoadingLessons] = useState(false);
   const [studentExamsList, setStudentExamsList] = useState([]);
   const [isLoadingStudentExams, setIsLoadingStudentExams] = useState(false);
@@ -92,8 +141,7 @@ export const StudentProvider = ({ children }) => {
 
     const restoreSession = async () => {
       const savedRole = localStorage.getItem("el_eamid_role");
-      const hasSavedSession =
-        localStorage.getItem("el_eamid_auth") === "true";
+      const hasSavedSession = localStorage.getItem("el_eamid_auth") === "true";
       const savedToken =
         savedRole === "teacher"
           ? tokenStorage.getAdminToken()
@@ -101,7 +149,7 @@ export const StudentProvider = ({ children }) => {
             ? tokenStorage.getStudentToken()
             : null;
 
-      // Clean up any legacy offline mock keys from localStorage
+      // تنظيف أي مفاتيح محلية قديمة من النسخ السابقة
       localStorage.removeItem("mathplatform_offline_requests");
       localStorage.removeItem("mathplatform_offline_approved");
       localStorage.removeItem("mathplatform_offline_exams");
@@ -226,6 +274,103 @@ export const StudentProvider = ({ children }) => {
   }, [showToast]);
 
   // ============================================================
+  // PAGINATED STUDENTS (GET /api/v1/admin/students?page=)
+  // ============================================================
+
+  const fetchAdminStudents = useCallback(
+    async (page) => {
+      const targetPage = page ?? studentsPageRef.current;
+      setIsLoadingStudents(true);
+      try {
+        const res = await api.getAllStudents(targetPage);
+        if (!res?.success) {
+          if (res?.error) showToast(res.error, "error");
+          return res;
+        }
+
+        const list = Array.isArray(res.data) ? res.data : [];
+        studentsPageRef.current = res.current_page ?? targetPage;
+        setPaginatedStudents(list);
+        setStudentsPagination({
+          current_page: res.current_page ?? targetPage,
+          last_page: res.last_page ?? 1,
+          total: res.total ?? list.length,
+        });
+        return res;
+      } catch (error) {
+        console.error("Failed to fetch paginated students:", error);
+        showToast(error?.message || "Failed to fetch admin students", "error");
+        return { success: false, error: error?.message || "Request failed" };
+      } finally {
+        setIsLoadingStudents(false);
+      }
+    },
+    [showToast],
+  );
+
+  // ============================================================
+  // FETCH SUBSCRIPTION CODES (GET /api/v1/admin/subscription-codes)
+  // ============================================================
+
+  const fetchSubscriptionCodes = useCallback(
+    async (grade) => {
+      setIsLoadingCodes(true);
+      try {
+        const rawGrade = grade ?? codesGradeRef.current;
+        const gradeId =
+          typeof rawGrade === "number"
+            ? rawGrade
+            : isNaN(Number(rawGrade))
+              ? getGradeIdByName(rawGrade)
+              : Number(rawGrade);
+        const resolvedGradeId = gradeId || 1;
+        codesGradeRef.current = resolvedGradeId;
+
+        const result = await api.getSubscriptionCodes(resolvedGradeId);
+
+        if (result?.success) {
+          const list = Array.isArray(result.data)
+            ? result.data
+            : result.data?.students || result.data?.data || [];
+          setSubscriptionCodesList(list);
+          return { success: true, data: list };
+        }
+
+        setSubscriptionCodesList([]);
+        showToast(result?.message || "فشل تحميل أكواد الاشتراك", "error");
+        return result;
+      } catch (error) {
+        console.error("Subscription codes error:", error);
+        setSubscriptionCodesList([]);
+        return {
+          success: false,
+          message: error?.message || "Failed",
+        };
+      } finally {
+        setIsLoadingCodes(false);
+      }
+    },
+    [showToast],
+  );
+
+  // يعيد تحميل كل القوائم المرتبطة بالطلاب والاشتراكات من السيرفر
+  const refreshStudentData = useCallback(
+    () =>
+      Promise.allSettled([
+        fetchPendingRequests(),
+        fetchApprovedStudents(),
+        fetchAdminStudents(),
+        fetchSubscriptionCodes(),
+      ]),
+    [
+      fetchPendingRequests,
+      fetchApprovedStudents,
+      fetchAdminStudents,
+      fetchSubscriptionCodes,
+    ],
+  );
+
+  // ============================================================
   // FETCH STUDENT PROFILE (GET /api/v1/student/profile)
   // ============================================================
 
@@ -249,7 +394,10 @@ export const StudentProvider = ({ children }) => {
             ? profileStudent.subscription_code
             : null);
         const trustedDevice =
-          profile.trusted_device || profile.device || profile.trustedDevice || null;
+          profile.trusted_device ||
+          profile.device ||
+          profile.trustedDevice ||
+          null;
         const profileName =
           profileStudent.name ||
           `${profileStudent.first_name || ""} ${profileStudent.last_name || ""}`.trim();
@@ -278,7 +426,7 @@ export const StudentProvider = ({ children }) => {
               typeof profile.grade === "string"
                 ? profile.grade
                 : profile.grade?.name ||
-                  ((profileStudent.grade_id || prev?.grade_id)
+                  (profileStudent.grade_id || prev?.grade_id
                     ? getGradeNameById(
                         profileStudent.grade_id || prev?.grade_id,
                       )
@@ -289,13 +437,17 @@ export const StudentProvider = ({ children }) => {
         });
         return { success: true, data: updatedStudent || profile };
       }
-      const error = result?.error || result?.message || "تعذر تحميل بيانات الطالب";
+      const error =
+        result?.error || result?.message || "تعذر تحميل بيانات الطالب";
       showToast(error, "error");
       return { success: false, error };
     } catch (error) {
       console.error("Failed to fetch student profile:", error);
       showToast(error?.message || "تعذر تحميل بيانات الطالب", "error");
-      return { success: false, error: error?.message || "تعذر تحميل بيانات الطالب" };
+      return {
+        success: false,
+        error: error?.message || "تعذر تحميل بيانات الطالب",
+      };
     }
   }, [showToast]);
 
@@ -440,14 +592,7 @@ export const StudentProvider = ({ children }) => {
           return result;
         }
 
-        const newRequest = {
-          id: Date.now(),
-          ...studentData,
-          status: "pending",
-        };
-
-        setPendingRequests((prev) => [...prev, newRequest]);
-
+        // لا نضيف الطلب محليًا؛ المعلم يشوفه من السيرفر عبر fetchPendingRequests
         showToast("تم إرسال طلب التفعيل بنجاح");
 
         return result;
@@ -544,15 +689,17 @@ export const StudentProvider = ({ children }) => {
         const result = await api.approveActivationRequest(requestId);
 
         if (!result?.success) {
-          showToast(result?.message || "فشل قبول الطلب", "error");
+          showToast(
+            result?.message || result?.error || "فشل قبول الطلب",
+            "error",
+          );
 
           return result;
         }
 
         showToast("تم قبول الطلب بنجاح");
 
-        await fetchPendingRequests();
-        await fetchApprovedStudents();
+        await refreshStudentData();
 
         return result;
       } catch (error) {
@@ -566,7 +713,7 @@ export const StudentProvider = ({ children }) => {
         };
       }
     },
-    [fetchPendingRequests, fetchApprovedStudents, showToast],
+    [refreshStudentData, showToast],
   );
 
   // ============================================================
@@ -579,14 +726,17 @@ export const StudentProvider = ({ children }) => {
         const result = await api.cancelActivationRequest(requestId);
 
         if (!result?.success) {
-          showToast(result?.message || "فشل إلغاء الطلب", "error");
+          showToast(
+            result?.message || result?.error || "فشل إلغاء الطلب",
+            "error",
+          );
 
           return result;
         }
 
         showToast("تم إلغاء الطلب");
 
-        await fetchPendingRequests();
+        await refreshStudentData();
 
         return result;
       } catch (error) {
@@ -600,85 +750,30 @@ export const StudentProvider = ({ children }) => {
         };
       }
     },
-    [fetchPendingRequests, showToast],
+    [refreshStudentData, showToast],
   );
 
   // ============================================================
-  // PAGINATED STUDENTS (GET /api/v1/admin/students?page=)
-  // ============================================================
-
-  const fetchAdminStudents = useCallback(async (page = 1) => {
-    setIsLoadingStudents(true);
-    try {
-      const res = await api.getAllStudents(page);
-      if (!res?.success) {
-        if (res?.error) showToast(res.error, "error");
-        return res;
-      }
-
-      const list = Array.isArray(res.data) ? res.data : [];
-      setPaginatedStudents(list);
-      setStudentsPagination({
-        current_page: res.current_page ?? page,
-        last_page: res.last_page ?? 1,
-        total: res.total ?? list.length,
-      });
-      return res;
-    } catch (error) {
-      console.error("Failed to fetch paginated students:", error);
-      showToast(error?.message || "Failed to fetch admin students", "error");
-      return { success: false, error: error?.message || "Request failed" };
-    } finally {
-      setIsLoadingStudents(false);
-    }
-  }, [showToast]);
-
-  // ============================================================
-  // DEACTIVATE STUDENT
+  // DEACTIVATE SUBSCRIPTION
   // ============================================================
 
   const deactivateStudent = useCallback(
-    async (studentId) => {
+    async (subscriptionId) => {
       try {
-        const approvedRecord = approvedSubscriptions.find((item) => {
-          const subscription =
-            item.subscription ||
-            item.active_subscription ||
-            item.subscriptions?.[0] ||
-            (typeof item.subscription_code === "object"
-              ? item.subscription_code
-              : null);
-          const currentSubscriptionId =
-            item.subscription_id || subscription?.id || item.id;
-          return String(currentSubscriptionId) === String(studentId);
-        });
-        const targetStudentId =
-          approvedRecord?.student?.id ||
-          approvedRecord?.user?.id ||
-          approvedRecord?.student_id ||
-          approvedRecord?.user_id;
-        const result = await api.deactivateStudent(studentId);
+        const result = await api.deactivateStudent(subscriptionId);
 
         if (!result?.success) {
-          showToast(result?.message || "فشل إلغاء تفعيل الطالب", "error");
+          showToast(
+            result?.message || result?.error || "فشل إلغاء تفعيل الطالب",
+            "error",
+          );
 
           return result;
         }
 
         showToast("تم إلغاء تفعيل الطالب");
 
-        await fetchApprovedStudents();
-        await fetchAdminStudents();
-        if (targetStudentId != null) {
-          setPaginatedStudents((current) =>
-            current.map((student) =>
-              String(student.student_id || student.id) ===
-              String(targetStudentId)
-                ? { ...student, subscription_status: "inactive" }
-                : student,
-            ),
-          );
-        }
+        await refreshStudentData();
 
         return result;
       } catch (error) {
@@ -692,8 +787,12 @@ export const StudentProvider = ({ children }) => {
         };
       }
     },
-    [approvedSubscriptions, fetchApprovedStudents, fetchAdminStudents, showToast],
+    [refreshStudentData, showToast],
   );
+
+  // ============================================================
+  // DELETE (PERMANENT) DEACTIVATED STUDENT / SUBSCRIPTION
+  // ============================================================
 
   const deleteDeactivatedStudentRecord = useCallback(
     async ({ studentId, subscriptionId }) => {
@@ -704,42 +803,36 @@ export const StudentProvider = ({ children }) => {
 
         if (!result?.success) {
           showToast(
-            result?.message || result?.error || "Failed to permanently delete the student",
+            result?.message ||
+              result?.error ||
+              "Failed to permanently delete the student",
             "error",
           );
           return result;
         }
 
-        setPaginatedStudents((current) =>
-          current.filter(
-            (student) =>
-              String(student.student_id || student.id) !== String(studentId),
-          ),
-        );
-        setStudentsPagination((current) => ({
-          ...current,
-          total: Math.max(0, current.total - 1),
-        }));
-
         showToast("تم حذف الطالب والاشتراك نهائيًا");
-        await fetchApprovedStudents();
-        await fetchAdminStudents();
+        await refreshStudentData();
         return result;
       } catch (error) {
         console.error("Delete deactivated student error:", error);
-        showToast(error?.message || "Failed to permanently delete the student", "error");
+        showToast(
+          error?.message || "Failed to permanently delete the student",
+          "error",
+        );
         return { success: false, message: error?.message || "Delete failed" };
       }
     },
-    [fetchAdminStudents, fetchApprovedStudents, showToast],
+    [refreshStudentData, showToast],
   );
 
   const deactivateAndDeleteStudentRecord = useCallback(
-    async ({ studentId, subscriptionId }) => {
+    async ({ subscriptionId }) => {
       if (!subscriptionId) {
         return {
           success: false,
-          message: "A subscription ID is required to deactivate an active student",
+          message:
+            "A subscription ID is required to deactivate an active student",
         };
       }
 
@@ -750,46 +843,34 @@ export const StudentProvider = ({ children }) => {
           showToast(
             deactivation?.message ||
               deactivation?.error ||
-              "\u0641\u0634\u0644 \u062a\u0639\u0637\u064a\u0644 \u0627\u0634\u062a\u0631\u0627\u0643 \u0627\u0644\u0637\u0627\u0644\u0628",
+              "فشل تعطيل اشتراك الطالب",
             "error",
           );
           return deactivation;
         }
         deactivated = true;
 
-        const deletion = await api.deleteDeactivatedSubscription(subscriptionId);
+        const deletion =
+          await api.deleteDeactivatedSubscription(subscriptionId);
         if (!deletion?.success) {
           showToast(
             deletion?.message ||
               deletion?.error ||
-              "\u062a\u0645 \u0627\u0644\u062a\u0639\u0637\u064a\u0644\u060c \u0644\u0643\u0646 \u062a\u0639\u0630\u0631 \u0627\u0644\u062d\u0630\u0641 \u0627\u0644\u0646\u0647\u0627\u0626\u064a",
+              "تم التعطيل، لكن تعذر الحذف النهائي",
             "error",
           );
-          await Promise.all([fetchApprovedStudents(), fetchAdminStudents()]);
+          await refreshStudentData();
           return { ...deletion, success: false, deactivated: true };
         }
 
-        setPaginatedStudents((current) =>
-          current.filter(
-            (student) =>
-              String(student.student_id || student.id) !== String(studentId),
-          ),
-        );
-        setStudentsPagination((current) => ({
-          ...current,
-          total: Math.max(0, current.total - 1),
-        }));
-        showToast("\u062a\u0645 \u062a\u0639\u0637\u064a\u0644 \u0627\u0644\u0627\u0634\u062a\u0631\u0627\u0643 \u0648\u062d\u0630\u0641 \u0627\u0644\u0637\u0627\u0644\u0628 \u0646\u0647\u0627\u0626\u064a\u064b\u0627");
-        await Promise.all([fetchApprovedStudents(), fetchAdminStudents()]);
+        showToast("تم تعطيل الاشتراك وحذف الطالب نهائيًا");
+        await refreshStudentData();
         return deletion;
       } catch (error) {
         console.error("Deactivate and delete student error:", error);
-        showToast(
-          error?.message || "\u062d\u062f\u062b \u062e\u0637\u0623 \u0623\u062b\u0646\u0627\u0621 \u062a\u0646\u0641\u064a\u0630 \u0627\u0644\u0639\u0645\u0644\u064a\u0629",
-          "error",
-        );
+        showToast(error?.message || "حدث خطأ أثناء تنفيذ العملية", "error");
         if (deactivated) {
-          await Promise.all([fetchApprovedStudents(), fetchAdminStudents()]);
+          await refreshStudentData();
         }
         return {
           success: false,
@@ -798,7 +879,7 @@ export const StudentProvider = ({ children }) => {
         };
       }
     },
-    [fetchAdminStudents, fetchApprovedStudents, showToast],
+    [refreshStudentData, showToast],
   );
 
   // ============================================================
@@ -806,15 +887,14 @@ export const StudentProvider = ({ children }) => {
   // ============================================================
 
   const resetStudentDevice = useCallback(
-    async (studentId) => {
+    async (subscriptionId) => {
       try {
-        const result = await api.resetStudentDevice(studentId);
+        const result = await api.resetStudentDevice(subscriptionId);
 
         if (!result?.success) {
           if (
-            result?.error?.includes(
-              "This subscription does not have an active trusted device",
-            )
+            result?.error?.includes("مفيهوش جهاز موثوق") ||
+            result?.error?.includes("مفيش جهاز موثوق")
           ) {
             showToast(
               "لا يوجد جهاز موثوق نشط لهذا الاشتراك لإعادة ضبطه.",
@@ -832,8 +912,10 @@ export const StudentProvider = ({ children }) => {
 
         showToast("تم إعادة ضبط الجهاز بنجاح");
 
-        await fetchApprovedStudents();
-        await fetchAdminStudents();
+        await Promise.allSettled([
+          fetchApprovedStudents(),
+          fetchAdminStudents(),
+        ]);
 
         return result;
       } catch (error) {
@@ -848,48 +930,6 @@ export const StudentProvider = ({ children }) => {
       }
     },
     [fetchApprovedStudents, fetchAdminStudents, showToast],
-  );
-
-  // ============================================================
-  // FETCH SUBSCRIPTION CODES (GET /api/v1/admin/subscription-codes)
-  // ============================================================
-
-  const fetchSubscriptionCodes = useCallback(
-    async (grade = 1) => {
-      setIsLoadingCodes(true);
-      try {
-        const gradeId =
-          typeof grade === "number"
-            ? grade
-            : isNaN(Number(grade))
-              ? getGradeIdByName(grade)
-              : Number(grade);
-
-        const result = await api.getSubscriptionCodes(gradeId || 1);
-
-        if (result?.success) {
-          const list = Array.isArray(result.data)
-            ? result.data
-            : result.data?.students || result.data?.data || [];
-          setSubscriptionCodesList(list);
-          return { success: true, data: list };
-        } else {
-          setSubscriptionCodesList([]);
-          showToast(result?.message || "فشل تحميل أكواد الاشتراك", "error");
-          return result;
-        }
-      } catch (error) {
-        console.error("Subscription codes error:", error);
-        setSubscriptionCodesList([]);
-        return {
-          success: false,
-          message: error?.message || "Failed",
-        };
-      } finally {
-        setIsLoadingCodes(false);
-      }
-    },
-    [showToast],
   );
 
   // ============================================================
@@ -916,7 +956,8 @@ export const StudentProvider = ({ children }) => {
   const fetchAdminExamDetails = useCallback(async (examId) => {
     try {
       const response = await api.getAdminExamDetails(examId);
-      const exam = response?.exam || response?.data?.exam || response?.data || response;
+      const exam =
+        response?.exam || response?.data?.exam || response?.data || response;
       if (!exam || String(exam.id) !== String(examId)) return null;
 
       setAdminExamsList((current) =>
@@ -943,12 +984,17 @@ export const StudentProvider = ({ children }) => {
         const serverMessage = [
           error?.data?.message,
           ...Object.values(error?.data?.errors || {}).flat(),
-        ].filter(Boolean).join(" ");
-        const duplicateExam = error?.status === 409 ||
-          /already\s+exists|duplicate|unique|exam.+exists|quiz.+exists/i.test(serverMessage);
+        ]
+          .filter(Boolean)
+          .join(" ");
+        const duplicateExam =
+          error?.status === 409 ||
+          /already\s+exists|duplicate|unique|exam.+exists|quiz.+exists/i.test(
+            serverMessage,
+          );
         const message = duplicateExam
-          ? "\u062a\u0645 \u0625\u0646\u0634\u0627\u0621 \u0627\u0645\u062a\u062d\u0627\u0646 \u0644\u0647\u0630\u0627 \u0627\u0644\u062f\u0631\u0633 \u0628\u0627\u0644\u0641\u0639\u0644. \u064a\u0645\u0643\u0646\u0643 \u0625\u0636\u0627\u0641\u0629 \u0627\u0644\u0623\u0633\u0626\u0644\u0629 \u0625\u0644\u0649 \u0627\u0644\u0627\u0645\u062a\u062d\u0627\u0646 \u0627\u0644\u0645\u0648\u062c\u0648\u062f."
-          : error.message || "\u0641\u0634\u0644 \u0625\u0646\u0634\u0627\u0621 \u0627\u0644\u0627\u0645\u062a\u062d\u0627\u0646";
+          ? "تم إنشاء امتحان لهذا الدرس بالفعل. يمكنك إضافة الأسئلة إلى الامتحان الموجود."
+          : error.message || "فشل إنشاء الامتحان";
         showToast(message, "error");
         return { success: false, message };
       }
@@ -996,8 +1042,7 @@ export const StudentProvider = ({ children }) => {
     async (examId, payload) => {
       try {
         const res = await api.createAdminQuestion(examId, payload);
-        // Keep the returned API resource intact so callers can reliably read
-        // the created question id before creating its answer options.
+        // نرجّع الـ resource كما هو عشان المستدعي يقدر يقرأ id السؤال الجديد
         return { success: true, data: res?.data || res };
       } catch (error) {
         console.error("Create question error:", error);
@@ -1005,7 +1050,7 @@ export const StudentProvider = ({ children }) => {
         return { success: false, message: error.message };
       }
     },
-    [fetchAdminExams, showToast],
+    [showToast],
   );
 
   const updateAdminQuestion = useCallback(
@@ -1051,7 +1096,7 @@ export const StudentProvider = ({ children }) => {
         return { success: false, message: error.message };
       }
     },
-    [fetchAdminExams, showToast],
+    [showToast],
   );
 
   const updateAdminOption = useCallback(
@@ -1102,30 +1147,9 @@ export const StudentProvider = ({ children }) => {
           }
           if (Array.isArray(remoteLessons)) {
             setLessonsList(
-              remoteLessons.filter((lesson) => lesson?.id).map((l, idx) => {
-                const video = l.video || l.videos?.[0] || null;
-                const sectionName =
-                  l.section_name || l.section?.name || l.branch || "";
-                const gradeId =
-                  l.grade_id || l.gradeId || l.section?.grade_id || l.grade?.id;
-
-                return {
-                  ...l,
-                  video,
-                videoId: video?.id || l.video_id || l.videoId || null,
-                  id: l.id,
-                  number: idx + 1,
-                  title: l.title || "درس رياضيات",
-                  branch: sectionName,
-                  grade: l.grade?.name || l.grade_name || (gradeId ? getGradeNameById(gradeId) : ""),
-                  gradeId: gradeId || null,
-                  description: l.description || "",
-                  duration: video?.duration || l.duration || "",
-                  videoUrl:
-                    video?.video_url || video?.url || l.video_url || l.videoUrl || "",
-                  quiz: l.quiz || l.exam || null,
-                };
-              }),
+              remoteLessons
+                .filter((lesson) => lesson?.id)
+                .map((lesson, idx) => normalizeLesson(lesson, idx)),
             );
             return remoteLessons;
           }
@@ -1133,33 +1157,11 @@ export const StudentProvider = ({ children }) => {
           const studentLessons = await api.getStudentLessons();
           if (Array.isArray(studentLessons)) {
             setLessonsList(
-              studentLessons.filter((lesson) => lesson?.id).map((l, idx) => {
-                const video = l.video || l.videos?.[0] || null;
-                const sectionName =
-                  l.section_name || l.section?.name || l.branch || "";
-                const gradeId =
-                  l.grade_id || l.gradeId || l.section?.grade_id || l.grade?.id;
-
-                return {
-                  ...l,
-                  video,
-                  videoId: video?.id || l.video_id || l.videoId || null,
-                  id: l.id,
-                  number: idx + 1,
-                  title: l.title || "درس رياضيات",
-                  branch: sectionName,
-                  grade: l.grade?.name || l.grade_name || (gradeId ? getGradeNameById(gradeId) : ""),
-                  gradeId: gradeId || null,
-                  description: l.description || "",
-                  duration: video?.duration || l.duration || "",
-                  videoUrl:
-                    video?.video_url || video?.url || l.video_url || l.videoUrl || "",
-                  isCompleted: Boolean(l.is_completed),
-                  progress: l.progress || 0,
-                  accessStatus: l.access_status || "",
-                  quiz: l.quiz || l.exam || null,
-                };
-              }),
+              studentLessons
+                .filter((lesson) => lesson?.id)
+                .map((lesson, idx) =>
+                  normalizeLesson(lesson, idx, { forStudent: true }),
+                ),
             );
             return studentLessons;
           }
@@ -1167,10 +1169,7 @@ export const StudentProvider = ({ children }) => {
         return null;
       } catch (err) {
         console.warn("Fetch lessons notice:", err);
-        showToast(
-          err?.message || "تعذر تحميل الدروس من الخادم",
-          "error",
-        );
+        showToast(err?.message || "تعذر تحميل الدروس من الخادم", "error");
         return null;
       } finally {
         setIsLoadingLessons(false);
@@ -1230,20 +1229,12 @@ export const StudentProvider = ({ children }) => {
     [adminLoginWithCredentials, studentLoginWithCode],
   );
 
-  // ============================================================
-  // LOGIN WITH CODE
-  // ============================================================
-
   const loginWithCode = useCallback(
     async (code) => {
       return studentLoginWithCode(code);
     },
     [studentLoginWithCode],
   );
-
-  // ============================================================
-  // REGISTER STUDENT
-  // ============================================================
 
   const registerStudent = useCallback(
     async (studentData) => {
@@ -1280,13 +1271,16 @@ export const StudentProvider = ({ children }) => {
     setLessonsList([]);
     setStudentExamsList([]);
     setMemosList([]);
+    setPendingRequests([]);
+    setApprovedSubscriptions([]);
+    setSubscriptionCodesList([]);
+    setPaginatedStudents([]);
+    setAdminExamsList([]);
+    studentsPageRef.current = 1;
+    codesGradeRef.current = 1;
 
     showToast("تم تسجيل الخروج");
   }, [userRole, showToast]);
-
-  // ============================================================
-  // SELECT ACTIVE STUDENT
-  // ============================================================
 
   const selectActiveStudent = useCallback((selectedStudent) => {
     setStudent(selectedStudent);
@@ -1362,18 +1356,10 @@ export const StudentProvider = ({ children }) => {
           throw new Error(result.message || result.error || "فشل حذف الدرس");
         }
 
-        setLessonsList((prev) => {
-          return prev.filter((lesson) => String(lesson.id) !== String(lessonId));
-        });
-
+        // القائمة تتحدث من السيرفر فقط
         await fetchLessons();
-        showToast(
-          result?.isOfflineMode
-            ? "تعذر الاتصال بالخادم؛ تم الحذف محليًا فقط"
-            : "تم حذف الدرس من الخادم",
-          result?.isOfflineMode ? "error" : "success",
-        );
-        return { success: true, isOfflineMode: result?.isOfflineMode };
+        showToast("تم حذف الدرس من الخادم");
+        return { success: true };
       } catch (error) {
         console.error("Delete lesson API error:", error);
         showToast(error.message || "فشل حذف الدرس من الخادم", "error");
@@ -1393,9 +1379,11 @@ export const StudentProvider = ({ children }) => {
         const lesson = lessonsList.find(
           (item) => String(item.id) === String(lessonId),
         );
-        if (!lesson) throw new Error("الدرس المطلوب غير موجود في بيانات الخادم");
+        if (!lesson)
+          throw new Error("الدرس المطلوب غير موجود في بيانات الخادم");
 
-        const existingQuestions = ((lesson.quiz || lesson.exam)?.questions || []).map(
+        const existingQuiz = lesson.quiz || lesson.exam;
+        const existingQuestions = (existingQuiz?.questions || []).map(
           (existing, questionIndex) => {
             const options = existing.options || existing.choices || [];
             const correctIndex = Number.isInteger(existing.correctIndex)
@@ -1408,7 +1396,10 @@ export const StudentProvider = ({ children }) => {
                 );
             return {
               question_text:
-                existing.question_text || existing.question || existing.text || "",
+                existing.question_text ||
+                existing.question ||
+                existing.text ||
+                "",
               points: Number(existing.points) || 1,
               sort_order: existing.sort_order || questionIndex + 1,
               options: options.map((option, optionIndex) => ({
@@ -1420,8 +1411,8 @@ export const StudentProvider = ({ children }) => {
                   typeof option === "object"
                     ? Boolean(
                         option.is_correct ||
-                          option.isCorrect ||
-                          option.id === existing.correct_option_id,
+                        option.isCorrect ||
+                        option.id === existing.correct_option_id,
                       )
                     : optionIndex === correctIndex,
                 sort_order: option.sort_order || optionIndex + 1,
@@ -1439,10 +1430,13 @@ export const StudentProvider = ({ children }) => {
         }));
 
         const result = await api.saveAdminLessonQuiz(lessonId, {
-          title: (lesson.quiz || lesson.exam)?.title || `اختبار: ${lesson.title || ""}`,
-          description: (lesson.quiz || lesson.exam)?.description || "",
-          duration_minutes: (lesson.quiz || lesson.exam)?.duration_minutes || (lesson.quiz || lesson.exam)?.durationMinutes || 10,
-          passing_percentage: (lesson.quiz || lesson.exam)?.passing_percentage || 60,
+          title: existingQuiz?.title || `اختبار: ${lesson.title || ""}`,
+          description: existingQuiz?.description || "",
+          duration_minutes:
+            existingQuiz?.duration_minutes ||
+            existingQuiz?.durationMinutes ||
+            10,
+          passing_percentage: existingQuiz?.passing_percentage || 60,
           questions: [
             ...existingQuestions,
             {
@@ -1477,57 +1471,14 @@ export const StudentProvider = ({ children }) => {
         return { success: true };
       } catch (error) {
         showToast(error?.message || "تعذر حذف السؤال من الخادم", "error");
-        return { success: false, message: error?.message || "تعذر حذف السؤال" };
+        return {
+          success: false,
+          message: error?.message || "تعذر حذف السؤال",
+        };
       }
     },
     [fetchLessons, showToast],
   );
-
-  // ============================================================
-  // VIDEO PROGRESS
-  // ============================================================
-
-  const reportVideoProgress = useCallback(async (lessonId, progressData) => {
-    try {
-      const res = await api.updateVideoProgress(lessonId, progressData);
-
-      if (!res?.success) return res;
-
-      const completionPercentage = Number(
-        res.data?.completion_percentage ??
-          res.data?.progress?.completion_percentage ??
-          progressData?.completion_percentage,
-      );
-      if (Number.isFinite(completionPercentage)) {
-        setLessonsList((prev) => {
-          const updated = prev.map((l) =>
-            l.id === Number(lessonId) ||
-            l.video_id === Number(lessonId) ||
-            l.videoId === Number(lessonId) ||
-            l.video?.id === Number(lessonId) ||
-            l.videos?.some((video) => video.id === Number(lessonId))
-              ? {
-                  ...l,
-                  isCompleted:
-                    completionPercentage >= 90 || Boolean(l.isCompleted),
-                  progress: completionPercentage,
-                }
-              : l,
-          );
-          return updated;
-        });
-      }
-
-      return res;
-    } catch (error) {
-      console.error("Video progress error:", error);
-
-      return {
-        success: false,
-        message: error?.message || "Failed",
-      };
-    }
-  }, []);
 
   const fetchStudentExams = useCallback(async () => {
     setIsLoadingStudentExams(true);
@@ -1538,14 +1489,78 @@ export const StudentProvider = ({ children }) => {
     } catch (error) {
       setStudentExamsList([]);
       showToast(error?.message || "تعذر تحميل اختبارات الطالب", "error");
-      return { success: false, error: error?.message || "تعذر تحميل الاختبارات" };
+      return {
+        success: false,
+        error: error?.message || "تعذر تحميل الاختبارات",
+      };
     } finally {
       setIsLoadingStudentExams(false);
     }
   }, [showToast]);
 
   // ============================================================
-  // START EXAM
+  // VIDEO PROGRESS
+  // ============================================================
+
+  const refreshedVideosRef = useRef(new Set());
+
+  const reportVideoProgress = useCallback(
+    async (videoId, progressData) => {
+      try {
+        const res = await api.updateVideoProgress(videoId, progressData);
+        if (!res?.success) return res;
+
+        const completionPercentage = Number(
+          res.data?.completion_percentage ??
+            res.data?.progress?.completion_percentage ??
+            progressData?.completion_percentage,
+        );
+
+        if (Number.isFinite(completionPercentage)) {
+          const vid = Number(videoId);
+          setLessonsList((prev) =>
+            prev.map((l) => {
+              const ownsVideo =
+                l.videoId === vid ||
+                l.video?.id === vid ||
+                l.videos?.some((video) => video.id === vid);
+              return ownsVideo
+                ? {
+                    ...l,
+                    isCompleted:
+                      completionPercentage >= 90 || Boolean(l.isCompleted),
+                    progress: completionPercentage,
+                  }
+                : l;
+            }),
+          );
+
+          // القفل بيتحدد من الباك: نعيد تحميله عند 80% وتاني عند الانتهاء
+          const stage =
+            completionPercentage >= 100
+              ? 100
+              : completionPercentage >= 80
+                ? 80
+                : 0;
+          const stageKey = `${vid}:${stage}`;
+          if (stage > 0 && !refreshedVideosRef.current.has(stageKey)) {
+            refreshedVideosRef.current.add(stageKey);
+            fetchLessons();
+            fetchStudentExams();
+          }
+        }
+
+        return res;
+      } catch (error) {
+        console.error("Video progress error:", error);
+        return { success: false, message: error?.message || "Failed" };
+      }
+    },
+    [fetchLessons, fetchStudentExams],
+  );
+
+  // ============================================================
+  // START / SUBMIT EXAM
   // ============================================================
 
   const startExamAttempt = useCallback(async (examId) => {
@@ -1560,10 +1575,6 @@ export const StudentProvider = ({ children }) => {
       };
     }
   }, []);
-
-  // ============================================================
-  // SUBMIT EXAM
-  // ============================================================
 
   const submitExamAttempt = useCallback(async (examId, answers) => {
     try {
@@ -1582,7 +1593,8 @@ export const StudentProvider = ({ children }) => {
     async (payload) => {
       try {
         const result = await api.updateStudentProfile(payload);
-        const updatedProfile = result?.data?.student || result?.data?.user || result?.data;
+        const updatedProfile =
+          result?.data?.student || result?.data?.user || result?.data;
         if (updatedProfile && typeof updatedProfile === "object") {
           setStudent((current) => ({ ...current, ...updatedProfile }));
         }
@@ -1591,14 +1603,17 @@ export const StudentProvider = ({ children }) => {
         return { success: true, data: updatedProfile || result?.data };
       } catch (error) {
         showToast(error?.message || "تعذر تحديث بيانات الحساب", "error");
-        return { success: false, error: error?.message || "تعذر تحديث البيانات" };
+        return {
+          success: false,
+          error: error?.message || "تعذر تحديث البيانات",
+        };
       }
     },
     [fetchStudentProfile, showToast],
   );
 
   // ============================================================
-  // MEMOS - ADMIN API
+  // MEMOS
   // ============================================================
 
   const fetchStudentMemos = useCallback(async () => {
@@ -1627,7 +1642,10 @@ export const StudentProvider = ({ children }) => {
         console.error("Fetch admin memos error:", error);
         setMemosList([]);
         showToast(error?.message || "تعذر تحميل المذكرات", "error");
-        return { success: false, message: error?.message || "فشل تحميل المذكرات" };
+        return {
+          success: false,
+          message: error?.message || "فشل تحميل المذكرات",
+        };
       } finally {
         setIsLoadingMemos(false);
       }
@@ -1658,7 +1676,10 @@ export const StudentProvider = ({ children }) => {
       } catch (error) {
         console.error("Create admin memo error:", error);
         showToast(error?.message || "فشل إضافة المذكرة", "error");
-        return { success: false, message: error?.message || "فشل إضافة المذكرة" };
+        return {
+          success: false,
+          message: error?.message || "فشل إضافة المذكرة",
+        };
       }
     },
     [fetchAdminMemos, showToast],
@@ -1675,7 +1696,10 @@ export const StudentProvider = ({ children }) => {
       } catch (error) {
         console.error("Update admin memo error:", error);
         showToast(error?.message || "فشل تعديل المذكرة", "error");
-        return { success: false, message: error?.message || "فشل تعديل المذكرة" };
+        return {
+          success: false,
+          message: error?.message || "فشل تعديل المذكرة",
+        };
       }
     },
     [fetchAdminMemos, showToast],
@@ -1691,86 +1715,38 @@ export const StudentProvider = ({ children }) => {
       } catch (error) {
         console.error("Delete admin memo error:", error);
         showToast(error?.message || "فشل حذف المذكرة", "error");
-        return { success: false, message: error?.message || "فشل حذف المذكرة" };
+        return {
+          success: false,
+          message: error?.message || "فشل حذف المذكرة",
+        };
       }
     },
     [fetchAdminMemos, showToast],
   );
 
   // ============================================================
-  // LOCAL STUDENT CRUD
+  // ADMIN STUDENT API INTEGRATION
   // ============================================================
-
-  const addStudent = useCallback(
-    (studentData) => {
-      const newStudent = {
-        id: Date.now(),
-        ...studentData,
-      };
-
-      setStudentsList((prev) => {
-        const updated = [...prev, newStudent];
-
-        localStorage.setItem("el_eamid_students_list", JSON.stringify(updated));
-
-        return updated;
-      });
-
-      showToast("تم إضافة الطالب");
-    },
-    [showToast],
-  );
-
-  const updateStudent = useCallback(
-    (studentId, updatedData) => {
-      setStudentsList((prev) => {
-        const updated = prev.map((item) =>
-          item.id === studentId
-            ? {
-                ...item,
-                ...updatedData,
-              }
-            : item,
-        );
-
-        localStorage.setItem("el_eamid_students_list", JSON.stringify(updated));
-
-        return updated;
-      });
-
-      showToast("تم تعديل بيانات الطالب");
-    },
-    [showToast],
-  );
 
   const deleteStudent = useCallback(
     async (studentId) => {
       const result = await api.deleteDeactivatedStudent(studentId);
       if (!result?.success) {
         showToast(
-          result?.message || result?.error || "Failed to delete deactivated student",
+          result?.message ||
+            result?.error ||
+            "Failed to delete deactivated student",
           "error",
         );
         return result;
       }
 
-      setStudentsList((current) => {
-        const updated = current.filter(
-          (item) => String(item.id) !== String(studentId),
-        );
-        localStorage.setItem("el_eamid_students_list", JSON.stringify(updated));
-        return updated;
-      });
-      await Promise.all([fetchApprovedStudents(), fetchAdminStudents()]);
-      showToast("\u062a\u0645 \u062d\u0630\u0641 \u0627\u0644\u0637\u0627\u0644\u0628 \u0645\u0646 \u0627\u0644\u062e\u0627\u062f\u0645 \u0628\u0646\u062c\u0627\u062d");
+      await refreshStudentData();
+      showToast("تم حذف الطالب من الخادم بنجاح");
       return result;
     },
-    [fetchAdminStudents, fetchApprovedStudents, showToast],
+    [refreshStudentData, showToast],
   );
-
-  // ============================================================
-  // ADMIN STUDENT API INTEGRATION
-  // ============================================================
 
   const createStudentByAdmin = useCallback(
     async (studentData) => {
@@ -1789,6 +1765,7 @@ export const StudentProvider = ({ children }) => {
           const [, codesResult] = await Promise.all([
             fetchApprovedStudents(),
             fetchSubscriptionCodes(gradeId),
+            fetchAdminStudents(),
           ]);
           const studentName =
             `${studentData.first_name || studentData.firstName || ""} ${
@@ -1820,7 +1797,12 @@ export const StudentProvider = ({ children }) => {
         return { success: false, message: error.message };
       }
     },
-    [fetchApprovedStudents, fetchSubscriptionCodes, showToast],
+    [
+      fetchApprovedStudents,
+      fetchSubscriptionCodes,
+      fetchAdminStudents,
+      showToast,
+    ],
   );
 
   const updateStudentByAdmin = useCallback(
@@ -1828,8 +1810,7 @@ export const StudentProvider = ({ children }) => {
       try {
         const result = await api.updateStudent(studentId, updatedData);
         showToast("تم تحديث بيانات الطالب بنجاح");
-        await fetchApprovedStudents();
-        await fetchAdminStudents();
+        await refreshStudentData();
         return { success: true, ...result };
       } catch (error) {
         console.error("Update student error:", error);
@@ -1840,7 +1821,7 @@ export const StudentProvider = ({ children }) => {
         return { success: false, message: error.message };
       }
     },
-    [fetchApprovedStudents, fetchAdminStudents, showToast],
+    [refreshStudentData, showToast],
   );
 
   // ============================================================
@@ -1879,7 +1860,6 @@ export const StudentProvider = ({ children }) => {
     fetchPendingRequests,
     fetchApprovedStudents,
     fetchAdminExams,
-    fetchAdminExamDetails,
     fetchSubscriptionCodes,
     fetchAdminStudents,
     fetchLessons,
@@ -1898,8 +1878,6 @@ export const StudentProvider = ({ children }) => {
     userRole,
     student,
     setStudent,
-    studentsList,
-    setStudentsList,
 
     // Requests
     pendingRequests,
@@ -1910,6 +1888,7 @@ export const StudentProvider = ({ children }) => {
     isLoadingApproved: approvedLoading,
     fetchPendingRequests,
     fetchApprovedStudents,
+    refreshStudentData,
 
     // Subscription Codes (Admin)
     subscriptionCodesList,
@@ -2010,13 +1989,15 @@ export const StudentProvider = ({ children }) => {
     updateMemo,
     deleteMemo,
 
-    // Students
-    addStudent,
-    updateStudent,
+    // Students (كلها شغالة على السيرفر)
+    studentsList: paginatedStudents,
+    setStudentsList: setPaginatedStudents,
+    addStudent: createStudentByAdmin,
+    updateStudent: updateStudentByAdmin,
     deleteStudent,
     createStudentByAdmin,
     updateStudentByAdmin,
-    updateStudentByTeacher: updateStudent,
+    updateStudentByTeacher: updateStudentByAdmin,
     deleteStudentByTeacher: deleteStudent,
     getStudentDetails,
 

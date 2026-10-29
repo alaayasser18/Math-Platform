@@ -35,6 +35,55 @@ export default function ProtectedVideoPlayer({
   const lastReportedTimeRef = useRef(0);
 
   // ============================================================
+  // LATEST VALUES (updated inside effects, never during render)
+  // ============================================================
+
+  const videoIdRef = useRef(videoId);
+  const userRoleRef = useRef(userRole);
+  const reportRef = useRef(reportVideoProgress);
+  const currentTimeRef = useRef(0);
+  const totalDurationRef = useRef(0);
+  const sendProgressRef = useRef(null);
+
+  useEffect(() => {
+    videoIdRef.current = videoId;
+    userRoleRef.current = userRole;
+    reportRef.current = reportVideoProgress;
+    currentTimeRef.current = currentTime;
+    totalDurationRef.current = totalDuration;
+
+    // Sends progress to the backend. `forceComplete` sends 100%.
+    sendProgressRef.current = (current, duration, forceComplete = false) => {
+      if (userRoleRef.current !== "student") return;
+      if (!videoIdRef.current || typeof reportRef.current !== "function") {
+        return;
+      }
+      if (!duration || duration <= 0) return;
+
+      const completionPercentage = forceComplete
+        ? 100
+        : Math.min(100, Math.round((current / duration) * 100));
+      const position = forceComplete ? duration : current;
+
+      lastReportedTimeRef.current = position;
+
+      Promise.resolve(
+        reportRef.current(videoIdRef.current, {
+          current_position_seconds: Math.floor(position),
+          watched_duration_seconds: Math.floor(position),
+          completion_percentage: completionPercentage,
+        }),
+      )
+        .then((res) => {
+          if (res && res.success === false) {
+            console.warn("[video progress] backend rejected:", res);
+          }
+        })
+        .catch((error) => console.warn("[video progress] failed:", error));
+    };
+  }, [videoId, userRole, reportVideoProgress, currentTime, totalDuration]);
+
+  // ============================================================
   // WATERMARK POSITION
   // ============================================================
 
@@ -94,7 +143,13 @@ export default function ProtectedVideoPlayer({
       return;
     }
 
+    let cancelled = false;
+
     const initPlayer = () => {
+      if (cancelled || playerRef.current) {
+        return;
+      }
+
       if (!window.YT || !window.YT.Player) {
         return;
       }
@@ -116,10 +171,6 @@ export default function ProtectedVideoPlayer({
         },
 
         events: {
-          // ------------------------------------------------------
-          // PLAYER READY
-          // ------------------------------------------------------
-
           onReady: (event) => {
             setIsPlayerReady(true);
             setIsPlaying(true);
@@ -132,10 +183,6 @@ export default function ProtectedVideoPlayer({
               setTotalDuration(dur);
             }
           },
-
-          // ------------------------------------------------------
-          // PLAYER STATE CHANGE
-          // ------------------------------------------------------
 
           onStateChange: (event) => {
             if (event.data === window.YT.PlayerState.PLAYING) {
@@ -150,37 +197,49 @@ export default function ProtectedVideoPlayer({
               setIsPlaying(false);
             } else if (event.data === window.YT.PlayerState.ENDED) {
               setIsPlaying(false);
+
+              // The video finished: always report 100% to the backend
+              const dur =
+                playerRef.current?.getDuration?.() || totalDurationRef.current;
+              sendProgressRef.current?.(dur, dur, true);
             }
           },
         },
       });
     };
 
-    // ----------------------------------------------------------
-    // LOAD YOUTUBE SCRIPT
-    // ----------------------------------------------------------
-
-    if (!window.YT) {
-      const tag = document.createElement("script");
-
-      tag.src = "https://www.youtube.com/iframe_api";
-
-      const firstScriptTag = document.getElementsByTagName("script")[0];
-
-      if (firstScriptTag?.parentNode) {
-        firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
-      }
-
-      window.onYouTubeIframeAPIReady = initPlayer;
-    } else {
+    if (window.YT && window.YT.Player) {
       initPlayer();
+    } else {
+      // Chain any existing callback instead of overwriting it
+      const previousReady = window.onYouTubeIframeAPIReady;
+      window.onYouTubeIframeAPIReady = () => {
+        if (typeof previousReady === "function") previousReady();
+        initPlayer();
+      };
+
+      const alreadyLoading = document.querySelector(
+        'script[src="https://www.youtube.com/iframe_api"]',
+      );
+
+      if (!alreadyLoading) {
+        const tag = document.createElement("script");
+
+        tag.src = "https://www.youtube.com/iframe_api";
+
+        const firstScriptTag = document.getElementsByTagName("script")[0];
+
+        if (firstScriptTag?.parentNode) {
+          firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+        } else {
+          document.head.appendChild(tag);
+        }
+      }
     }
 
-    // ----------------------------------------------------------
-    // CLEANUP
-    // ----------------------------------------------------------
-
     return () => {
+      cancelled = true;
+
       if (
         playerRef.current &&
         typeof playerRef.current.destroy === "function"
@@ -237,7 +296,8 @@ export default function ProtectedVideoPlayer({
   }, [isPlaying, isPlayerReady, totalDuration]);
 
   // ============================================================
-  // SYNC VIDEO PROGRESS WITH BACKEND
+  // SYNC VIDEO PROGRESS WITH BACKEND (every 10 seconds)
+  // The final 100% is sent by the ENDED event above.
   // ============================================================
 
   useEffect(() => {
@@ -247,28 +307,25 @@ export default function ProtectedVideoPlayer({
 
     const diff = Math.abs(currentTime - lastReportedTimeRef.current);
 
-    const isNearEnd =
-      currentTime > 0 && Math.abs(currentTime - totalDuration) < 2;
-
-    if (diff >= 10 || isNearEnd) {
-      lastReportedTimeRef.current = currentTime;
-
-      const completionPercentage = Math.min(
-        100,
-        Math.round((currentTime / totalDuration) * 100),
-      );
-
-      if (typeof reportVideoProgress === "function" && videoId) {
-        reportVideoProgress(videoId, {
-          current_position_seconds: Math.floor(currentTime),
-
-          watched_duration_seconds: Math.floor(currentTime),
-
-          completion_percentage: completionPercentage,
-        });
-      }
+    if (currentTime > 0 && diff >= 10) {
+      sendProgressRef.current?.(currentTime, totalDuration);
     }
-  }, [currentTime, totalDuration, userRole, videoId, reportVideoProgress]);
+  }, [currentTime, totalDuration, userRole]);
+
+  // ============================================================
+  // FLUSH LAST POSITION WHEN LEAVING THE PAGE
+  // ============================================================
+
+  useEffect(() => {
+    return () => {
+      if (currentTimeRef.current > 0 && totalDurationRef.current > 0) {
+        sendProgressRef.current?.(
+          currentTimeRef.current,
+          totalDurationRef.current,
+        );
+      }
+    };
+  }, []);
 
   // ============================================================
   // PLAY / PAUSE
@@ -438,10 +495,6 @@ export default function ProtectedVideoPlayer({
         WebkitUserSelect: "none",
       }}
     >
-      {/* =====================================================
-          VIDEO POSTER
-          ===================================================== */}
-
       {!hasStarted ? (
         <div
           style={{
@@ -452,8 +505,6 @@ export default function ProtectedVideoPlayer({
           }}
           onClick={() => setHasStarted(true)}
         >
-          {/* Thumbnail */}
-
           <img
             src={thumbnail || "/teacher.png"}
             alt={title}
@@ -465,8 +516,6 @@ export default function ProtectedVideoPlayer({
             }}
           />
 
-          {/* Overlay */}
-
           <div
             style={{
               position: "absolute",
@@ -475,8 +524,6 @@ export default function ProtectedVideoPlayer({
                 "radial-gradient(circle at center, rgba(79, 70, 229, 0.2) 0%, rgba(4, 7, 17, 0.88) 100%)",
             }}
           />
-
-          {/* Secure Badge */}
 
           <div
             style={{
@@ -500,8 +547,6 @@ export default function ProtectedVideoPlayer({
 
             <span>مشاهدة مشفرة ومحمية داخل المنصة فقط</span>
           </div>
-
-          {/* Center Play */}
 
           <div
             style={{
@@ -578,10 +623,6 @@ export default function ProtectedVideoPlayer({
           </div>
         </div>
       ) : (
-        /* =====================================================
-           ACTIVE PROTECTED PLAYER
-           ===================================================== */
-
         <div
           style={{
             position: "relative",
@@ -590,10 +631,6 @@ export default function ProtectedVideoPlayer({
             background: "#000",
           }}
         >
-          {/* =================================================
-              YOUTUBE IFRAME
-              ================================================= */}
-
           <div
             ref={iframeContainerRef}
             style={{
@@ -614,10 +651,6 @@ export default function ProtectedVideoPlayer({
             />
           </div>
 
-          {/* =================================================
-              INTERACTIVE SURFACE
-              ================================================= */}
-
           <div
             style={{
               position: "absolute",
@@ -629,10 +662,6 @@ export default function ProtectedVideoPlayer({
             onClick={handlePlayPause}
             onContextMenu={(e) => e.preventDefault()}
           />
-
-          {/* =================================================
-              MOVING WATERMARK
-              ================================================= */}
 
           <div
             style={{
@@ -689,10 +718,6 @@ export default function ProtectedVideoPlayer({
               [محمي]
             </span>
           </div>
-
-          {/* =================================================
-              TOP HEADER
-              ================================================= */}
 
           <div
             style={{
@@ -777,10 +802,6 @@ export default function ProtectedVideoPlayer({
             </div>
           </div>
 
-          {/* =================================================
-              BOTTOM CONTROLS
-              ================================================= */}
-
           <div
             style={{
               position: "absolute",
@@ -801,10 +822,6 @@ export default function ProtectedVideoPlayer({
             onClick={(e) => e.stopPropagation()}
             onContextMenu={(e) => e.preventDefault()}
           >
-            {/* =================================================
-                PROGRESS BAR
-                ================================================= */}
-
             <div
               style={{
                 display: "flex",
@@ -829,10 +846,6 @@ export default function ProtectedVideoPlayer({
               />
             </div>
 
-            {/* =================================================
-                BOTTOM ROW
-                ================================================= */}
-
             <div
               style={{
                 display: "flex",
@@ -841,8 +854,6 @@ export default function ProtectedVideoPlayer({
                 color: "#fff",
               }}
             >
-              {/* LEFT CONTROLS */}
-
               <div
                 style={{
                   display: "flex",
@@ -850,8 +861,6 @@ export default function ProtectedVideoPlayer({
                   gap: "12px",
                 }}
               >
-                {/* PLAY / PAUSE */}
-
                 <button
                   onClick={handlePlayPause}
                   style={{
@@ -869,8 +878,6 @@ export default function ProtectedVideoPlayer({
                 >
                   {isPlaying ? <Pause size={20} /> : <Play size={20} />}
                 </button>
-
-                {/* VOLUME */}
 
                 <div
                   style={{
@@ -913,8 +920,6 @@ export default function ProtectedVideoPlayer({
                   />
                 </div>
 
-                {/* TIME */}
-
                 <span
                   style={{
                     fontSize: "0.75rem",
@@ -927,8 +932,6 @@ export default function ProtectedVideoPlayer({
                 </span>
               </div>
 
-              {/* RIGHT CONTROLS */}
-
               <div
                 style={{
                   display: "flex",
@@ -936,8 +939,6 @@ export default function ProtectedVideoPlayer({
                   gap: "10px",
                 }}
               >
-                {/* SPEED */}
-
                 <button
                   onClick={handleSpeedChange}
                   style={{
@@ -954,8 +955,6 @@ export default function ProtectedVideoPlayer({
                 >
                   {playbackRate}x
                 </button>
-
-                {/* FULLSCREEN */}
 
                 <button
                   onClick={handleToggleFullscreen}

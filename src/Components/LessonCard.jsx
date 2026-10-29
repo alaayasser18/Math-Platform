@@ -1,13 +1,12 @@
 import { Link } from "react-router-dom";
-import { PlayCircle, Award, FileText, Trash2 } from "lucide-react";
+import { PlayCircle, Award, Trash2 } from "lucide-react";
 import { useStudent } from "../context/useStudent";
 
 export default function LessonCard({ lesson, onDelete }) {
-  const { student, showToast, userRole, studentExamsList } = useStudent();
+  const { student, userRole, studentExamsList } = useStudent();
   const isTeacher = userRole === "teacher";
   const studentExam = (studentExamsList || []).find(
-    (exam) =>
-      String(exam.lesson_id || exam.lesson?.id) === String(lesson.id),
+    (exam) => String(exam.lesson_id || exam.lesson?.id) === String(lesson.id),
   );
   const examRouteId = isTeacher
     ? lesson.exam_id || lesson.exam?.id || lesson.id
@@ -104,23 +103,10 @@ export default function LessonCard({ lesson, onDelete }) {
             }}
           >
             <Award size={15} />
-            <span>{isExamCompleted ? "إجابات الامتحان ✓" : "امتحان الدرس"}</span>
+            <span>
+              {isExamCompleted ? "إجابات الامتحان ✓" : "امتحان الدرس"}
+            </span>
           </Link>
-        )}
-
-        {isTeacher && (
-          <button
-            type="button"
-            onClick={() =>
-              showToast(
-                `جاري تجهيز وتحميل مذكرة الدرس PDF: ${lesson.pdfFile || lesson.title} 📥`,
-              )
-            }
-            className="btn-secondary btn-icon-only"
-            title="تحميل مذكرة الدرس PDF"
-          >
-            <FileText size={15} />
-          </button>
         )}
 
         {isTeacher && onDelete && (

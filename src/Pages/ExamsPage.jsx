@@ -19,7 +19,6 @@ import {
   AlertTriangle,
   Play,
   HelpCircle,
-  RotateCcw,
 } from "lucide-react";
 import confetti from "canvas-confetti";
 
@@ -50,7 +49,7 @@ export default function ExamsPage() {
     studentExamsList,
     isLoadingStudentExams,
     fetchStudentExams,
-    getStudentExamAttempts,
+
     adminExamsList,
     isLoadingExams,
     fetchAdminExams,
@@ -62,55 +61,52 @@ export default function ExamsPage() {
     updateAdminQuestion,
     deleteAdminQuestion,
     createAdminOption,
+    updateAdminOption,
+    deleteAdminOption,
   } = useStudent();
 
   const isTeacher = userRole === "teacher";
   const studentGrade = student?.grade || "";
-  const [attemptsByExam, setAttemptsByExam] = useState({});
-  const [loadingAttempts, setLoadingAttempts] = useState({});
-
-  const loadAttempts = async (examId) => {
-    setLoadingAttempts((current) => ({ ...current, [examId]: true }));
-    try {
-      const attempts = await getStudentExamAttempts(examId);
-      setAttemptsByExam((current) => ({ ...current, [examId]: attempts }));
-    } catch (error) {
-      showToast(error?.message || "تعذر تحميل محاولات الاختبار", "error");
-    } finally {
-      setLoadingAttempts((current) => ({ ...current, [examId]: false }));
-    }
-  };
 
   const routeInfo = useMemo(() => {
     const gradeLessons = (lessonsList || []).filter(
       (lesson) => isTeacher || lesson.grade === studentGrade,
     );
-    const routeExam = !isTeacher
-      ? studentExamsList.find(
-          (exam) =>
-            String(exam.id || exam.exam_id) === String(id) ||
-            String(exam.lesson_id || exam.lesson?.id) === String(id),
-        )
-      : (adminExamsList || []).find(
-          (exam) =>
-            String(exam.id) === String(id) ||
-            String(exam.lesson_id) === String(id),
-        );
-    const linkedLessonId = routeExam?.lesson_id || routeExam?.lesson?.id;
+
+    // 1) Exact exam-id match first. Only fall back to lesson_id if no exam
+    //    has this id, so an exam id can never collide with a lesson id.
+    const examList = (isTeacher ? adminExamsList : studentExamsList) || [];
+    const examIdOf = (exam) => exam.id ?? exam.exam_id;
+    const routeExam =
+      examList.find((exam) => String(examIdOf(exam)) === String(id)) ||
+      examList.find(
+        (exam) => String(exam.lesson_id ?? exam.lesson?.id) === String(id),
+      );
+
+    const linkedLessonId = routeExam?.lesson_id ?? routeExam?.lesson?.id;
+
+    // 2) The lesson comes from the exam we found. We only match a lesson by
+    //    the raw route id when no exam was found.
     const matchedLesson = id
-      ? (lessonsList || []).find(
-          (lesson) =>
-            String(lesson.id) === String(id) ||
-            (linkedLessonId != null &&
-              String(lesson.id) === String(linkedLessonId)) ||
-            String(lesson.exam?.id) === String(id) ||
-            String(lesson.quiz?.id) === String(id),
-        )
+      ? (linkedLessonId != null
+          ? (lessonsList || []).find(
+              (lesson) => String(lesson.id) === String(linkedLessonId),
+            )
+          : undefined) ||
+        (!routeExam
+          ? (lessonsList || []).find(
+              (lesson) =>
+                String(lesson.id) === String(id) ||
+                String(lesson.exam?.id) === String(id) ||
+                String(lesson.quiz?.id) === String(id),
+            )
+          : undefined)
       : gradeLessons.find(
           (lesson) =>
             (lesson.quiz || lesson.exam) &&
             (lesson.quiz || lesson.exam).questions?.length > 0,
         ) || gradeLessons[0];
+
     const lesson =
       matchedLesson ||
       (routeExam
@@ -132,6 +128,7 @@ export default function ExamsPage() {
             exam: routeExam,
           }
         : null);
+
     const resolvedExamId =
       routeExam?.id ||
       routeExam?.exam_id ||
@@ -166,6 +163,8 @@ export default function ExamsPage() {
         updateAdminQuestion={updateAdminQuestion}
         deleteAdminQuestion={deleteAdminQuestion}
         createAdminOption={createAdminOption}
+        updateAdminOption={updateAdminOption}
+        deleteAdminOption={deleteAdminOption}
         lessonsList={lessonsList}
         showToast={showToast}
       />
@@ -233,18 +232,30 @@ export default function ExamsPage() {
                 exam.can_start === false ||
                 exam.is_unlocked === false ||
                 exam.is_unlocked === 0;
-              const attempts = attemptsByExam[examId];
+              const metaParts = [
+                exam.duration_minutes ? `${exam.duration_minutes} دقيقة` : "",
+                exam.total_questions ? `${exam.total_questions} سؤال` : "",
+                exam.attempts_count != null
+                  ? `المحاولات: ${exam.attempts_count}`
+                  : "",
+              ].filter(Boolean);
+
               return (
                 <article
                   key={examId}
                   className="feature-card"
-                  style={{ padding: "1.25rem" }}
+                  style={{
+                    padding: "1.25rem",
+                    justifyContent: "flex-start",
+                    gap: "0.35rem",
+                  }}
                 >
                   <h2
                     style={{
-                      margin: "0 0 6px",
+                      margin: 0,
                       color: "#fff",
-                      fontSize: "1rem",
+                      fontSize: "1.05rem",
+                      lineHeight: 1.5,
                     }}
                   >
                     {exam.title || exam.name || "اختبار"}
@@ -253,7 +264,7 @@ export default function ExamsPage() {
                     style={{
                       color: "var(--text-muted)",
                       fontSize: "0.8rem",
-                      margin: "0 0 12px",
+                      margin: 0,
                     }}
                   >
                     {exam.lesson?.title ||
@@ -261,110 +272,54 @@ export default function ExamsPage() {
                       exam.lesson_name ||
                       "اختبار المنهج"}
                   </p>
-                  {(exam.duration_minutes || exam.total_questions) && (
+                  {metaParts.length > 0 && (
                     <p
                       style={{
-                        color: "var(--text-muted)",
+                        color: "var(--cyan)",
                         fontSize: "0.75rem",
+                        margin: "0.4rem 0 0",
                       }}
                     >
-                      {exam.duration_minutes
-                        ? `${exam.duration_minutes} دقيقة`
-                        : ""}
-                      {exam.duration_minutes && exam.total_questions
-                        ? " · "
-                        : ""}
-                      {exam.total_questions
-                        ? `${exam.total_questions} سؤال`
-                        : ""}
+                      {metaParts.join(" · ")}
                     </p>
                   )}
-                  {(exam.progress || exam.attempts_count != null) && (
-                    <p style={{ color: "var(--cyan)", fontSize: "0.75rem" }}>
-                      {exam.progress?.status || ""}
-                      {exam.attempts_count != null
-                        ? `المحاولات: ${exam.attempts_count}`
-                        : ""}
-                    </p>
-                  )}
-                  <div
-                    style={{
-                      display: "flex",
-                      gap: "8px",
-                      marginTop: "1rem",
-                      flexWrap: "wrap",
-                    }}
-                  >
+
+                  <div style={{ marginTop: "auto", paddingTop: "1rem" }}>
                     {isLocked ? (
-                      <span
+                      <div
                         className="badge-tag"
-                        style={{ color: "var(--amber)" }}
+                        style={{
+                          display: "block",
+                          width: "100%",
+                          textAlign: "center",
+                          padding: "10px 12px",
+                          borderRadius: "var(--radius-md)",
+                          color: "var(--amber)",
+                          background: "rgba(245, 158, 11, 0.1)",
+                          borderColor: "rgba(245, 158, 11, 0.3)",
+                          fontSize: "0.78rem",
+                          lineHeight: 1.6,
+                        }}
                       >
+                        🔒{" "}
                         {exam.lock_reason || "مقفل حتى استكمال مشاهدة الدروس"}
-                      </span>
+                      </div>
                     ) : (
                       <Link
                         to={`/quiz/${examId}`}
                         className="btn-primary"
-                        style={{ flex: 1, justifyContent: "center" }}
+                        style={{
+                          width: "100%",
+                          padding: "12px 18px",
+                          fontSize: "0.95rem",
+                          whiteSpace: "nowrap",
+                        }}
                       >
-                        <Play size={15} />
-                        بدء الاختبار
+                        <Play size={16} />
+                        <span>بدء الاختبار</span>
                       </Link>
                     )}
-                    <button
-                      type="button"
-                      className="btn-secondary"
-                      onClick={() => loadAttempts(examId)}
-                      disabled={loadingAttempts[examId]}
-                    >
-                      {loadingAttempts[examId] ? "جارٍ التحميل..." : "محاولاتي"}
-                    </button>
                   </div>
-                  {Array.isArray(attempts) && (
-                    <div
-                      style={{
-                        marginTop: "12px",
-                        borderTop: "1px solid var(--border-subtle)",
-                        paddingTop: "10px",
-                      }}
-                    >
-                      {attempts.length ? (
-                        attempts.map((attempt, index) => (
-                          <div
-                            key={attempt.id || attempt.attempt_id || index}
-                            style={{
-                              display: "flex",
-                              justifyContent: "space-between",
-                              gap: "8px",
-                              color: "var(--text-muted)",
-                              fontSize: "0.75rem",
-                              padding: "4px 0",
-                            }}
-                          >
-                            <span>
-                              {attempt.created_at ||
-                                attempt.submitted_at ||
-                                `محاولة ${index + 1}`}
-                            </span>
-                            <span>
-                              {attempt.percentage ?? attempt.score ?? "—"}
-                              {attempt.percentage != null ? "%" : ""}
-                            </span>
-                          </div>
-                        ))
-                      ) : (
-                        <span
-                          style={{
-                            color: "var(--text-muted)",
-                            fontSize: "0.75rem",
-                          }}
-                        >
-                          لا توجد محاولات سابقة.
-                        </span>
-                      )}
-                    </div>
-                  )}
                 </article>
               );
             })}
@@ -544,6 +499,8 @@ function TeacherExamsManager({
   updateAdminQuestion,
   deleteAdminQuestion,
   createAdminOption,
+  updateAdminOption,
+  deleteAdminOption,
   lessonsList,
   showToast,
 }) {
@@ -569,6 +526,7 @@ function TeacherExamsManager({
     isEdit: false,
     examId: null,
     questionId: null,
+    existingOptions: [],
     question_text: "",
     points: 1,
     opt1: "",
@@ -664,6 +622,7 @@ function TeacherExamsManager({
       isEdit: false,
       examId,
       questionId: null,
+      existingOptions: [],
       question_text: "",
       points: 1,
       opt1: "",
@@ -671,6 +630,31 @@ function TeacherExamsManager({
       opt3: "",
       opt4: "",
       correctOption: 1,
+    });
+  };
+
+  const handleOpenEditQuestion = (examId, question) => {
+    const rawOptions = question.options || [];
+    const optTexts = rawOptions.map((opt) =>
+      typeof opt === "string" ? opt : opt.option_text || opt.text || "",
+    );
+    const correctIndex = rawOptions.findIndex((opt) =>
+      Boolean(typeof opt === "object" && opt.is_correct),
+    );
+
+    setQuestionModal({
+      isOpen: true,
+      isEdit: true,
+      examId,
+      questionId: question.id,
+      existingOptions: rawOptions,
+      question_text: question.question_text || question.question || "",
+      points: question.points || 1,
+      opt1: optTexts[0] || "",
+      opt2: optTexts[1] || "",
+      opt3: optTexts[2] || "",
+      opt4: optTexts[3] || "",
+      correctOption: correctIndex !== -1 ? correctIndex + 1 : 1,
     });
   };
 
@@ -720,6 +704,62 @@ function TeacherExamsManager({
         );
         if (!updateResult?.success) {
           throw new Error(updateResult?.message || "فشل حفظ تعديلات السؤال.");
+        }
+
+        const rawOptions = [
+          {
+            text: questionModal.opt1,
+            is_correct: questionModal.correctOption === 1,
+          },
+          {
+            text: questionModal.opt2,
+            is_correct: questionModal.correctOption === 2,
+          },
+          {
+            text: questionModal.opt3,
+            is_correct: questionModal.correctOption === 3,
+          },
+          {
+            text: questionModal.opt4,
+            is_correct: questionModal.correctOption === 4,
+          },
+        ];
+
+        const existing = questionModal.existingOptions || [];
+        const activeInputs = rawOptions.filter(
+          (opt) => opt.text && opt.text.trim(),
+        );
+
+        for (let i = 0; i < activeInputs.length; i++) {
+          const opt = activeInputs[i];
+          const existingOpt = existing[i];
+
+          if (
+            existingOpt &&
+            existingOpt.id &&
+            typeof updateAdminOption === "function"
+          ) {
+            await updateAdminOption(existingOpt.id, {
+              option_text: opt.text.trim(),
+              is_correct: Boolean(opt.is_correct),
+            });
+          } else if (typeof createAdminOption === "function") {
+            await createAdminOption(questionModal.questionId, {
+              option_text: opt.text.trim(),
+              is_correct: Boolean(opt.is_correct),
+            });
+          }
+        }
+
+        if (
+          existing.length > activeInputs.length &&
+          typeof deleteAdminOption === "function"
+        ) {
+          for (let i = activeInputs.length; i < existing.length; i++) {
+            if (existing[i]?.id) {
+              await deleteAdminOption(existing[i].id);
+            }
+          }
         }
       } else {
         const qRes = await createAdminQuestion(questionModal.examId, {
@@ -806,6 +846,7 @@ function TeacherExamsManager({
         isEdit: false,
         examId: null,
         questionId: null,
+        existingOptions: [],
         question_text: "",
         points: 1,
         opt1: "",
@@ -817,11 +858,17 @@ function TeacherExamsManager({
 
       if (typeof fetchAdminExamDetails === "function") {
         const updatedExam = await fetchAdminExamDetails(questionModal.examId);
-        if (!updatedExam) await fetchAdminExams();
+        if (!updatedExam && typeof fetchAdminExams === "function") {
+          await fetchAdminExams();
+        }
       } else if (typeof fetchAdminExams === "function") {
         await fetchAdminExams();
       }
-      showToast("تم حفظ السؤال وخياراته بنجاح 🎉");
+      showToast(
+        questionModal.isEdit
+          ? "تم حفظ تعديل السؤال وخياراته بنجاح 🎉"
+          : "تم حفظ السؤال وخياراته بنجاح 🎉",
+      );
     } catch (err) {
       console.error(err);
       showToast(err?.message || "حدث خطأ أثناء حفظ السؤال والخيارات", "error");
@@ -1333,24 +1380,48 @@ function TeacherExamsManager({
                                   </div>
                                 </div>
 
-                                <button
-                                  onClick={() =>
-                                    setDeleteConfirmation({
-                                      type: "question",
-                                      id: q.id,
-                                      title: q.question_text || q.question,
-                                    })
-                                  }
-                                  className="btn-secondary"
+                                <div
                                   style={{
-                                    padding: "5px 8px",
-                                    color: "#fb7185",
-                                    borderColor: "rgba(244, 63, 94, 0.25)",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: "6px",
                                   }}
-                                  title="حذف هذا السؤال"
                                 >
-                                  <Trash2 size={13} />
-                                </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleOpenEditQuestion(exam.id, q)
+                                    }
+                                    className="btn-secondary"
+                                    style={{
+                                      padding: "5px 8px",
+                                      color: "var(--cyan)",
+                                      borderColor: "rgba(6, 182, 212, 0.3)",
+                                    }}
+                                    title="تعديل هذا السؤال"
+                                  >
+                                    <Edit3 size={13} />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setDeleteConfirmation({
+                                        type: "question",
+                                        id: q.id,
+                                        title: q.question_text || q.question,
+                                      })
+                                    }
+                                    className="btn-secondary"
+                                    style={{
+                                      padding: "5px 8px",
+                                      color: "#fb7185",
+                                      borderColor: "rgba(244, 63, 94, 0.25)",
+                                    }}
+                                    title="حذف هذا السؤال"
+                                  >
+                                    <Trash2 size={13} />
+                                  </button>
+                                </div>
                               </div>
 
                               {/* Question Choices / Options Area */}
@@ -1840,7 +1911,9 @@ function TeacherExamsManager({
                     margin: 0,
                   }}
                 >
-                  إضافة سؤال وتعيين اختيارات الإجابة
+                  {questionModal.isEdit
+                    ? "تعديل السؤال واختيارات الإجابة"
+                    : "إضافة سؤال وتعيين اختيارات الإجابة"}
                 </h2>
                 <p
                   style={{
@@ -2211,7 +2284,11 @@ function TeacherExamsManager({
                   className="btn-primary"
                   style={{ flex: 1, justifyContent: "center", padding: "11px" }}
                 >
-                  {isProcessing ? "جاري الحفظ..." : "حفظ السؤال والخيارات"}
+                  {isProcessing
+                    ? "جاري الحفظ..."
+                    : questionModal.isEdit
+                      ? "حفظ تعديل السؤال"
+                      : "حفظ السؤال والخيارات"}
                 </button>
                 <button
                   type="button"
@@ -2350,6 +2427,10 @@ function TeacherExamsManager({
    QUIZ VIEW COMPONENT (FOR STUDENTS OR TEACHER TEST-DRIVE)
    ========================================================================= */
 
+function firstArray(...candidates) {
+  return candidates.find(Array.isArray) || [];
+}
+
 function normalizeExamQuestion(question) {
   const options = Array.isArray(question.options) ? question.options : [];
   const correctIndex = Number.isInteger(question.correctIndex)
@@ -2375,11 +2456,119 @@ function normalizeExamQuestion(question) {
   };
 }
 
+// Latest attempt the student already SUBMITTED (GET /student/exams/{exam}/attempts).
+// An attempt that is only started / in progress must never count as submitted,
+// otherwise starting a fresh exam would reopen it as "already solved".
+function pickSubmittedAttempt(attempts, examId) {
+  const list = Array.isArray(attempts)
+    ? attempts
+    : firstArray(attempts?.attempts, attempts?.data);
+  const IN_PROGRESS = [
+    "in_progress",
+    "started",
+    "active",
+    "ongoing",
+    "pending",
+  ];
+  const DONE = [
+    "submitted",
+    "completed",
+    "finished",
+    "graded",
+    "passed",
+    "failed",
+  ];
+  const submitted = list.filter((attempt) => {
+    const status = String(attempt?.status ?? "").toLowerCase();
+    if (IN_PROGRESS.includes(status)) return false;
+    const attemptExamId = attempt?.exam_id ?? attempt?.exam?.id;
+    if (
+      attemptExamId != null &&
+      examId != null &&
+      String(attemptExamId) !== String(examId)
+    ) {
+      return false;
+    }
+    return Boolean(
+      attempt?.submitted_at ||
+      attempt?.finished_at ||
+      attempt?.completed_at ||
+      DONE.includes(status),
+    );
+  });
+  if (submitted.length === 0) return null;
+  const idOf = (attempt) => Number(attempt.id ?? attempt.attempt_id);
+  return submitted.reduce(
+    (latest, attempt) => (idOf(attempt) > idOf(latest) ? attempt : latest),
+    submitted[0],
+  );
+}
+
+// Reads GET /student/lessons/{lesson}/quiz/answers into
+// { questionId -> { selectedId, correctId, isCorrect } }
+function buildReviewMap(data) {
+  const attempt = data?.attempt || data;
+  const list = firstArray(
+    attempt?.answers,
+    data?.answers,
+    data?.quiz_answers,
+    attempt?.quiz_answers,
+    data?.questions,
+  );
+  const map = new Map();
+  list.forEach((item) => {
+    const questionId = item.question_id ?? item.question?.id ?? item.id;
+    if (questionId == null) return;
+    const options = item.options || item.question?.options || [];
+    const selectedId =
+      item.selected_option_id ??
+      item.option_id ??
+      item.selected_option?.id ??
+      item.option?.id;
+    const correctId =
+      item.correct_option_id ??
+      item.correct_option?.id ??
+      options.find((option) => option?.is_correct)?.id;
+    const isCorrect =
+      item.is_correct ??
+      (selectedId != null && correctId != null
+        ? String(selectedId) === String(correctId)
+        : undefined);
+    map.set(String(questionId), { selectedId, correctId, isCorrect });
+  });
+  return map;
+}
+
+// Fallback when the exam questions can't be loaded again for a solved exam
+function questionsFromReview(data) {
+  const attempt = data?.attempt || data;
+  return firstArray(
+    attempt?.answers,
+    data?.answers,
+    data?.quiz_answers,
+    data?.questions,
+  )
+    .map((item) => ({
+      id: item.question_id ?? item.question?.id ?? item.id,
+      question_text: item.question_text ?? item.question?.question_text ?? "",
+      options: item.options || item.question?.options || [],
+    }))
+    .filter((question) => question.id != null && question.options.length > 0);
+}
+
+function findOptionIndex(optionIds, target) {
+  if (target == null) return -1;
+  return optionIds.findIndex(
+    (optionId) => optionId != null && String(optionId) === String(target),
+  );
+}
+
 function QuizView({ lesson, examId, isTeacher, student, showToast }) {
   const {
     startExamAttempt,
     submitExamAttempt,
     getStudentExam,
+    getStudentExamAttempts,
     getStudentLessonQuizAnswers,
   } = useStudent();
   const initialQuiz = lesson?.quiz || lesson?.exam || null;
@@ -2407,22 +2596,14 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
   );
   const [attemptId, setAttemptId] = useState(null);
 
-  const studentKey =
-    student?.id ||
-    student?.student_id ||
-    student?.code ||
-    student?.subscription_code ||
-    "student";
-  const examStorageKey = `el_eamid_quiz_completed_${studentKey}_${examId || lesson?.id}`;
-
   const isMountedRef = useRef(true);
   // Always points to the latest loadExam so the effect below can call it
   // without listing it as a dependency (and without re-running every render).
   const loadExamRef = useRef(null);
-
-  const loadExam = async (forceFresh = false) => {
-    // Read the ref at call time (not once at the start) so that an unmount
-    // while awaiting is detected correctly.
+  // Prevents loading (and starting an attempt) twice for the same exam.
+  const loadedKeyRef = useRef(null);
+  const examLessonIdRef = useRef(lesson?.id);
+  const loadExam = async () => {
     const isMounted = () => isMountedRef.current;
 
     if (isTeacher) {
@@ -2436,89 +2617,8 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
     try {
       if (!examId) throw new Error("معرّف الاختبار غير متاح من الخادم");
 
-      // 1. If not forcing a fresh retake, check if student already completed this exam
-      if (!forceFresh) {
-        let cachedSubmission = null;
-        try {
-          const raw = localStorage.getItem(examStorageKey);
-          if (raw) cachedSubmission = JSON.parse(raw);
-        } catch {
-          cachedSubmission = null;
-        }
-
-        let remoteAnswers = null;
-        if (!cachedSubmission && lesson?.id) {
-          try {
-            const remoteRes = await getStudentLessonQuizAnswers(lesson.id);
-            if (remoteRes?.data) {
-              remoteAnswers = remoteRes.data;
-            }
-          } catch {
-            // Not solved yet
-          }
-        }
-
-        const hasPriorSubmission =
-          cachedSubmission?.selectedAnswers ||
-          (remoteAnswers &&
-            (remoteAnswers.answers?.length > 0 ||
-              remoteAnswers.quiz_answers?.length > 0));
-
-        if (hasPriorSubmission) {
-          if (!isMounted()) return;
-
-          // Fetch questions to render the answer review list
-          let exam = null;
-          try {
-            const response = await getStudentExam(examId);
-            exam =
-              response?.exam ||
-              response?.data?.exam ||
-              response?.data?.data ||
-              response?.data ||
-              response;
-            if (exam && isMounted()) setExamData(exam);
-          } catch {
-            if (lesson?.quiz && isMounted()) setExamData(lesson.quiz);
-          }
-
-          if (!isMounted()) return;
-
-          if (cachedSubmission) {
-            setSelectedAnswers(cachedSubmission.selectedAnswers || {});
-            setServerResult(cachedSubmission.serverResult || null);
-            setAttemptId(cachedSubmission.attemptId || null);
-          } else if (remoteAnswers) {
-            setServerResult(remoteAnswers);
-            const rawAnswers =
-              remoteAnswers.answers || remoteAnswers.quiz_answers || [];
-            const reconstructed = {};
-            const normQuestions = (
-              exam?.questions ||
-              lesson?.quiz?.questions ||
-              []
-            ).map(normalizeExamQuestion);
-            normQuestions.forEach((q, idx) => {
-              const matched = rawAnswers.find(
-                (a) => String(a.question_id || a.question?.id) === String(q.id),
-              );
-              if (matched) {
-                const optIdx = q.optionIds.indexOf(
-                  Number(matched.option_id || matched.option?.id),
-                );
-                if (optIdx >= 0) reconstructed[idx] = optIdx;
-              }
-            });
-            setSelectedAnswers(reconstructed);
-          }
-
-          setIsSubmitted(true);
-          setExamLoadState("ready");
-          return; // Return immediately to show student's submitted answers!
-        }
-      }
-
-      // 2. Normal flow: fresh attempt
+      // 1. Ask the backend for the exam FIRST. If it is locked the backend
+      //    answers 403 and we show the lock screen, never a review.
       const response = await getStudentExam(examId);
       const exam =
         response?.exam ||
@@ -2526,11 +2626,83 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
         response?.data?.data ||
         response?.data ||
         response;
+      if (!isMounted()) return;
 
+      const examLessonId = exam?.lesson_id ?? exam?.lesson?.id ?? lesson?.id;
+      examLessonIdRef.current = examLessonId;
+
+      // 2. Did the student already submit THIS exam?
+      let previousAttempt = null;
+      try {
+        previousAttempt = pickSubmittedAttempt(
+          await getStudentExamAttempts(examId),
+          examId,
+        );
+      } catch {
+        previousAttempt = null;
+      }
+
+      if (previousAttempt) {
+        const previousId = previousAttempt.id ?? previousAttempt.attempt_id;
+
+        let reviewData = null;
+        if (examLessonId) {
+          try {
+            const reviewRes = await getStudentLessonQuizAnswers(
+              examLessonId,
+              previousId,
+            );
+            reviewData = reviewRes?.data ?? null;
+          } catch {
+            reviewData = null;
+          }
+        }
+
+        // Never show a review that belongs to another exam
+        const reviewExamId =
+          reviewData?.attempt?.exam_id ??
+          reviewData?.exam_id ??
+          reviewData?.exam?.id;
+        if (reviewExamId != null && String(reviewExamId) !== String(examId)) {
+          reviewData = null;
+        }
+
+        if (!isMounted()) return;
+
+        const examQuestions = exam?.questions?.length
+          ? exam.questions
+          : questionsFromReview(reviewData);
+        setExamData({ ...exam, questions: examQuestions });
+
+        const reviewMap = buildReviewMap(
+          reviewData || { answers: previousAttempt.answers },
+        );
+        const reconstructed = {};
+        examQuestions.map(normalizeExamQuestion).forEach((question, idx) => {
+          const entry = reviewMap.get(String(question.id));
+          const optionIdx = findOptionIndex(
+            question.optionIds,
+            entry?.selectedId,
+          );
+          if (optionIdx >= 0) reconstructed[idx] = optionIdx;
+        });
+
+        setSelectedAnswers(reconstructed);
+        setServerResult({
+          ...previousAttempt,
+          ...(reviewData?.attempt || {}),
+          ...(reviewData || {}),
+        });
+        setAttemptId(previousId ?? null);
+        setIsSubmitted(true);
+        setExamLoadState("ready");
+        return;
+      }
+
+      // 3. Not solved yet: fresh attempt
       if (!Array.isArray(exam?.questions) || exam.questions.length === 0) {
         throw new Error("لم يُرجع الخادم أسئلة هذا الاختبار");
       }
-      if (!isMounted()) return;
       setExamData(exam);
       setTimeLeft((exam?.duration_minutes || exam?.durationMinutes || 10) * 60);
 
@@ -2573,7 +2745,17 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
     isMountedRef.current = true;
 
     if (typeof loadExamRef.current === "function") {
-      loadExamRef.current(false);
+      if (isTeacher) {
+        loadExamRef.current();
+      } else {
+        // Student: run once per exam, even if `lesson` changes identity or
+        // React StrictMode re-runs the effect.
+        const key = String(examId);
+        if (loadedKeyRef.current !== key) {
+          loadedKeyRef.current = key;
+          loadExamRef.current();
+        }
+      }
     }
 
     return () => {
@@ -2621,10 +2803,6 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
 
     const score = isTeacher ? calculateScore() : null;
     let submittedPercentage = null;
-    // Declared here (outside the try block) so they are also visible to the
-    // caching code further below.
-    let resultData = null;
-    let submittedScore = NaN;
 
     if (!isTeacher) {
       try {
@@ -2646,7 +2824,7 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
           throw new Error(response.message || "تعذر تسليم إجابات الاختبار");
         }
 
-        resultData =
+        let resultData =
           response?.result ||
           response?.data?.result ||
           response?.data?.data ||
@@ -2675,7 +2853,7 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
             resultAttempt?.percentage_score ??
             resultAttempt?.score_percentage,
         );
-        submittedScore = Number(
+        const submittedScore = Number(
           resultAttempt?.score ??
             resultAttempt?.correct_answers ??
             resultAttempt?.correctAnswers,
@@ -2698,27 +2876,6 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
         : null
       : submittedPercentage;
 
-    // Cache completed submission so re-entering the exam opens the student's answers
-    if (!isTeacher) {
-      try {
-        const savedSubmission = {
-          examId,
-          lessonId: lesson?.id,
-          selectedAnswers,
-          serverResult: resultData,
-          percentage,
-          score: Number.isFinite(submittedScore)
-            ? submittedScore
-            : (score ?? 0),
-          attemptId,
-          submittedAt: new Date().toISOString(),
-        };
-        localStorage.setItem(examStorageKey, JSON.stringify(savedSubmission));
-      } catch (err) {
-        console.warn("Could not cache exam answers:", err);
-      }
-    }
-
     if (percentage >= 50) {
       try {
         confetti({
@@ -2733,7 +2890,7 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
         `أحسنت يا ${student?.name || "بطل الرياضيات"}! نتيجتك: ${percentage}% 🏆`,
       );
     } else if (percentage !== null) {
-      showToast(`درجتك ${percentage}%، راجع الشرح وأعد المحاولة 💪`);
+      showToast(`درجتك ${percentage}%، راجع الشرح 💪`);
     } else {
       showToast("تم تسليم إجاباتك بنجاح");
     }
@@ -2745,6 +2902,15 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
     return `${m}:${s < 10 ? "0" : ""}${s}`;
   };
 
+  // Correct / wrong answers per question, as saved by the backend
+  const reviewMap = buildReviewMap(serverResult);
+  const reviewEntries = [...reviewMap.values()];
+  const reviewCorrectCount =
+    reviewEntries.length > 0 &&
+    reviewEntries.every((entry) => entry.isCorrect !== undefined)
+      ? reviewEntries.filter((entry) => entry.isCorrect).length
+      : null;
+
   const localScore = isTeacher ? calculateScore() : null;
   const reportedScore = Number(
     serverResult?.score ??
@@ -2755,13 +2921,13 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
     ? reportedScore
     : isTeacher && hasAnswerKey
       ? localScore
+      : reviewCorrectCount;
+  const reportedPercentage = Number(serverResult?.percentage);
+  const percentage = Number.isFinite(reportedPercentage)
+    ? Math.round(reportedPercentage)
+    : score !== null
+      ? Math.round((score / (totalQuestions || 1)) * 100)
       : null;
-  const percentage =
-    typeof serverResult?.percentage === "number"
-      ? serverResult.percentage
-      : score !== null
-        ? Math.round((score / (totalQuestions || 1)) * 100)
-        : null;
 
   if (examLoadState === "loading") {
     return (
@@ -2992,7 +3158,7 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
             {percentage !== null
               ? percentage >= 50
                 ? "مبروك! اجتزت الاختبار بنجاح 🎉"
-                : "حاول مرة أخرى لتحسين نتيجتك 💪"
+                : "راجع إجاباتك وتعلّم من أخطائك 💪"
               : "تم إرسال إجابات الاختبار بنجاح"}
           </h2>
 
@@ -3029,12 +3195,38 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
             <h3 id="exam-review-title">مراجعة إجاباتك</h3>
             <div className="exam-answer-review__list">
               {questions.map((question, index) => {
-                const correctIndex = question.correctIndex;
+                const entry = reviewMap.get(String(question.id));
+
+                // Student's answer: from the saved selection / the backend
+                const selectedFromBackend = findOptionIndex(
+                  question.optionIds,
+                  entry?.selectedId,
+                );
+                const selectedIndex =
+                  selectedAnswers[index] !== undefined
+                    ? selectedAnswers[index]
+                    : selectedFromBackend >= 0
+                      ? selectedFromBackend
+                      : undefined;
+
+                // Correct answer: the backend review first, then the exam data
+                const correctFromBackend = findOptionIndex(
+                  question.optionIds,
+                  entry?.correctId,
+                );
+                const correctIndex =
+                  correctFromBackend >= 0
+                    ? correctFromBackend
+                    : question.correctIndex;
                 const hasCorrectOption =
                   Number.isInteger(correctIndex) && correctIndex >= 0;
-                const selectedIndex = selectedAnswers[index];
+
                 const isCorrect =
-                  hasCorrectOption && selectedIndex === correctIndex;
+                  entry?.isCorrect !== undefined
+                    ? Boolean(entry.isCorrect)
+                    : hasCorrectOption && selectedIndex === correctIndex;
+                const hasVerdict =
+                  entry?.isCorrect !== undefined || hasCorrectOption;
 
                 return (
                   <article
@@ -3046,9 +3238,9 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
                         السؤال {index + 1}: {question.question}
                       </h4>
                       <span
-                        className={`exam-review-status ${!hasCorrectOption ? "is-pending" : isCorrect ? "is-correct" : "is-incorrect"}`}
+                        className={`exam-review-status ${!hasVerdict ? "is-pending" : isCorrect ? "is-correct" : "is-incorrect"}`}
                       >
-                        {hasCorrectOption
+                        {hasVerdict
                           ? isCorrect
                             ? "إجابة صحيحة"
                             : "إجابة غير صحيحة"
@@ -3114,37 +3306,6 @@ function QuizView({ lesson, examId, isTeacher, student, showToast }) {
             >
               العودة للدروس
             </Link>
-            {!isTeacher && (
-              <button
-                type="button"
-                onClick={() => {
-                  try {
-                    localStorage.removeItem(examStorageKey);
-                  } catch (err) {
-                    console.warn("Could not clear cached exam answers:", err);
-                  }
-                  setIsSubmitted(false);
-                  setSelectedAnswers({});
-                  setServerResult(null);
-                  setCurrentIdx(0);
-                  loadExam(true);
-                }}
-                className="btn-secondary"
-                style={{
-                  padding: "10px 18px",
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: "8px",
-                  color: "var(--amber)",
-                  borderColor: "rgba(245, 158, 11, 0.4)",
-                  cursor: "pointer",
-                }}
-                title="إعادة حل الامتحان من جديد"
-              >
-                <RotateCcw size={15} />
-                <span>إعادة حل الامتحان من جديد</span>
-              </button>
-            )}
           </div>
         </div>
       ) : (

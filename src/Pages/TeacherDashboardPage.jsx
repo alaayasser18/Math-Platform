@@ -1,5 +1,5 @@
-import { useState, useMemo, useEffect } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useState, useMemo, useEffect, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import { useStudent } from "../context/useStudent";
 import GradeFilter from "../Components/GradeFilter";
 import useUrlState from "../hooks/useUrlState";
@@ -13,62 +13,20 @@ import {
   X,
   XCircle,
   ShieldCheck,
-  Video,
-  FileQuestion,
-  BookOpen,
   Users,
-  Plus,
   Clock,
   Key,
   CheckCircle2,
   RefreshCw,
   Copy,
   Check,
-  Calendar,
   AlertTriangle,
   Phone,
   PowerOff,
-  BarChart2,
   RotateCcw,
-  Smartphone,
-  UploadCloud,
-  FileText,
-  ChevronLeft,
-  UserX,
-  UserCheck,
-  ShieldAlert,
-  Filter,
-  SlidersHorizontal,
 } from "lucide-react";
 import StudentExamHistoryModal from "../Components/StudentExamHistoryModal";
 import { GRADE_ID_MAP, getGradeNameById } from "../services/api";
-import { getYouTubeVideoId } from "../utils/youtube";
-
-let youtubeApiPromise;
-
-function loadYouTubeIframeApi() {
-  if (window.YT?.Player) return Promise.resolve(window.YT);
-  if (!youtubeApiPromise) {
-    youtubeApiPromise = new Promise((resolve, reject) => {
-      const previousReady = window.onYouTubeIframeAPIReady;
-      window.onYouTubeIframeAPIReady = () => {
-        previousReady?.();
-        resolve(window.YT);
-      };
-      let script = document.querySelector('script[src="https://www.youtube.com/iframe_api"]');
-      if (!script) {
-        script = document.createElement("script");
-        script.src = "https://www.youtube.com/iframe_api";
-        script.onerror = reject;
-        document.head.appendChild(script);
-      }
-    }).catch((error) => {
-      youtubeApiPromise = null;
-      throw error;
-    });
-  }
-  return youtubeApiPromise;
-}
 
 function getSubscriptionCode(...values) {
   for (const value of values) {
@@ -140,12 +98,15 @@ function hasActiveTrustedDevice(...records) {
       record.active_subscription?.trusted_device;
     if (typeof device === "string" && device.trim()) return true;
     if (typeof device === "number" && device) return true;
-    if (device && typeof device === "object" &&
+    if (
+      device &&
+      typeof device === "object" &&
       device.is_active !== false &&
       device.status !== "inactive" &&
       device.status !== "revoked" &&
       Boolean(device.device_identifier || device.identifier || device.id)
-    ) return true;
+    )
+      return true;
     if (record.trusted_device_id || record.device_identifier) return true;
   }
   // List endpoints often omit device details. In that case let the API
@@ -192,13 +153,21 @@ function getSubscriptionStatus(...records) {
 }
 
 function isDeactivatedStatus(status) {
-  return ["inactive", "cancelled", "canceled", "deactivated", "disabled"].includes(
-    String(status || "").toLowerCase(),
-  );
+  return [
+    "inactive",
+    "cancelled",
+    "canceled",
+    "deactivated",
+    "disabled",
+  ].includes(String(status || "").toLowerCase());
 }
 
 function findApprovedSubscriptionForStudent(student, approvedSubscriptions) {
-  const studentId = student?.student_id || student?.student?.id || student?.user?.id || student?.id;
+  const studentId =
+    student?.student_id ||
+    student?.student?.id ||
+    student?.user?.id ||
+    student?.id;
   const subscriptionId =
     student?.subscription_id ||
     student?.subscription?.id ||
@@ -216,10 +185,16 @@ function findApprovedSubscriptionForStudent(student, approvedSubscriptions) {
       item.id;
 
     return (
-      (studentId != null && itemStudentId != null && String(itemStudentId) === String(studentId)) ||
-      (subscriptionId != null && itemSubscriptionId != null && String(itemSubscriptionId) === String(subscriptionId)) ||
-      (item.phone && student?.phone &&
-        String(item.phone).replace(/\D/g, "") === String(student.phone).replace(/\D/g, ""))
+      (studentId != null &&
+        itemStudentId != null &&
+        String(itemStudentId) === String(studentId)) ||
+      (subscriptionId != null &&
+        itemSubscriptionId != null &&
+        String(itemSubscriptionId) === String(subscriptionId)) ||
+      (item.phone &&
+        student?.phone &&
+        String(item.phone).replace(/\D/g, "") ===
+          String(student.phone).replace(/\D/g, ""))
     );
   });
 }
@@ -254,6 +229,89 @@ function isStudentRecordActive(student, approvedRecord) {
   );
 }
 
+function collectStatuses(...records) {
+  return records.flatMap((record) => {
+    if (!record || typeof record !== "object") return [];
+    const subscription = getSubscriptionRecord(record);
+    const codeObj =
+      record.subscription_code && typeof record.subscription_code === "object"
+        ? record.subscription_code
+        : null;
+    return [
+      subscription?.status,
+      subscription?.approval_status,
+      record.subscription_status,
+      record.status,
+      record.approval_status,
+      record.code_status,
+      record.subscription_code_status,
+      codeObj?.status,
+      subscription?.code?.status,
+    ]
+      .filter((status) => status != null && status !== "")
+      .map((status) => String(status).toLowerCase());
+  });
+}
+
+function buildPendingIdSets(pendingRequests) {
+  const studentIds = new Set();
+  const subscriptionIds = new Set();
+  for (const req of pendingRequests || []) {
+    [req?.student_id, req?.user_id, req?.student?.id, req?.user?.id].forEach(
+      (id) => id != null && studentIds.add(String(id)),
+    );
+    [
+      req?.subscription_id,
+      req?.subscription?.id,
+      req?.active_subscription?.id,
+      req?.id,
+    ].forEach((id) => id != null && subscriptionIds.add(String(id)));
+  }
+  return { studentIds, subscriptionIds };
+}
+
+// A student whose activation request is still pending or was rejected is not
+// a real member yet, so he must not appear in the students roster.
+// GET /admin/students returns every student record, so we filter here.
+function isStudentHiddenFromRoster(
+  student,
+  approvedRecord,
+  pendingIds,
+  approvedReady,
+) {
+  const statuses = collectStatuses(student, approvedRecord);
+  if (statuses.some((status) => ["pending", "rejected"].includes(status))) {
+    return true;
+  }
+
+  const studentId = student?.student_id ?? student?.id;
+  if (studentId != null && pendingIds.studentIds.has(String(studentId)))
+    return true;
+
+  const subscriptionId =
+    student?.subscription_id ??
+    student?.subscription?.id ??
+    student?.active_subscription?.id ??
+    student?.subscriptions?.[0]?.id;
+  if (
+    subscriptionId != null &&
+    pendingIds.subscriptionIds.has(String(subscriptionId))
+  ) {
+    return true;
+  }
+
+  // Cancelled subscription that was never approved = rejected request.
+  if (
+    approvedReady &&
+    !approvedRecord &&
+    statuses.some((status) => isDeactivatedStatus(status))
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 function formatSubscriptionExpiry(value) {
   if (!value) return "—";
   const rawValue = String(value).trim();
@@ -269,6 +327,8 @@ function formatSubscriptionExpiry(value) {
   }).format(parsedDate);
 }
 
+// "lessons" / "quizzes" / "memos" are kept here only so old links like
+// /dashboard?tab=memos still resolve and get redirected to their own pages.
 const dashboardTabs = new Set([
   "requests",
   "approved",
@@ -285,50 +345,60 @@ const codeGradeIds = new Set(
 const DASHBOARD_URL_SCHEMA = {
   tab: {
     defaultValue: "requests",
-    normalize: (value) => dashboardTabs.has(value) ? value : null,
+    normalize: (value) => (dashboardTabs.has(value) ? value : null),
   },
   search: { defaultValue: "", normalize: (value) => value.slice(0, 120) },
   grade: {
     defaultValue: BRANCHES[0],
-    normalize: (value) => gradeNames.has(value) ? value : null,
+    normalize: (value) => (gradeNames.has(value) ? value : null),
   },
   approvedGrade: {
     defaultValue: BRANCHES[0],
-    normalize: (value) => gradeNames.has(value) ? value : null,
+    normalize: (value) => (gradeNames.has(value) ? value : null),
   },
   approvedStatus: {
     defaultValue: "all",
-    normalize: (value) => ["all", "active", "deactivated"].includes(value) ? value : null,
+    normalize: (value) =>
+      ["all", "active", "deactivated"].includes(value) ? value : null,
   },
   studentsStatus: {
     defaultValue: "all",
-    normalize: (value) => ["all", "active", "deactivated"].includes(value) ? value : null,
+    normalize: (value) =>
+      ["all", "active", "deactivated"].includes(value) ? value : null,
   },
   codesStatus: {
     defaultValue: "all",
-    normalize: (value) => ["all", "active", "deactivated"].includes(value) ? value : null,
+    normalize: (value) =>
+      ["all", "active", "deactivated"].includes(value) ? value : null,
   },
-  requestsSearch: { defaultValue: "", normalize: (value) => value.slice(0, 120) },
+  requestsSearch: {
+    defaultValue: "",
+    normalize: (value) => value.slice(0, 120),
+  },
   requestsGrade: {
     defaultValue: BRANCHES[0],
-    normalize: (value) => gradeNames.has(value) ? value : null,
+    normalize: (value) => (gradeNames.has(value) ? value : null),
   },
   codesGrade: {
     defaultValue: "1",
-    normalize: (value) => codeGradeIds.has(value) ? value : null,
+    normalize: (value) => (codeGradeIds.has(value) ? value : null),
   },
   codesSearch: { defaultValue: "", normalize: (value) => value.slice(0, 120) },
   page: {
     defaultValue: "1",
-    normalize: (value) => /^\d+$/.test(value) && Number(value) > 0 && Number(value) <= 500 ? String(Number(value)) : null,
+    normalize: (value) =>
+      /^\d+$/.test(value) && Number(value) > 0 && Number(value) <= 500
+        ? String(Number(value))
+        : null,
   },
 };
 
 export default function TeacherDashboardPage() {
   const [urlState, setUrlState] = useUrlState(DASHBOARD_URL_SCHEMA);
   const {
+    // lessonsList / adminExamsList are only passed to StudentExamHistoryModal
     lessonsList,
-    memosList,
+    adminExamsList,
     pendingRequests,
     approvedSubscriptions,
     isLoadingRequests,
@@ -343,26 +413,7 @@ export default function TeacherDashboardPage() {
     resetTrustedDevice,
     createStudentByAdmin,
     updateStudentByAdmin,
-    addLesson,
-    deleteLesson,
-    isLoadingLessons,
-    addQuestionToLessonQuiz,
-    addMemo,
-    deleteMemo,
     showToast,
-    // OpenAPI 3.0.0 Connected Endpoints
-    adminExamsList,
-    isLoadingExams,
-    fetchAdminExams,
-    createAdminExam,
-    updateAdminExam,
-    deleteAdminExam,
-    createAdminQuestion,
-    updateAdminQuestion,
-    deleteAdminQuestion,
-    createAdminOption,
-    updateAdminOption,
-    deleteAdminOption,
     subscriptionCodesList,
     isLoadingCodes,
     fetchSubscriptionCodes,
@@ -377,6 +428,7 @@ export default function TeacherDashboardPage() {
   // Active Main Tab: 'requests' | 'approved' | 'students' | 'codes'
   const requestedTab = urlState.tab;
 
+  // Lessons, exams and memos live on their own pages now.
   useEffect(() => {
     if (requestedTab === "lessons") {
       navigate("/lessons", { replace: true });
@@ -405,20 +457,16 @@ export default function TeacherDashboardPage() {
 
   const setSearchQuery = (value, options = {}) =>
     setUrlState({ search: value, page: "1" }, options);
-  const setGradeFilter = (value) =>
-    setUrlState({ grade: value, page: "1" });
+  const setGradeFilter = (value) => setUrlState({ grade: value, page: "1" });
   const setApprovedGradeFilter = (value) =>
     setUrlState({ approvedGrade: value });
-  const setApprovedStatus = (value) =>
-    setUrlState({ approvedStatus: value });
+  const setApprovedStatus = (value) => setUrlState({ approvedStatus: value });
   const setStudentsStatus = (value) =>
     setUrlState({ studentsStatus: value, page: "1" });
-  const setCodesStatus = (value) =>
-    setUrlState({ codesStatus: value });
+  const setCodesStatus = (value) => setUrlState({ codesStatus: value });
   const setRequestsSearch = (value, options = {}) =>
     setUrlState({ requestsSearch: value }, options);
-  const setRequestsGrade = (value) =>
-    setUrlState({ requestsGrade: value });
+  const setRequestsGrade = (value) => setUrlState({ requestsGrade: value });
   const setSelectedCodesGrade = (value) =>
     setUrlState({ codesGrade: String(value) });
   const setCodesSearchQuery = (value, options = {}) =>
@@ -445,156 +493,7 @@ export default function TeacherDashboardPage() {
   const [isProcessingAction, setIsProcessingAction] = useState(false);
   const [deactivationTarget, setDeactivationTarget] = useState(null);
 
-  // --- Subscription Codes State (GET /api/v1/admin/subscription-codes) ---
-  // --- Admin Exams State (OpenAPI 3.0.0 Admin Exams) ---
-  const [isAddExamOpen, setIsAddExamOpen] = useState(false);
-  const [newExamData, setNewExamData] = useState({
-    lesson_id: "",
-    title: "",
-    description: "",
-    duration_minutes: 20,
-    passing_percentage: 60,
-  });
-  const [editingExam, setEditingExam] = useState(null);
-  const [expandedExamId, setExpandedExamId] = useState(null);
-
-  // Question & Option Modal State
-  const [questionModal, setQuestionModal] = useState({
-    isOpen: false,
-    isEdit: false,
-    examId: null,
-    questionId: null,
-    question_text: "",
-    points: 1,
-    opt1: "",
-    opt2: "",
-    opt3: "",
-    opt4: "",
-    correctOption: 1,
-  });
-
-  const [optionModal, setOptionModal] = useState({
-    isOpen: false,
-    isEdit: false,
-    questionId: null,
-    optionId: null,
-    option_text: "",
-    is_correct: false,
-  });
-
-  // --- Modals State ---
-  // 1. Add Lesson Modal
-  const [isAddLessonOpen, setIsAddLessonOpen] = useState(false);
-  const [newLessonData, setNewLessonData] = useState({
-    title: "",
-    branch: BRANCHES[1] || "التفاضل والتكامل",
-    grade: GRADES[0].name,
-    gradeId: GRADES[0].id,
-    duration: "",
-    videoUrl: "",
-    pdfFile: "مذكرة_الشرح.pdf",
-    description: "",
-    quizQuestion: "",
-    quizOption1: "",
-    quizOption2: "",
-    quizOption3: "",
-    quizOption4: "",
-    quizCorrectOption: 1,
-  });
-  const [lessonDurationStatus, setLessonDurationStatus] = useState("");
-
-  useEffect(() => {
-    if (!isAddLessonOpen || !newLessonData.videoUrl.trim()) return undefined;
-
-    const videoUrl = newLessonData.videoUrl.trim();
-    const youtubeId = getYouTubeVideoId(videoUrl);
-    let cancelled = false;
-    let player;
-    let metadataVideo;
-    let durationTimer;
-
-    const saveDuration = (seconds) => {
-      if (cancelled || !Number.isFinite(seconds) || seconds <= 0) return;
-      const minutes = Math.ceil(seconds / 60);
-      setNewLessonData((current) => ({ ...current, duration: `${minutes} دقيقة` }));
-      setLessonDurationStatus("تم تحديد مدة الفيديو تلقائيًا");
-    };
-
-    if (youtubeId) {
-      loadYouTubeIframeApi()
-        .then((YT) => {
-          if (cancelled) return;
-          setLessonDurationStatus("جارٍ قراءة مدة الفيديو من YouTube...");
-          const container = document.createElement("div");
-          container.style.cssText = "position:fixed;left:-10000px;top:0;width:320px;height:180px";
-          document.body.appendChild(container);
-          player = new YT.Player(container, {
-            videoId: youtubeId,
-            events: {
-              onReady: (event) => {
-                const readDuration = () => saveDuration(event.target.getDuration());
-                readDuration();
-                durationTimer = window.setInterval(readDuration, 500);
-                window.setTimeout(() => {
-                  window.clearInterval(durationTimer);
-                  if (!cancelled) setLessonDurationStatus((status) =>
-                    status === "تم تحديد مدة الفيديو تلقائيًا" ? status : "تعذر قراءة المدة؛ تأكدي أن الفيديو متاح",
-                  );
-                }, 8000);
-              },
-              onError: () => {
-                if (!cancelled) setLessonDurationStatus("تعذر قراءة مدة هذا الفيديو");
-              },
-            },
-          });
-        })
-        .catch(() => {
-          if (!cancelled) setLessonDurationStatus("تعذر الاتصال بـ YouTube لقراءة المدة");
-        });
-    } else if (/\.mp4(?:$|[?#])/i.test(videoUrl)) {
-      metadataVideo = document.createElement("video");
-      metadataVideo.preload = "metadata";
-      metadataVideo.onloadedmetadata = () => saveDuration(metadataVideo.duration);
-      metadataVideo.onerror = () => setLessonDurationStatus("تعذر قراءة مدة ملف الفيديو");
-      metadataVideo.src = videoUrl;
-    }
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(durationTimer);
-      metadataVideo?.removeAttribute("src");
-      metadataVideo?.load();
-      player?.destroy();
-    };
-  }, [isAddLessonOpen, newLessonData.videoUrl]);
-
-  // 2. Add Quiz Question Modal
-  const [isAddQuestionOpen, setIsAddQuestionOpen] = useState(false);
-  const [selectedLessonForQuiz, setSelectedLessonForQuiz] = useState(
-    lessonsList[0]?.id || 1,
-  );
-  const [newQuestionData, setNewQuestionData] = useState({
-    question: "",
-    opt1: "",
-    opt2: "",
-    opt3: "",
-    opt4: "",
-    correctIndex: 0,
-    explanation: "",
-  });
-
-  // 3. Add Memo Modal
-  const [isAddMemoOpen, setIsAddMemoOpen] = useState(false);
-  const [newMemoData, setNewMemoData] = useState({
-    title: "",
-    grade: GRADES[0].name,
-    pages: 120,
-    fileSize: "15.0 MB",
-    fileName: "",
-    fileUrl: null,
-  });
-
-  // 4. Student Modals (API Schema Aligned)
+  // --- Student Modals (API Schema Aligned) ---
   const [viewingStudent, setViewingStudent] = useState(null);
   const [editingStudent, setEditingStudent] = useState(null);
   const [isAddStudentOpen, setIsAddStudentOpen] = useState(false);
@@ -630,8 +529,14 @@ export default function TeacherDashboardPage() {
             ...prev,
             ...detail,
             code: detail.code || detail.subscription_code || prev?.code,
-            subscription_code: detail.subscription_code || detail.code || prev?.subscription_code,
-            grade: getArabicGradeName(detail.grade || prev?.grade, detail.grade_id || prev?.grade_id),
+            subscription_code:
+              detail.subscription_code ||
+              detail.code ||
+              prev?.subscription_code,
+            grade: getArabicGradeName(
+              detail.grade || prev?.grade,
+              detail.grade_id || prev?.grade_id,
+            ),
             subscription:
               res.data?.subscription ||
               detail.subscription ||
@@ -653,23 +558,6 @@ export default function TeacherDashboardPage() {
     }
   };
 
-  const handleOpenStudentExamHistory = async (std) => {
-    setExamHistoryStudent({ ...std, isLoadingDetails: true });
-    try {
-      const res = await getStudentDetails(std.id);
-      const detail = res?.data?.student || res?.data;
-      setExamHistoryStudent((prev) =>
-        String(prev?.id) === String(std.id)
-          ? { ...prev, ...(res?.success && detail ? detail : {}), isLoadingDetails: false }
-          : prev,
-      );
-    } catch {
-      setExamHistoryStudent((prev) =>
-        String(prev?.id) === String(std.id) ? { ...prev, isLoadingDetails: false } : prev,
-      );
-    }
-  };
-
   // --- Handlers ---
   const handleCopyCode = (code) => {
     navigator.clipboard?.writeText(code);
@@ -678,16 +566,43 @@ export default function TeacherDashboardPage() {
     setTimeout(() => setCopiedCode(null), 2500);
   };
 
+  // After approving / rejecting, re-sync every list that depends on it.
+  // بعد قبول/رفض طلب تفعيل
+  const refreshAfterActivationDecision = () =>
+    Promise.allSettled([
+      fetchPendingRequests?.(),
+      fetchApprovedStudents?.(),
+      fetchAdminStudents?.(currentStudentsPage),
+      fetchSubscriptionCodes?.(selectedCodesGrade),
+    ]);
+
+  // بعد التعطيل أو الحذف النهائي
+  const refreshAfterDeletion = () =>
+    Promise.allSettled([
+      fetchApprovedStudents?.(),
+      fetchAdminStudents?.(currentStudentsPage),
+      fetchPendingRequests?.(),
+      fetchSubscriptionCodes?.(selectedCodesGrade),
+    ]);
+
   const handleApproveRequest = async (id) => {
     setIsProcessingAction(true);
-    await approveActivationRequest(id);
-    setIsProcessingAction(false);
+    try {
+      await approveActivationRequest(id);
+      await refreshAfterActivationDecision();
+    } finally {
+      setIsProcessingAction(false);
+    }
   };
 
   const handleRejectRequest = async (id) => {
     setIsProcessingAction(true);
-    await cancelActivationRequest(id);
-    setIsProcessingAction(false);
+    try {
+      await cancelActivationRequest(id);
+      await refreshAfterActivationDecision();
+    } finally {
+      setIsProcessingAction(false);
+    }
   };
 
   const handleDeactivate = async (subscriptionId) => {
@@ -704,37 +619,45 @@ export default function TeacherDashboardPage() {
     return result;
   };
 
-  const handleDeactivateAndDeleteStudentRow = async (std, subscriptionIdOverride) => {
+  const handleDeactivateAndDeleteStudentRow = async (
+    std,
+    subscriptionIdOverride,
+  ) => {
     const approvedRecord = findApprovedSubscriptionForStudent(
       std,
       approvedSubscriptions,
     );
-    const studentId = std.student_id || std.student?.id || std.user?.id || std.id;
+    const studentId =
+      std.student_id || std.student?.id || std.user?.id || std.id;
     const subscriptionId =
       subscriptionIdOverride || getStudentSubscriptionId(std, approvedRecord);
 
     if (!subscriptionId) {
-      showToast(
-        "\u062a\u0639\u0630\u0631 \u0627\u0644\u0639\u062b\u0648\u0631 \u0639\u0644\u0649 \u0645\u0639\u0631\u0651\u0641 \u0627\u0634\u062a\u0631\u0627\u0643 \u0627\u0644\u0637\u0627\u0644\u0628",
-        "error",
-      );
+      showToast("تعذر العثور على معرّف اشتراك الطالب", "error");
       return { success: false };
     }
 
     setIsProcessingAction(true);
     try {
-      return await deactivateAndDeleteStudentRecord({ studentId, subscriptionId });
+      return await deactivateAndDeleteStudentRecord({
+        studentId,
+        subscriptionId,
+      });
     } finally {
       setIsProcessingAction(false);
     }
   };
 
-  const handleDeleteDeactivatedStudentRow = async (std, subscriptionIdOverride) => {
+  const handleDeleteDeactivatedStudentRow = async (
+    std,
+    subscriptionIdOverride,
+  ) => {
     const approvedRecord = findApprovedSubscriptionForStudent(
       std,
       approvedSubscriptions,
     );
-    const studentId = std.student_id || std.student?.id || std.user?.id || std.id;
+    const studentId =
+      std.student_id || std.student?.id || std.user?.id || std.id;
     const subscriptionId =
       subscriptionIdOverride || getStudentSubscriptionId(std, approvedRecord);
 
@@ -745,7 +668,10 @@ export default function TeacherDashboardPage() {
 
     setIsProcessingAction(true);
     try {
-      return await deleteDeactivatedStudentRecord({ studentId, subscriptionId });
+      return await deleteDeactivatedStudentRecord({
+        studentId,
+        subscriptionId,
+      });
     } finally {
       setIsProcessingAction(false);
     }
@@ -786,7 +712,7 @@ export default function TeacherDashboardPage() {
           deactivationTarget.subscriptionId,
         );
         if (result?.deactivated && !result.success) {
-          // The backend deactivated the subscription but rejected its deletion.
+          // السيرفر عطّل الاشتراك بس رفض حذفه
           setDeactivationTarget((current) =>
             current ? { ...current, type: "delete-student" } : current,
           );
@@ -800,10 +726,15 @@ export default function TeacherDashboardPage() {
         result = await handleDeactivate(deactivationTarget.subscriptionId);
       }
     } finally {
-      if (result?.success) setDeactivationTarget(null);
+      if (result?.success) {
+        setDeactivationTarget(null);
+        await refreshAfterDeletion();
+      } else if (result?.deactivated) {
+        // اشتراك اتعطل حتى لو الحذف فشل، فلازم القوائم تتحدث
+        await refreshAfterDeletion();
+      }
     }
   };
-
   const handleResetDeviceForStudent = async (std) => {
     const subscription = approvedSubscriptions.find(
       (item) => String(item.student?.id || item.student_id) === String(std.id),
@@ -829,253 +760,6 @@ export default function TeacherDashboardPage() {
     } finally {
       setIsProcessingAction(false);
     }
-  };
-
-  const handleSaveLesson = async (e) => {
-    e.preventDefault();
-    if (!newLessonData.title.trim()) return;
-    const answerOptions = [1, 2, 3, 4].map((number) =>
-      String(newLessonData[`quizOption${number}`] || "").trim(),
-    );
-    if (!newLessonData.quizQuestion.trim() || answerOptions.some((option) => !option)) {
-      showToast("أضيفي السؤال واكتبي الاختيارات الأربعة.", "error");
-      return;
-    }
-    if (!newLessonData.duration) {
-      showToast("استني لحد ما نقرأ مدة الفيديو من الرابط، أو تأكدي إن الرابط متاح.", "error");
-      return;
-    }
-    const grade = GRADES.find((item) => item.name === newLessonData.grade);
-    setIsProcessingAction(true);
-    const result = await addLesson({
-      ...newLessonData,
-      grade_id: grade?.numericId || 1,
-    });
-    setIsProcessingAction(false);
-
-    if (result?.success) {
-      const lessonId = Number(result.data?.id);
-      if (lessonId && !result.isOfflineMode) {
-        const examResult = await createAdminExam({
-          lesson_id: lessonId,
-          title: `اختبار محاضرة: ${newLessonData.title.trim()}`,
-          duration_minutes: 10,
-          passing_percentage: 0,
-        });
-        const exam = examResult?.data?.exam || examResult?.data?.data || examResult?.data;
-        const examId = Number(exam?.id);
-        if (examResult?.success && examId) {
-          const questionResult = await createAdminQuestion(examId, {
-            question_text: newLessonData.quizQuestion.trim(),
-            points: 1,
-          });
-          const question = questionResult?.data?.question || questionResult?.data?.data || questionResult?.data;
-          const questionId = Number(question?.id);
-          if (questionResult?.success && questionId) {
-            for (let index = 0; index < answerOptions.length; index += 1) {
-              const optionResult = await createAdminOption(questionId, {
-                option_text: answerOptions[index],
-                is_correct: newLessonData.quizCorrectOption === index + 1,
-              });
-              if (!optionResult?.success) break;
-            }
-          }
-        }
-      } else if (result.isOfflineMode) {
-        showToast("تم حفظ المحاضرة محليًا، وسيتطلب ربط السؤال اتصالًا بالخادم.", "error");
-      }
-      setIsAddLessonOpen(false);
-      setNewLessonData({
-        title: "",
-        branch: BRANCHES[1] || "التفاضل والتكامل",
-        grade: GRADES[0].name,
-        gradeId: GRADES[0].id,
-        duration: "",
-        videoUrl: "",
-        pdfFile: "مذكرة_الشرح.pdf",
-        description: "",
-        quizQuestion: "",
-        quizOption1: "",
-        quizOption2: "",
-        quizOption3: "",
-        quizOption4: "",
-        quizCorrectOption: 1,
-      });
-    }
-  };
-
-  const handleSaveQuestion = async (e) => {
-    e.preventDefault();
-    if (
-      !newQuestionData.question.trim() ||
-      ![
-        newQuestionData.opt1,
-        newQuestionData.opt2,
-        newQuestionData.opt3,
-        newQuestionData.opt4,
-      ].every((option) => option.trim())
-    )
-      return;
-    const qObj = {
-      question: newQuestionData.question,
-      options: [
-        newQuestionData.opt1,
-        newQuestionData.opt2,
-        newQuestionData.opt3,
-        newQuestionData.opt4,
-      ],
-      correctIndex: parseInt(newQuestionData.correctIndex),
-      explanation: newQuestionData.explanation,
-    };
-    setIsProcessingAction(true);
-    const result = await addQuestionToLessonQuiz(
-      parseInt(selectedLessonForQuiz),
-      qObj,
-    );
-    setIsProcessingAction(false);
-    if (!result?.success) return;
-    setIsAddQuestionOpen(false);
-    setNewQuestionData({
-      question: "",
-      opt1: "",
-      opt2: "",
-      opt3: "",
-      opt4: "",
-      correctIndex: 0,
-      explanation: "",
-    });
-  };
-
-  const handleSaveExam = async (e) => {
-    e.preventDefault();
-    setIsProcessingAction(true);
-    const result = editingExam
-      ? await updateAdminExam(editingExam.id, newExamData)
-      : await createAdminExam(newExamData);
-    setIsProcessingAction(false);
-
-    if (result?.success) {
-      setIsAddExamOpen(false);
-      setEditingExam(null);
-      setNewExamData({
-        lesson_id: lessonsList[0]?.id || 1,
-        title: "",
-        description: "",
-        duration_minutes: 20,
-        passing_percentage: 60,
-      });
-    }
-  };
-
-  const handleSaveExamQuestion = async (e) => {
-    e.preventDefault();
-    if (!questionModal.question_text.trim()) return;
-
-    setIsProcessingAction(true);
-    try {
-      if (questionModal.isEdit) {
-        await updateAdminQuestion(questionModal.questionId, {
-          question_text: questionModal.question_text,
-          points: Number(questionModal.points) || 1,
-        });
-      } else {
-        const qRes = await createAdminQuestion(questionModal.examId, {
-          question_text: questionModal.question_text,
-          points: Number(questionModal.points) || 1,
-        });
-
-        const createdQ =
-          qRes?.data?.question || qRes?.data || qRes?.question || qRes;
-        const newQuestionId = createdQ?.id || createdQ?.data?.id;
-
-        // If options were provided in the form, create them immediately!
-        if (newQuestionId) {
-          const rawOptions = [
-            {
-              text: questionModal.opt1,
-              is_correct: questionModal.correctOption === 1,
-            },
-            {
-              text: questionModal.opt2,
-              is_correct: questionModal.correctOption === 2,
-            },
-            {
-              text: questionModal.opt3,
-              is_correct: questionModal.correctOption === 3,
-            },
-            {
-              text: questionModal.opt4,
-              is_correct: questionModal.correctOption === 4,
-            },
-          ];
-
-          for (const opt of rawOptions) {
-            if (opt.text && opt.text.trim()) {
-              await createAdminOption(newQuestionId, {
-                option_text: opt.text.trim(),
-                is_correct: Boolean(opt.is_correct),
-              });
-            }
-          }
-        }
-      }
-
-      setQuestionModal({
-        isOpen: false,
-        isEdit: false,
-        examId: null,
-        questionId: null,
-        question_text: "",
-        points: 1,
-        opt1: "",
-        opt2: "",
-        opt3: "",
-        opt4: "",
-        correctOption: 1,
-      });
-
-      await fetchAdminExams();
-    } catch (err) {
-      console.error("Error saving question:", err);
-    } finally {
-      setIsProcessingAction(false);
-    }
-  };
-
-  const handleSaveExamOption = async (e) => {
-    e.preventDefault();
-    setIsProcessingAction(true);
-    const payload = {
-      option_text: optionModal.option_text,
-      is_correct: optionModal.is_correct,
-    };
-    const result = optionModal.isEdit
-      ? await updateAdminOption(optionModal.optionId, payload)
-      : await createAdminOption(optionModal.questionId, payload);
-    setIsProcessingAction(false);
-
-    if (result?.success) {
-      setOptionModal((prev) => ({ ...prev, isOpen: false }));
-    }
-  };
-
-  const handleSaveMemo = (e) => {
-    e.preventDefault();
-    if (!newMemoData.title.trim()) return;
-    addMemo({
-      ...newMemoData,
-      fileSize: newMemoData.fileSize || "15.0 MB",
-      pdfFile: newMemoData.fileName || "مذكرة_الشرح.pdf",
-    });
-    setIsAddMemoOpen(false);
-    setNewMemoData({
-      title: "",
-      grade: GRADES[0].name,
-      pages: 120,
-      fileSize: "15.0 MB",
-      fileName: "",
-      fileUrl: null,
-    });
   };
 
   const handleSaveNewStudent = async (e) => {
@@ -1129,7 +813,8 @@ export default function TeacherDashboardPage() {
       item.active_subscription ||
       item.subscriptions?.[0] ||
       item;
-    const statusVal = getSubscriptionStatus(subObj, item, studentObj) || "active";
+    const statusVal =
+      getSubscriptionStatus(subObj, item, studentObj) || "active";
     const isDeactivated =
       isDeactivatedStatus(statusVal) ||
       subObj.is_active === false ||
@@ -1138,92 +823,98 @@ export default function TeacherDashboardPage() {
   };
 
   // Helper to check if a code item is inactive
-  const getCodeItemInactiveState = (item) => {
-    const subscriptionCode = getSubscriptionCode(
-      item.subscription_code,
-      item.subscription,
-      item,
-    );
-    const linkedApprovedRecord = approvedSubscriptions.find((record) => {
-      const recordCode = getSubscriptionCode(
-        record.subscription_code,
-        record.subscription,
-        record.active_subscription,
-        record.subscriptions?.[0],
-        record,
+  const getCodeItemInactiveState = useCallback(
+    (item) => {
+      const subscriptionCode = getSubscriptionCode(
+        item.subscription_code,
+        item.subscription,
+        item,
       );
-      const recordStudentId =
-        record.student?.id || record.user?.id || record.student_id || record.user_id;
-      const codeStudentId =
-        item.student?.id || item.user?.id || item.student_id || item.user_id;
-      const recordStudent = record.student || record.user || record;
-      const recordStudentName =
-        `${record.first_name || recordStudent.first_name || ""} ${record.last_name || recordStudent.last_name || ""}`.trim() ||
-        record.student_name ||
-        record.name ||
-        recordStudent.name ||
+      const linkedApprovedRecord = approvedSubscriptions.find((record) => {
+        const recordCode = getSubscriptionCode(
+          record.subscription_code,
+          record.subscription,
+          record.active_subscription,
+          record.subscriptions?.[0],
+          record,
+        );
+        const recordStudentId =
+          record.student?.id ||
+          record.user?.id ||
+          record.student_id ||
+          record.user_id;
+        const codeStudentId =
+          item.student?.id || item.user?.id || item.student_id || item.user_id;
+        const recordStudent = record.student || record.user || record;
+        const recordStudentName =
+          `${record.first_name || recordStudent.first_name || ""} ${record.last_name || recordStudent.last_name || ""}`.trim() ||
+          record.student_name ||
+          record.name ||
+          recordStudent.name ||
+          "";
+        const codeStudentName =
+          item.student_name ||
+          item.student?.name ||
+          item.user?.name ||
+          item.name ||
+          "";
+        const namesMatch =
+          recordStudentName.trim().replace(/\s+/g, " ").toLowerCase() ===
+          codeStudentName.trim().replace(/\s+/g, " ").toLowerCase();
+        return (
+          (recordCode && recordCode === subscriptionCode) ||
+          (recordStudentId != null &&
+            codeStudentId != null &&
+            String(recordStudentId) === String(codeStudentId)) ||
+          (recordStudentName && codeStudentName && namesMatch)
+        );
+      });
+      const linkedSubscription = getSubscriptionRecord(linkedApprovedRecord);
+      const codeSubscription = getSubscriptionRecord(item);
+      const inactiveStatuses = [
+        "inactive",
+        "cancelled",
+        "canceled",
+        "deactivated",
+        "disabled",
+        "expired",
+      ];
+      const statusCandidates = [
+        getSubscriptionStatus(
+          linkedApprovedRecord,
+          linkedSubscription,
+          linkedApprovedRecord?.student,
+        ),
+        linkedSubscription?.status,
+        linkedApprovedRecord?.subscription_status,
+        linkedApprovedRecord?.subscriptionStatus,
+        linkedApprovedRecord?.status,
+        codeSubscription?.status,
+        item.subscription_status,
+        item.subscriptionStatus,
+        item.status,
+        linkedSubscription?.is_active === false ||
+        linkedApprovedRecord?.is_active === false ||
+        codeSubscription?.is_active === false ||
+        item.is_active === false
+          ? "inactive"
+          : linkedSubscription?.is_active === true ||
+              linkedApprovedRecord?.is_active === true ||
+              codeSubscription?.is_active === true ||
+              item.is_active === true
+            ? "active"
+            : "",
+      ]
+        .filter(Boolean)
+        .map((status) => String(status).toLowerCase());
+      const linkedStatus =
+        statusCandidates.find((status) => inactiveStatuses.includes(status)) ||
+        statusCandidates[0] ||
         "";
-      const codeStudentName =
-        item.student_name ||
-        item.student?.name ||
-        item.user?.name ||
-        item.name ||
-        "";
-      const namesMatch =
-        recordStudentName.trim().replace(/\s+/g, " ").toLowerCase() ===
-        codeStudentName.trim().replace(/\s+/g, " ").toLowerCase();
-      return (
-        (recordCode && recordCode === subscriptionCode) ||
-        (recordStudentId != null &&
-          codeStudentId != null &&
-          String(recordStudentId) === String(codeStudentId)) ||
-        (recordStudentName && codeStudentName && namesMatch)
-      );
-    });
-    const linkedSubscription = getSubscriptionRecord(linkedApprovedRecord);
-    const codeSubscription = getSubscriptionRecord(item);
-    const inactiveStatuses = [
-      "inactive",
-      "cancelled",
-      "canceled",
-      "deactivated",
-      "disabled",
-      "expired",
-    ];
-    const statusCandidates = [
-      getSubscriptionStatus(
-        linkedApprovedRecord,
-        linkedSubscription,
-        linkedApprovedRecord?.student,
-      ),
-      linkedSubscription?.status,
-      linkedApprovedRecord?.subscription_status,
-      linkedApprovedRecord?.subscriptionStatus,
-      linkedApprovedRecord?.status,
-      codeSubscription?.status,
-      item.subscription_status,
-      item.subscriptionStatus,
-      item.status,
-      linkedSubscription?.is_active === false ||
-      linkedApprovedRecord?.is_active === false ||
-      codeSubscription?.is_active === false ||
-      item.is_active === false
-        ? "inactive"
-        : linkedSubscription?.is_active === true ||
-            linkedApprovedRecord?.is_active === true ||
-            codeSubscription?.is_active === true ||
-            item.is_active === true
-          ? "active"
-          : "",
-    ]
-      .filter(Boolean)
-      .map((status) => String(status).toLowerCase());
-    const linkedStatus =
-      statusCandidates.find((status) => inactiveStatuses.includes(status)) ||
-      statusCandidates[0] ||
-      "";
-    return inactiveStatuses.includes(linkedStatus);
-  };
+      return inactiveStatuses.includes(linkedStatus);
+    },
+    [approvedSubscriptions],
+  );
 
   // Stats for Approved Subscriptions
   const approvedStats = useMemo(() => {
@@ -1236,9 +927,34 @@ export default function TeacherDashboardPage() {
     return { total: approvedSubscriptions.length, active, deactivated };
   }, [approvedSubscriptions]);
 
+  // Roster without pending / rejected activation requests
+  const visibleRoster = useMemo(() => {
+    const roster = Array.isArray(paginatedStudents) ? paginatedStudents : [];
+    const pendingIds = buildPendingIdSets(pendingRequests);
+    const approvedReady =
+      !isLoadingApproved && approvedSubscriptions.length > 0;
+    return roster.filter(
+      (std) =>
+        !isStudentHiddenFromRoster(
+          std,
+          findApprovedSubscriptionForStudent(std, approvedSubscriptions),
+          pendingIds,
+          approvedReady,
+        ),
+    );
+  }, [
+    paginatedStudents,
+    pendingRequests,
+    approvedSubscriptions,
+    isLoadingApproved,
+  ]);
+  const hiddenRosterCount =
+    (Array.isArray(paginatedStudents) ? paginatedStudents.length : 0) -
+    visibleRoster.length;
+
   // Stats for Students Roster (loaded page)
   const studentsStats = useMemo(() => {
-    const roster = Array.isArray(paginatedStudents) ? paginatedStudents : [];
+    const roster = visibleRoster;
     let active = 0;
     let deactivated = 0;
     for (const std of roster) {
@@ -1250,7 +966,7 @@ export default function TeacherDashboardPage() {
       else deactivated++;
     }
     return { total: roster.length, active, deactivated };
-  }, [paginatedStudents, approvedSubscriptions]);
+  }, [visibleRoster, approvedSubscriptions]);
 
   // Stats for Codes
   const codesStats = useMemo(() => {
@@ -1261,11 +977,12 @@ export default function TeacherDashboardPage() {
       else active++;
     }
     return { total: (subscriptionCodesList || []).length, active, deactivated };
-  }, [subscriptionCodesList, approvedSubscriptions]);
+  }, [subscriptionCodesList, getCodeItemInactiveState]);
 
   const filteredStudents = useMemo(() => {
-    // The roster comes only from the paginated admin students endpoint.
-    const roster = Array.isArray(paginatedStudents) ? paginatedStudents : [];
+    // The roster comes from the paginated admin students endpoint,
+    // minus pending / rejected activation requests.
+    const roster = visibleRoster;
     return roster.filter((std) => {
       const studentObj = std.student || std.user || std;
       const studentSubscription = findApprovedSubscriptionForStudent(
@@ -1281,7 +998,8 @@ export default function TeacherDashboardPage() {
         std.grade || studentObj.grade,
         std.grade_id || studentObj.grade_id,
       );
-      const matchesGrade = gradeFilter === BRANCHES[0] || stdGrade === gradeFilter;
+      const matchesGrade =
+        gradeFilter === BRANCHES[0] || stdGrade === gradeFilter;
       const matchesSearch =
         !searchQuery ||
         stdName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -1311,8 +1029,19 @@ export default function TeacherDashboardPage() {
 
       return matchesGrade && matchesSearch && matchesStatus;
     });
-  }, [approvedSubscriptions, gradeFilter, paginatedStudents, searchQuery, studentsStatus]);
-  const studentsTotalCount = studentsPagination.total || filteredStudents.length;
+  }, [
+    approvedSubscriptions,
+    gradeFilter,
+    visibleRoster,
+    searchQuery,
+    studentsStatus,
+  ]);
+  const studentsTotalCount = studentsPagination.total
+    ? Math.max(
+        studentsPagination.total - hiddenRosterCount,
+        visibleRoster.length,
+      )
+    : filteredStudents.length;
 
   // Filtered Approved Subscriptions
   const filteredApproved = useMemo(() => {
@@ -1336,7 +1065,8 @@ export default function TeacherDashboardPage() {
         sub.grade_id || studentObj.grade_id,
       );
       const matchesGrade =
-        approvedGradeFilter === BRANCHES[0] || studentGrade === approvedGradeFilter;
+        approvedGradeFilter === BRANCHES[0] ||
+        studentGrade === approvedGradeFilter;
 
       const matchesSearch =
         !searchQuery ||
@@ -1360,11 +1090,28 @@ export default function TeacherDashboardPage() {
       const studentObj = req.student || req.user || req;
       const firstName = req.first_name || studentObj.first_name || "";
       const lastName = req.last_name || studentObj.last_name || "";
-      const fullName = `${firstName} ${lastName}`.trim() || req.name || studentObj.name || "";
+      const fullName =
+        `${firstName} ${lastName}`.trim() || req.name || studentObj.name || "";
       const phone = req.phone || studentObj.phone || "";
-      const parentPhone = req.parent_phone || req.parentPhone || studentObj.parent_phone || studentObj.parentPhone || "";
-      const gradeId = req.grade_id || studentObj.grade_id || req.grade?.id || studentObj.grade?.id || 1;
-      const gradeTitle = req.grade?.name || studentObj.grade?.name || req.grade_name || studentObj.grade_name || getGradeNameById(gradeId);
+      const parentPhone =
+        req.parent_phone ||
+        req.parentPhone ||
+        studentObj.parent_phone ||
+        studentObj.parentPhone ||
+        "";
+      const gradeId =
+        req.grade_id ||
+        studentObj.grade_id ||
+        req.grade?.id ||
+        studentObj.grade?.id ||
+        1;
+      const gradeTitle = getArabicGradeName(
+        req.grade ||
+          studentObj.grade ||
+          req.grade_name ||
+          studentObj.grade_name,
+        gradeId,
+      );
 
       const q = (requestsSearch || "").trim().toLowerCase();
       const matchesSearch =
@@ -1372,7 +1119,8 @@ export default function TeacherDashboardPage() {
         fullName.toLowerCase().includes(q) ||
         phone.includes(q) ||
         parentPhone.includes(q);
-      const matchesGrade = requestsGrade === BRANCHES[0] || gradeTitle === requestsGrade;
+      const matchesGrade =
+        requestsGrade === BRANCHES[0] || gradeTitle === requestsGrade;
 
       return matchesSearch && matchesGrade;
     });
@@ -1399,32 +1147,23 @@ export default function TeacherDashboardPage() {
       ).toLowerCase();
       return name.includes(q) || code.includes(q);
     });
-  }, [subscriptionCodesList, codesSearchQuery, codesStatus, approvedSubscriptions]);
-
-  const completedLessons = viewingStudent?.completedLessons ?? 0;
-  const totalLessons = lessonsList.length;
-  const completedQuizzes = viewingStudent?.completedQuizzes ?? 0;
-  const totalQuizzes = lessonsList.filter(
-    (lesson) => lesson.quiz?.questions?.length > 0,
-  ).length;
-  const averageScore =
-    typeof viewingStudent?.averageScore === "string" ||
-    typeof viewingStudent?.averageScore === "number"
-      ? viewingStudent.averageScore
-      : "—";
-  const viewingStudentName =
-    (typeof viewingStudent?.name === "string" && viewingStudent.name) ||
-    `${viewingStudent?.first_name || ""} ${viewingStudent?.last_name || ""}`.trim() ||
-    "\u0627\u0644\u0637\u0627\u0644\u0628";
+  }, [
+    subscriptionCodesList,
+    codesSearchQuery,
+    codesStatus,
+    getCodeItemInactiveState,
+  ]);
 
   return (
     <div
       className="container"
       style={{ paddingTop: "1.5rem", paddingBottom: "3rem" }}
     >
+      <style>{`.modern-table .badge-tag { white-space: nowrap; }`}</style>
+
       {deactivationTarget && (
         <>
-        <style>{`
+          <style>{`
           @keyframes deactivateBackdropIn {
             from { opacity: 0; }
             to { opacity: 1; }
@@ -1443,162 +1182,178 @@ export default function TeacherDashboardPage() {
             .deactivation-dialog button { transition: none; }
           }
         `}</style>
-        <div
-          className="deactivation-backdrop"
-          role="presentation"
-          onMouseDown={(event) => {
-            if (
-              event.target === event.currentTarget &&
-              !isProcessingAction
-            ) {
-              setDeactivationTarget(null);
-            }
-          }}
-          style={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 3000,
-            display: "grid",
-            placeItems: "center",
-            padding: "1rem",
-            background: "rgba(3, 7, 18, 0.78)",
-            backdropFilter: "blur(6px)",
-          }}
-        >
-          <section
-            className="deactivation-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="deactivation-dialog-title"
+          <div
+            className="deactivation-backdrop"
+            role="presentation"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget && !isProcessingAction) {
+                setDeactivationTarget(null);
+              }
+            }}
             style={{
-              width: "min(100%, 440px)",
-              padding: "1.5rem",
-              borderRadius: "18px",
-              border: "1px solid rgba(244, 63, 94, 0.3)",
-              background: "linear-gradient(145deg, #111827, #080d18)",
-              boxShadow: "0 24px 80px rgba(0,0,0,0.5)",
-              direction: "rtl",
+              position: "fixed",
+              inset: 0,
+              zIndex: 3000,
+              display: "grid",
+              placeItems: "center",
+              padding: "1rem",
+              background: "rgba(3, 7, 18, 0.78)",
+              backdropFilter: "blur(6px)",
             }}
           >
-            <div
+            <section
+              className="deactivation-dialog"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="deactivation-dialog-title"
               style={{
-                display: "flex",
-                alignItems: "flex-start",
-                gap: "14px",
-                marginBottom: "1.25rem",
+                width: "min(100%, 440px)",
+                padding: "1.5rem",
+                borderRadius: "18px",
+                border: "1px solid rgba(244, 63, 94, 0.3)",
+                background: "linear-gradient(145deg, #111827, #080d18)",
+                boxShadow: "0 24px 80px rgba(0,0,0,0.5)",
+                direction: "rtl",
               }}
             >
-              <span
-                aria-hidden="true"
-                style={{
-                  width: 44,
-                  height: 44,
-                  flexShrink: 0,
-                  display: "grid",
-                  placeItems: "center",
-                  borderRadius: "14px",
-                  color: "#fb7185",
-                  background: "rgba(244, 63, 94, 0.12)",
-                }}
-              >
-                <AlertTriangle size={22} />
-              </span>
-              <div style={{ flex: 1 }}>
-                <h2
-                  id="deactivation-dialog-title"
-                  style={{ margin: "2px 0 8px", color: "#fff", fontSize: "1.15rem" }}
-                >
-                  {deactivationTarget.type === "delete-student"
-                    ? "\u062a\u0623\u0643\u064a\u062f \u0627\u0644\u062d\u0630\u0641 \u0627\u0644\u0646\u0647\u0627\u0626\u064a"
-                    : "\u062a\u0623\u0643\u064a\u062f \u0627\u0644\u062a\u0639\u0637\u064a\u0644 \u0648\u0627\u0644\u062d\u0630\u0641 \u0627\u0644\u0646\u0647\u0627\u0626\u064a"}
-                </h2>
-                <p
-                  style={{
-                    margin: 0,
-                    color: "var(--text-muted)",
-                    lineHeight: 1.8,
-                    fontSize: "0.9rem",
-                  }}
-                >
-                  {deactivationTarget.type === "delete-student" ? (
-                    <>
-                      {"\u0633\u064a\u062a\u0645 \u062d\u0630\u0641 \u0627\u0644\u0637\u0627\u0644\u0628 "}
-                      <strong style={{ color: "#fff" }}>{deactivationTarget.studentName}</strong>
-                      {" \u0648\u0627\u0634\u062a\u0631\u0627\u0643\u0647 \u0646\u0647\u0627\u0626\u064a\u064b\u0627. \u0644\u0646 \u064a\u0645\u0643\u0646 \u0627\u0644\u062a\u0631\u0627\u062c\u0639 \u0639\u0646 \u0647\u0630\u0627 \u0627\u0644\u0625\u062c\u0631\u0627\u0621."}
-                    </>
-                  ) : (
-                    <>
-                      {"\u0633\u064a\u062a\u0645 \u0623\u0648\u0644\u064b\u0627 \u062a\u0639\u0637\u064a\u0644 \u0627\u0634\u062a\u0631\u0627\u0643 "}
-                      <strong style={{ color: "#fff" }}>{deactivationTarget.studentName}</strong>
-                      {" \u062b\u0645 \u062d\u0630\u0641 \u0627\u0644\u0637\u0627\u0644\u0628 \u0648\u0627\u0644\u0627\u0634\u062a\u0631\u0627\u0643 \u0646\u0647\u0627\u0626\u064a\u064b\u0627. \u0644\u0646 \u064a\u0645\u0643\u0646 \u0627\u0644\u062a\u0631\u0627\u062c\u0639 \u0639\u0646 \u0647\u0630\u0627 \u0627\u0644\u0625\u062c\u0631\u0627\u0621."}
-                    </>
-                  )}
-                </p>
-              </div>
-              <button
-                type="button"
-                aria-label="إغلاق"
-                disabled={isProcessingAction}
-                onClick={() => setDeactivationTarget(null)}
-                className="btn-secondary"
-                style={{ padding: "6px", minWidth: 32 }}
-              >
-                <X size={16} />
-              </button>
-            </div>
-
-            {deactivationTarget.subscriptionCode && (
               <div
                 style={{
+                  display: "flex",
+                  alignItems: "flex-start",
+                  gap: "14px",
                   marginBottom: "1.25rem",
-                  padding: "10px 12px",
-                  borderRadius: "10px",
-                  border: "1px solid rgba(255,255,255,0.08)",
-                  background: "rgba(255,255,255,0.03)",
-                  color: "var(--text-muted)",
-                  fontSize: "0.82rem",
                 }}
               >
-                كود الاشتراك: <strong style={{ color: "#fff" }}>{deactivationTarget.subscriptionCode}</strong>
+                <span
+                  aria-hidden="true"
+                  style={{
+                    width: 44,
+                    height: 44,
+                    flexShrink: 0,
+                    display: "grid",
+                    placeItems: "center",
+                    borderRadius: "14px",
+                    color: "#fb7185",
+                    background: "rgba(244, 63, 94, 0.12)",
+                  }}
+                >
+                  <AlertTriangle size={22} />
+                </span>
+                <div style={{ flex: 1 }}>
+                  <h2
+                    id="deactivation-dialog-title"
+                    style={{
+                      margin: "2px 0 8px",
+                      color: "#fff",
+                      fontSize: "1.15rem",
+                    }}
+                  >
+                    {deactivationTarget.type === "delete-student"
+                      ? "\u062a\u0623\u0643\u064a\u062f \u0627\u0644\u062d\u0630\u0641 \u0627\u0644\u0646\u0647\u0627\u0626\u064a"
+                      : "\u062a\u0623\u0643\u064a\u062f \u0627\u0644\u062a\u0639\u0637\u064a\u0644 \u0648\u0627\u0644\u062d\u0630\u0641 \u0627\u0644\u0646\u0647\u0627\u0626\u064a"}
+                  </h2>
+                  <p
+                    style={{
+                      margin: 0,
+                      color: "var(--text-muted)",
+                      lineHeight: 1.8,
+                      fontSize: "0.9rem",
+                    }}
+                  >
+                    {deactivationTarget.type === "delete-student" ? (
+                      <>
+                        {
+                          "\u0633\u064a\u062a\u0645 \u062d\u0630\u0641 \u0627\u0644\u0637\u0627\u0644\u0628 "
+                        }
+                        <strong style={{ color: "#fff" }}>
+                          {deactivationTarget.studentName}
+                        </strong>
+                        {
+                          " \u0648\u0627\u0634\u062a\u0631\u0627\u0643\u0647 \u0646\u0647\u0627\u0626\u064a\u064b\u0627. \u0644\u0646 \u064a\u0645\u0643\u0646 \u0627\u0644\u062a\u0631\u0627\u062c\u0639 \u0639\u0646 \u0647\u0630\u0627 \u0627\u0644\u0625\u062c\u0631\u0627\u0621."
+                        }
+                      </>
+                    ) : (
+                      <>
+                        {
+                          "\u0633\u064a\u062a\u0645 \u0623\u0648\u0644\u064b\u0627 \u062a\u0639\u0637\u064a\u0644 \u0627\u0634\u062a\u0631\u0627\u0643 "
+                        }
+                        <strong style={{ color: "#fff" }}>
+                          {deactivationTarget.studentName}
+                        </strong>
+                        {
+                          " \u062b\u0645 \u062d\u0630\u0641 \u0627\u0644\u0637\u0627\u0644\u0628 \u0648\u0627\u0644\u0627\u0634\u062a\u0631\u0627\u0643 \u0646\u0647\u0627\u0626\u064a\u064b\u0627. \u0644\u0646 \u064a\u0645\u0643\u0646 \u0627\u0644\u062a\u0631\u0627\u062c\u0639 \u0639\u0646 \u0647\u0630\u0627 \u0627\u0644\u0625\u062c\u0631\u0627\u0621."
+                        }
+                      </>
+                    )}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  aria-label="إغلاق"
+                  disabled={isProcessingAction}
+                  onClick={() => setDeactivationTarget(null)}
+                  className="btn-secondary"
+                  style={{ padding: "6px", minWidth: 32 }}
+                >
+                  <X size={16} />
+                </button>
               </div>
-            )}
 
-            <div style={{ display: "flex", gap: "10px" }}>
-              <button
-                type="button"
-                disabled={isProcessingAction}
-                onClick={() => setDeactivationTarget(null)}
-                className="btn-secondary"
-                style={{ flex: 1, justifyContent: "center", padding: "10px" }}
-              >
-                إلغاء
-              </button>
-              <button
-                type="button"
-                disabled={isProcessingAction}
-                onClick={confirmDeactivation}
-                className="btn-secondary"
-                style={{
-                  flex: 1,
-                  justifyContent: "center",
-                  padding: "10px",
-                  color: "#fff",
-                  background: "linear-gradient(135deg, #e11d48, #be123c)",
-                  borderColor: "rgba(251, 113, 133, 0.45)",
-                  opacity: isProcessingAction ? 0.7 : 1,
-                }}
-              >
-                {isProcessingAction
-                  ? deactivationTarget.type === "delete-student"
-                    ? "\u062c\u0627\u0631\u064d \u0627\u0644\u062d\u0630\u0641 \u0627\u0644\u0646\u0647\u0627\u0626\u064a..."
-                    : "\u062c\u0627\u0631\u064d \u0627\u0644\u062a\u0639\u0637\u064a\u0644 \u062b\u0645 \u0627\u0644\u062d\u0630\u0641..."
-                  : deactivationTarget.type === "delete-student"
-                    ? "\u062d\u0630\u0641 \u0646\u0647\u0627\u0626\u064a"
-                    : "\u062a\u0639\u0637\u064a\u0644 \u062b\u0645 \u062d\u0630\u0641 \u0646\u0647\u0627\u0626\u064a"}
-              </button>
-            </div>
-          </section>
-        </div>
+              {deactivationTarget.subscriptionCode && (
+                <div
+                  style={{
+                    marginBottom: "1.25rem",
+                    padding: "10px 12px",
+                    borderRadius: "10px",
+                    border: "1px solid rgba(255,255,255,0.08)",
+                    background: "rgba(255,255,255,0.03)",
+                    color: "var(--text-muted)",
+                    fontSize: "0.82rem",
+                  }}
+                >
+                  كود الاشتراك:{" "}
+                  <strong style={{ color: "#fff" }}>
+                    {deactivationTarget.subscriptionCode}
+                  </strong>
+                </div>
+              )}
+
+              <div style={{ display: "flex", gap: "10px" }}>
+                <button
+                  type="button"
+                  disabled={isProcessingAction}
+                  onClick={() => setDeactivationTarget(null)}
+                  className="btn-secondary"
+                  style={{ flex: 1, justifyContent: "center", padding: "10px" }}
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="button"
+                  disabled={isProcessingAction}
+                  onClick={confirmDeactivation}
+                  className="btn-secondary"
+                  style={{
+                    flex: 1,
+                    justifyContent: "center",
+                    padding: "10px",
+                    color: "#fff",
+                    background: "linear-gradient(135deg, #e11d48, #be123c)",
+                    borderColor: "rgba(251, 113, 133, 0.45)",
+                    opacity: isProcessingAction ? 0.7 : 1,
+                  }}
+                >
+                  {isProcessingAction
+                    ? deactivationTarget.type === "delete-student"
+                      ? "\u062c\u0627\u0631\u064d \u0627\u0644\u062d\u0630\u0641 \u0627\u0644\u0646\u0647\u0627\u0626\u064a..."
+                      : "\u062c\u0627\u0631\u064d \u0627\u0644\u062a\u0639\u0637\u064a\u0644 \u062b\u0645 \u0627\u0644\u062d\u0630\u0641..."
+                    : deactivationTarget.type === "delete-student"
+                      ? "\u062d\u0630\u0641 \u0646\u0647\u0627\u0626\u064a"
+                      : "\u062a\u0639\u0637\u064a\u0644 \u062b\u0645 \u062d\u0630\u0641 \u0646\u0647\u0627\u0626\u064a"}
+                </button>
+              </div>
+            </section>
+          </div>
         </>
       )}
       {/* Professional Executive Header */}
@@ -1607,7 +1362,8 @@ export default function TeacherDashboardPage() {
         style={{
           padding: "1.5rem 2rem",
           marginBottom: "1.5rem",
-          background: "linear-gradient(135deg, rgba(15, 23, 42, 0.95) 0%, rgba(30, 41, 59, 0.75) 100%)",
+          background:
+            "linear-gradient(135deg, rgba(15, 23, 42, 0.95) 0%, rgba(30, 41, 59, 0.75) 100%)",
           border: "1px solid rgba(6, 182, 212, 0.25)",
           borderRadius: "20px",
           display: "flex",
@@ -1637,16 +1393,38 @@ export default function TeacherDashboardPage() {
             <ShieldCheck size={14} />
             <span>منصة العميد في الرياضيات • لوحة تحكم المعلم</span>
           </div>
-          <h1 style={{ fontSize: "1.55rem", fontWeight: 900, color: "#fff", margin: "0 0 6px" }}>
+          <h1
+            style={{
+              fontSize: "1.55rem",
+              fontWeight: 900,
+              color: "#fff",
+              margin: "0 0 6px",
+            }}
+          >
             لوحة الإدارة والتحكم الأكاديمي 👨‍🏫
           </h1>
-          <p style={{ fontSize: "0.86rem", color: "var(--text-muted)", margin: 0, lineHeight: 1.6 }}>
-            متابعة فورية لطلبات تفعيل الطلاب، الاشتراكات السارية، والأكواد المصدرة
+          <p
+            style={{
+              fontSize: "0.86rem",
+              color: "var(--text-muted)",
+              margin: 0,
+              lineHeight: 1.6,
+            }}
+          >
+            متابعة فورية لطلبات تفعيل الطلاب، الاشتراكات السارية، والأكواد
+            المصدرة
           </p>
         </div>
 
         {/* Action Controls */}
-        <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "10px",
+            flexWrap: "wrap",
+          }}
+        >
           <button
             onClick={() => {
               fetchPendingRequests();
@@ -1694,24 +1472,63 @@ export default function TeacherDashboardPage() {
             padding: "1.25rem",
             cursor: "pointer",
             borderRadius: "16px",
-            border: activeTab === "requests" ? "1.5px solid var(--amber)" : "1px solid rgba(245, 158, 11, 0.2)",
-            background: activeTab === "requests" ? "rgba(245, 158, 11, 0.08)" : "rgba(15, 23, 42, 0.6)",
+            border:
+              activeTab === "requests"
+                ? "1.5px solid var(--amber)"
+                : "1px solid rgba(245, 158, 11, 0.2)",
+            background:
+              activeTab === "requests"
+                ? "rgba(245, 158, 11, 0.08)"
+                : "rgba(15, 23, 42, 0.6)",
             transition: "all 0.2s ease",
           }}
         >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-            <span style={{ fontSize: "0.82rem", fontWeight: 700, color: "var(--text-muted)" }}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginBottom: "8px",
+            }}
+          >
+            <span
+              style={{
+                fontSize: "0.82rem",
+                fontWeight: 700,
+                color: "var(--text-muted)",
+              }}
+            >
               طلبات التفعيل المعلقة
             </span>
-            <span style={{ width: 34, height: 34, borderRadius: 10, background: "rgba(245, 158, 11, 0.15)", color: "var(--amber)", display: "grid", placeItems: "center" }}>
+            <span
+              style={{
+                width: 34,
+                height: 34,
+                borderRadius: 10,
+                background: "rgba(245, 158, 11, 0.15)",
+                color: "var(--amber)",
+                display: "grid",
+                placeItems: "center",
+              }}
+            >
               <Clock size={17} />
             </span>
           </div>
           <div style={{ fontSize: "1.75rem", fontWeight: 900, color: "#fff" }}>
             {pendingRequests.length}
           </div>
-          <div style={{ fontSize: "0.75rem", color: pendingRequests.length > 0 ? "var(--amber)" : "var(--text-dim)", marginTop: "4px", fontWeight: 600 }}>
-            {pendingRequests.length > 0 ? "● بحاجة للمراجعة والاعتماد" : "لا توجد طلبات جديدة"}
+          <div
+            style={{
+              fontSize: "0.75rem",
+              color:
+                pendingRequests.length > 0 ? "var(--amber)" : "var(--text-dim)",
+              marginTop: "4px",
+              fontWeight: 600,
+            }}
+          >
+            {pendingRequests.length > 0
+              ? "● بحاجة للمراجعة والاعتماد"
+              : "لا توجد طلبات جديدة"}
           </div>
         </div>
 
@@ -1723,23 +1540,59 @@ export default function TeacherDashboardPage() {
             padding: "1.25rem",
             cursor: "pointer",
             borderRadius: "16px",
-            border: activeTab === "approved" ? "1.5px solid var(--emerald)" : "1px solid rgba(16, 185, 129, 0.2)",
-            background: activeTab === "approved" ? "rgba(16, 185, 129, 0.08)" : "rgba(15, 23, 42, 0.6)",
+            border:
+              activeTab === "approved"
+                ? "1.5px solid var(--emerald)"
+                : "1px solid rgba(16, 185, 129, 0.2)",
+            background:
+              activeTab === "approved"
+                ? "rgba(16, 185, 129, 0.08)"
+                : "rgba(15, 23, 42, 0.6)",
             transition: "all 0.2s ease",
           }}
         >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-            <span style={{ fontSize: "0.82rem", fontWeight: 700, color: "var(--text-muted)" }}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginBottom: "8px",
+            }}
+          >
+            <span
+              style={{
+                fontSize: "0.82rem",
+                fontWeight: 700,
+                color: "var(--text-muted)",
+              }}
+            >
               الاشتراكات المعتمدة
             </span>
-            <span style={{ width: 34, height: 34, borderRadius: 10, background: "rgba(16, 185, 129, 0.15)", color: "var(--emerald)", display: "grid", placeItems: "center" }}>
+            <span
+              style={{
+                width: 34,
+                height: 34,
+                borderRadius: 10,
+                background: "rgba(16, 185, 129, 0.15)",
+                color: "var(--emerald)",
+                display: "grid",
+                placeItems: "center",
+              }}
+            >
               <Key size={17} />
             </span>
           </div>
           <div style={{ fontSize: "1.75rem", fontWeight: 900, color: "#fff" }}>
             {approvedSubscriptions.length}
           </div>
-          <div style={{ fontSize: "0.75rem", color: "var(--emerald)", marginTop: "4px", fontWeight: 600 }}>
+          <div
+            style={{
+              fontSize: "0.75rem",
+              color: "var(--emerald)",
+              marginTop: "4px",
+              fontWeight: 600,
+            }}
+          >
             ● اشتراكات سارية ومفعلة للأجهزة
           </div>
         </div>
@@ -1752,23 +1605,59 @@ export default function TeacherDashboardPage() {
             padding: "1.25rem",
             cursor: "pointer",
             borderRadius: "16px",
-            border: activeTab === "students" ? "1.5px solid var(--cyan)" : "1px solid rgba(6, 182, 212, 0.2)",
-            background: activeTab === "students" ? "rgba(6, 182, 212, 0.08)" : "rgba(15, 23, 42, 0.6)",
+            border:
+              activeTab === "students"
+                ? "1.5px solid var(--cyan)"
+                : "1px solid rgba(6, 182, 212, 0.2)",
+            background:
+              activeTab === "students"
+                ? "rgba(6, 182, 212, 0.08)"
+                : "rgba(15, 23, 42, 0.6)",
             transition: "all 0.2s ease",
           }}
         >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-            <span style={{ fontSize: "0.82rem", fontWeight: 700, color: "var(--text-muted)" }}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginBottom: "8px",
+            }}
+          >
+            <span
+              style={{
+                fontSize: "0.82rem",
+                fontWeight: 700,
+                color: "var(--text-muted)",
+              }}
+            >
               سجل الطلاب الشامل
             </span>
-            <span style={{ width: 34, height: 34, borderRadius: 10, background: "rgba(6, 182, 212, 0.15)", color: "var(--cyan)", display: "grid", placeItems: "center" }}>
+            <span
+              style={{
+                width: 34,
+                height: 34,
+                borderRadius: 10,
+                background: "rgba(6, 182, 212, 0.15)",
+                color: "var(--cyan)",
+                display: "grid",
+                placeItems: "center",
+              }}
+            >
               <Users size={17} />
             </span>
           </div>
           <div style={{ fontSize: "1.75rem", fontWeight: 900, color: "#fff" }}>
             {studentsTotalCount}
           </div>
-          <div style={{ fontSize: "0.75rem", color: "var(--cyan)", marginTop: "4px", fontWeight: 600 }}>
+          <div
+            style={{
+              fontSize: "0.75rem",
+              color: "var(--cyan)",
+              marginTop: "4px",
+              fontWeight: 600,
+            }}
+          >
             ● إجمالي طلاب الصفوف المسجلين
           </div>
         </div>
@@ -1781,28 +1670,65 @@ export default function TeacherDashboardPage() {
             padding: "1.25rem",
             cursor: "pointer",
             borderRadius: "16px",
-            border: activeTab === "codes" ? "1.5px solid var(--purple)" : "1px solid rgba(168, 85, 247, 0.2)",
-            background: activeTab === "codes" ? "rgba(168, 85, 247, 0.08)" : "rgba(15, 23, 42, 0.6)",
+            border:
+              activeTab === "codes"
+                ? "1.5px solid var(--purple)"
+                : "1px solid rgba(168, 85, 247, 0.2)",
+            background:
+              activeTab === "codes"
+                ? "rgba(168, 85, 247, 0.08)"
+                : "rgba(15, 23, 42, 0.6)",
             transition: "all 0.2s ease",
           }}
         >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-            <span style={{ fontSize: "0.82rem", fontWeight: 700, color: "var(--text-muted)" }}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginBottom: "8px",
+            }}
+          >
+            <span
+              style={{
+                fontSize: "0.82rem",
+                fontWeight: 700,
+                color: "var(--text-muted)",
+              }}
+            >
               أكواد الاشتراكات
             </span>
-            <span style={{ width: 34, height: 34, borderRadius: 10, background: "rgba(168, 85, 247, 0.15)", color: "var(--purple)", display: "grid", placeItems: "center" }}>
+            <span
+              style={{
+                width: 34,
+                height: 34,
+                borderRadius: 10,
+                background: "rgba(168, 85, 247, 0.15)",
+                color: "var(--purple)",
+                display: "grid",
+                placeItems: "center",
+              }}
+            >
               <ShieldCheck size={17} />
             </span>
           </div>
           <div style={{ fontSize: "1.75rem", fontWeight: 900, color: "#fff" }}>
-            {subscriptionCodesList.length > 0 ? subscriptionCodesList.length : "توليد"}
+            {subscriptionCodesList.length > 0
+              ? subscriptionCodesList.length
+              : "توليد"}
           </div>
-          <div style={{ fontSize: "0.75rem", color: "var(--purple)", marginTop: "4px", fontWeight: 600 }}>
+          <div
+            style={{
+              fontSize: "0.75rem",
+              color: "var(--purple)",
+              marginTop: "4px",
+              fontWeight: 600,
+            }}
+          >
             ● إدارة وتوليد الأكواد حسب الصف
           </div>
         </div>
       </div>
-
 
       {/* Main Administrative Tabs Bar (Exactly 4 focused tabs) */}
       <div
@@ -1878,9 +1804,7 @@ export default function TeacherDashboardPage() {
           }}
         >
           <Users size={16} style={{ color: "var(--cyan)" }} />
-          <span>
-            سجل الطلاب الشامل ({studentsTotalCount})
-          </span>
+          <span>سجل الطلاب الشامل ({studentsTotalCount})</span>
         </button>
 
         {/* TAB 4: SUBSCRIPTION CODES (GET /api/v1/admin/subscription-codes) */}
@@ -1950,7 +1874,8 @@ export default function TeacherDashboardPage() {
                   marginTop: "4px",
                 }}
               >
-                بمجرد النقر على "قبول"، سيتم اعتماد الطالب وتوليد كود اشتراك رسمي له للولوج للمنصة مباشرة
+                بمجرد النقر على "قبول"، سيتم اعتماد الطالب وتوليد كود اشتراك
+                رسمي له للولوج للمنصة مباشرة
               </p>
             </div>
           </div>
@@ -1958,7 +1883,15 @@ export default function TeacherDashboardPage() {
           {/* Modern Filter Bar for Requests */}
           <div className="modern-filter-bar">
             <div className="modern-filter-row">
-              <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap", flex: "1 1 auto" }}>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "10px",
+                  flexWrap: "wrap",
+                  flex: "1 1 auto",
+                }}
+              >
                 <div className="modern-search-box">
                   <span className="modern-search-icon">
                     <Search size={15} />
@@ -1967,7 +1900,9 @@ export default function TeacherDashboardPage() {
                     type="text"
                     placeholder="بحث في الطلبات بالاسم أو الهاتف..."
                     value={requestsSearch}
-                    onChange={(e) => setRequestsSearch(e.target.value, { replace: true })}
+                    onChange={(e) =>
+                      setRequestsSearch(e.target.value, { replace: true })
+                    }
                     className="modern-search-input"
                   />
                   {requestsSearch && (
@@ -1998,7 +1933,11 @@ export default function TeacherDashboardPage() {
                     setRequestsGrade(BRANCHES[0]);
                   }}
                   className="btn-secondary"
-                  style={{ fontSize: "0.78rem", padding: "6px 12px", gap: "6px" }}
+                  style={{
+                    fontSize: "0.78rem",
+                    padding: "6px 12px",
+                    gap: "6px",
+                  }}
                 >
                   <RotateCcw size={13} />
                   <span>إعادة تعيين الفلاتر</span>
@@ -2015,7 +1954,11 @@ export default function TeacherDashboardPage() {
                 color: "var(--text-muted)",
               }}
             >
-              <RefreshCw size={24} className="animate-spin" style={{ margin: "0 auto 10px", color: "var(--amber)" }} />
+              <RefreshCw
+                size={24}
+                className="animate-spin"
+                style={{ margin: "0 auto 10px", color: "var(--amber)" }}
+              />
               <p>جاري تحميل طلبات التفعيل من السيرفر...</p>
             </div>
           ) : pendingRequests.length === 0 ? (
@@ -2025,7 +1968,8 @@ export default function TeacherDashboardPage() {
                 maxWidth: "100%",
                 textAlign: "center",
                 padding: "3.5rem 1rem",
-                background: "linear-gradient(145deg, rgba(15, 23, 42, 0.9), rgba(10, 15, 28, 0.95))",
+                background:
+                  "linear-gradient(145deg, rgba(15, 23, 42, 0.9), rgba(10, 15, 28, 0.95))",
                 border: "1px solid rgba(16, 185, 129, 0.2)",
                 borderRadius: "18px",
               }}
@@ -2055,7 +1999,13 @@ export default function TeacherDashboardPage() {
               >
                 لا توجد طلبات تفعيل معلقة حالياً
               </h4>
-              <p style={{ fontSize: "0.84rem", color: "var(--text-muted)", margin: 0 }}>
+              <p
+                style={{
+                  fontSize: "0.84rem",
+                  color: "var(--text-muted)",
+                  margin: 0,
+                }}
+              >
                 جميع طلبات اشتراك الطلاب تم البت فيها والموافقة عليها بنجاح 🎉
               </p>
             </div>
@@ -2080,7 +2030,11 @@ export default function TeacherDashboardPage() {
                   setRequestsGrade(BRANCHES[0]);
                 }}
                 className="btn-secondary"
-                style={{ fontSize: "0.8rem", padding: "6px 14px", margin: "0 auto" }}
+                style={{
+                  fontSize: "0.8rem",
+                  padding: "6px 14px",
+                  margin: "0 auto",
+                }}
               >
                 إظهار جميع الطلبات المعلقة
               </button>
@@ -2098,14 +2052,18 @@ export default function TeacherDashboardPage() {
                         <th style={{ width: "16%" }}>هاتف الطالب</th>
                         <th style={{ width: "16%" }}>هاتف ولي الأمر</th>
                         <th style={{ width: "12%" }}>تاريخ التقديم</th>
-                        <th style={{ width: "14%", textAlign: "center" }}>قرار المعلم</th>
+                        <th style={{ width: "14%", textAlign: "center" }}>
+                          قرار المعلم
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
                       {filteredPendingRequests.map((req) => {
                         const studentObj = req.student || req.user || req;
-                        const firstName = req.first_name || studentObj.first_name || "";
-                        const lastName = req.last_name || studentObj.last_name || "";
+                        const firstName =
+                          req.first_name || studentObj.first_name || "";
+                        const lastName =
+                          req.last_name || studentObj.last_name || "";
                         const studentFullName =
                           `${firstName} ${lastName}`.trim() ||
                           req.name ||
@@ -2119,14 +2077,16 @@ export default function TeacherDashboardPage() {
                           studentObj.grade?.id ||
                           1;
 
-                        const gradeTitle =
-                          req.grade?.name ||
-                          studentObj.grade?.name ||
-                          req.grade_name ||
-                          studentObj.grade_name ||
-                          getGradeNameById(gradeId);
+                        const gradeTitle = getArabicGradeName(
+                          req.grade ||
+                            studentObj.grade ||
+                            req.grade_name ||
+                            studentObj.grade_name,
+                          gradeId,
+                        );
 
-                        const studentPhone = req.phone || studentObj.phone || "—";
+                        const studentPhone =
+                          req.phone || studentObj.phone || "—";
                         const parentPhone =
                           req.parent_phone ||
                           req.parentPhone ||
@@ -2137,13 +2097,20 @@ export default function TeacherDashboardPage() {
                         return (
                           <tr key={req.id}>
                             <td>
-                              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                              <div
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: "10px",
+                                }}
+                              >
                                 <div
                                   style={{
                                     width: "36px",
                                     height: "36px",
                                     borderRadius: "11px",
-                                    background: "linear-gradient(135deg, #f59e0b, #d97706)",
+                                    background:
+                                      "linear-gradient(135deg, #f59e0b, #d97706)",
                                     color: "#fff",
                                     display: "flex",
                                     alignItems: "center",
@@ -2151,16 +2118,29 @@ export default function TeacherDashboardPage() {
                                     fontWeight: 900,
                                     fontSize: "0.85rem",
                                     flexShrink: 0,
-                                    boxShadow: "0 3px 10px rgba(245, 158, 11, 0.25)",
+                                    boxShadow:
+                                      "0 3px 10px rgba(245, 158, 11, 0.25)",
                                   }}
                                 >
                                   {studentFullName.charAt(0)}
                                 </div>
                                 <div>
-                                  <div style={{ fontWeight: 800, color: "#fff", fontSize: "0.88rem" }}>
+                                  <div
+                                    style={{
+                                      fontWeight: 800,
+                                      color: "#fff",
+                                      fontSize: "0.88rem",
+                                    }}
+                                  >
                                     {studentFullName}
                                   </div>
-                                  <span style={{ fontSize: "0.7rem", color: "#f59e0b", fontWeight: 700 }}>
+                                  <span
+                                    style={{
+                                      fontSize: "0.7rem",
+                                      color: "#f59e0b",
+                                      fontWeight: 700,
+                                    }}
+                                  >
                                     طلب قيد المراجعة
                                   </span>
                                 </div>
@@ -2169,21 +2149,56 @@ export default function TeacherDashboardPage() {
                             <td>
                               <span className="badge-tag">{gradeTitle}</span>
                             </td>
-                            <td style={{ direction: "ltr", textAlign: "right", color: "var(--text-main)", fontFamily: "monospace", fontSize: "0.85rem" }}>
+                            <td
+                              style={{
+                                direction: "ltr",
+                                textAlign: "right",
+                                color: "var(--text-main)",
+                                fontFamily: "monospace",
+                                fontSize: "0.85rem",
+                              }}
+                            >
                               {studentPhone}
                             </td>
-                            <td style={{ direction: "ltr", textAlign: "right", color: "var(--text-muted)", fontFamily: "monospace", fontSize: "0.85rem" }}>
+                            <td
+                              style={{
+                                direction: "ltr",
+                                textAlign: "right",
+                                color: "var(--text-muted)",
+                                fontFamily: "monospace",
+                                fontSize: "0.85rem",
+                              }}
+                            >
                               {parentPhone}
                             </td>
-                            <td style={{ color: "var(--text-muted)", fontSize: "0.8rem", whiteSpace: "nowrap" }}>
-                              {req.created_at ? new Date(req.created_at).toLocaleDateString("ar-EG") : "اليوم"}
+                            <td
+                              style={{
+                                color: "var(--text-muted)",
+                                fontSize: "0.8rem",
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {req.created_at
+                                ? new Date(req.created_at).toLocaleDateString(
+                                    "ar-EG",
+                                  )
+                                : "اليوم"}
                             </td>
                             <td style={{ textAlign: "center" }}>
-                              <div style={{ display: "inline-flex", alignItems: "center", gap: "8px", justifyContent: "center" }}>
+                              <div
+                                style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "8px",
+                                  justifyContent: "center",
+                                }}
+                              >
                                 <button
                                   onClick={() =>
                                     handleApproveRequest(
-                                      req.subscription_id || req.id || req.subscription?.id,
+                                      req.subscription_id ||
+                                        req.subscription?.id ||
+                                        req.id,
                                     )
                                   }
                                   disabled={isProcessingAction}
@@ -2191,8 +2206,10 @@ export default function TeacherDashboardPage() {
                                   style={{
                                     padding: "6px 14px",
                                     fontSize: "0.78rem",
-                                    background: "linear-gradient(135deg, #10b981 0%, #059669 100%)",
-                                    boxShadow: "0 2px 12px rgba(16, 185, 129, 0.35)",
+                                    background:
+                                      "linear-gradient(135deg, #10b981 0%, #059669 100%)",
+                                    boxShadow:
+                                      "0 2px 12px rgba(16, 185, 129, 0.35)",
                                     gap: "5px",
                                   }}
                                   title="قبول طلب التفعيل وتوليد كود الاشتراك"
@@ -2203,7 +2220,9 @@ export default function TeacherDashboardPage() {
                                 <button
                                   onClick={() =>
                                     handleRejectRequest(
-                                      req.subscription_id || req.id || req.subscription?.id,
+                                      req.subscription_id ||
+                                        req.subscription?.id ||
+                                        req.id,
                                     )
                                   }
                                   disabled={isProcessingAction}
@@ -2234,7 +2253,8 @@ export default function TeacherDashboardPage() {
               <div className="modern-cards-mobile-view">
                 {filteredPendingRequests.map((req) => {
                   const studentObj = req.student || req.user || req;
-                  const firstName = req.first_name || studentObj.first_name || "";
+                  const firstName =
+                    req.first_name || studentObj.first_name || "";
                   const lastName = req.last_name || studentObj.last_name || "";
                   const studentFullName =
                     `${firstName} ${lastName}`.trim() ||
@@ -2249,12 +2269,13 @@ export default function TeacherDashboardPage() {
                     studentObj.grade?.id ||
                     1;
 
-                  const gradeTitle =
-                    req.grade?.name ||
-                    studentObj.grade?.name ||
-                    req.grade_name ||
-                    studentObj.grade_name ||
-                    getGradeNameById(gradeId);
+                  const gradeTitle = getArabicGradeName(
+                    req.grade ||
+                      studentObj.grade ||
+                      req.grade_name ||
+                      studentObj.grade_name,
+                    gradeId,
+                  );
 
                   const studentPhone = req.phone || studentObj.phone || "—";
                   const parentPhone =
@@ -2272,10 +2293,14 @@ export default function TeacherDashboardPage() {
                             {studentFullName.charAt(0)}
                           </div>
                           <div>
-                            <div className="student-card-name">{studentFullName}</div>
+                            <div className="student-card-name">
+                              {studentFullName}
+                            </div>
                             <div className="student-card-meta">
                               <span className="badge-tag">{gradeTitle}</span>
-                              <span className="student-card-id">طلب اشتراك جديد</span>
+                              <span className="student-card-id">
+                                طلب اشتراك جديد
+                              </span>
                             </div>
                           </div>
                         </div>
@@ -2290,15 +2315,29 @@ export default function TeacherDashboardPage() {
                         <div className="card-info-grid">
                           <div className="card-info-col">
                             <span className="card-label">هاتف الطالب:</span>
-                            <span className="card-value font-mono ltr">{studentPhone}</span>
+                            <span className="card-value font-mono ltr">
+                              {studentPhone}
+                            </span>
                           </div>
                           <div className="card-info-col">
                             <span className="card-label">هاتف ولي الأمر:</span>
-                            <span className="card-value font-mono ltr">{parentPhone}</span>
+                            <span className="card-value font-mono ltr">
+                              {parentPhone}
+                            </span>
                           </div>
                         </div>
-                        <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
-                          تاريخ الطلب: {req.created_at ? new Date(req.created_at).toLocaleDateString("ar-EG") : "اليوم"}
+                        <div
+                          style={{
+                            fontSize: "0.75rem",
+                            color: "var(--text-muted)",
+                          }}
+                        >
+                          تاريخ الطلب:{" "}
+                          {req.created_at
+                            ? new Date(req.created_at).toLocaleDateString(
+                                "ar-EG",
+                              )
+                            : "اليوم"}
                         </div>
                       </div>
 
@@ -2306,7 +2345,9 @@ export default function TeacherDashboardPage() {
                         <button
                           onClick={() =>
                             handleApproveRequest(
-                              req.subscription_id || req.id || req.subscription?.id,
+                              req.subscription_id ||
+                                req.subscription?.id ||
+                                req.id,
                             )
                           }
                           disabled={isProcessingAction}
@@ -2318,7 +2359,9 @@ export default function TeacherDashboardPage() {
                         <button
                           onClick={() =>
                             handleRejectRequest(
-                              req.subscription_id || req.id || req.subscription?.id,
+                              req.subscription_id ||
+                                req.subscription?.id ||
+                                req.id,
                             )
                           }
                           disabled={isProcessingAction}
@@ -2334,7 +2377,8 @@ export default function TeacherDashboardPage() {
               </div>
               <div className="modern-table-footer">
                 <span>
-                  عرض <strong>{filteredPendingRequests.length}</strong> من إجمالي <strong>{pendingRequests.length}</strong> طلب معلق
+                  عرض <strong>{filteredPendingRequests.length}</strong> من
+                  إجمالي <strong>{pendingRequests.length}</strong> طلب معلق
                 </span>
               </div>
             </div>
@@ -2392,7 +2436,8 @@ export default function TeacherDashboardPage() {
                   marginTop: "4px",
                 }}
               >
-                استعراض ومتابعة اشتراكات الطلاب، نسخ أكواد الدخول، وتصفية أو تعطيل الحسابات عند الحاجة
+                استعراض ومتابعة اشتراكات الطلاب، نسخ أكواد الدخول، وتصفية أو
+                تعطيل الحسابات عند الحاجة
               </p>
             </div>
           </div>
@@ -2409,7 +2454,9 @@ export default function TeacherDashboardPage() {
                   type="text"
                   placeholder="بحث بالاسم أو الكود أو الهاتف..."
                   value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value, { replace: true })}
+                  onChange={(e) =>
+                    setSearchQuery(e.target.value, { replace: true })
+                  }
                   className="modern-search-input"
                 />
                 {searchQuery && (
@@ -2426,14 +2473,20 @@ export default function TeacherDashboardPage() {
 
               {/* Status Segmented Filter */}
               <div className="status-filter-wrapper">
-                <div className="status-filter-group" role="group" aria-label="تصفية حسب الحالة">
+                <div
+                  className="status-filter-group"
+                  role="group"
+                  aria-label="تصفية حسب الحالة"
+                >
                   <button
                     type="button"
                     onClick={() => setApprovedStatus("all")}
                     className={`status-filter-btn ${approvedStatus === "all" ? "is-active" : ""}`}
                   >
                     <span>الكل</span>
-                    <span className="status-filter-count">{approvedStats.total}</span>
+                    <span className="status-filter-count">
+                      {approvedStats.total}
+                    </span>
                   </button>
 
                   <button
@@ -2441,9 +2494,18 @@ export default function TeacherDashboardPage() {
                     onClick={() => setApprovedStatus("active")}
                     className={`status-filter-btn ${approvedStatus === "active" ? "is-active" : ""}`}
                   >
-                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--emerald)" }} />
+                    <span
+                      style={{
+                        width: 6,
+                        height: 6,
+                        borderRadius: "50%",
+                        background: "var(--emerald)",
+                      }}
+                    />
                     <span>النشطين</span>
-                    <span className="status-filter-count">{approvedStats.active}</span>
+                    <span className="status-filter-count">
+                      {approvedStats.active}
+                    </span>
                   </button>
 
                   <button
@@ -2451,16 +2513,31 @@ export default function TeacherDashboardPage() {
                     onClick={() => setApprovedStatus("deactivated")}
                     className={`status-filter-btn is-deactivated ${approvedStatus === "deactivated" ? "is-active" : ""}`}
                   >
-                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--rose)" }} />
+                    <span
+                      style={{
+                        width: 6,
+                        height: 6,
+                        borderRadius: "50%",
+                        background: "var(--rose)",
+                      }}
+                    />
                     <span>المعطلين</span>
-                    <span className="status-filter-count">{approvedStats.deactivated}</span>
+                    <span className="status-filter-count">
+                      {approvedStats.deactivated}
+                    </span>
                   </button>
                 </div>
               </div>
             </div>
 
             {/* Row 2: Grade Pills & Reset Action */}
-            <div className="modern-filter-row" style={{ paddingTop: "0.25rem", borderTop: "1px solid rgba(148, 163, 184, 0.08)" }}>
+            <div
+              className="modern-filter-row"
+              style={{
+                paddingTop: "0.25rem",
+                borderTop: "1px solid rgba(148, 163, 184, 0.08)",
+              }}
+            >
               <GradeFilter
                 value={approvedGradeFilter}
                 onChange={setApprovedGradeFilter}
@@ -2468,7 +2545,9 @@ export default function TeacherDashboardPage() {
                 showLabel={true}
               />
 
-              {(searchQuery || approvedGradeFilter !== BRANCHES[0] || approvedStatus !== "all") && (
+              {(searchQuery ||
+                approvedGradeFilter !== BRANCHES[0] ||
+                approvedStatus !== "all") && (
                 <button
                   type="button"
                   onClick={() => {
@@ -2477,7 +2556,11 @@ export default function TeacherDashboardPage() {
                     setApprovedStatus("all");
                   }}
                   className="btn-secondary"
-                  style={{ fontSize: "0.78rem", padding: "6px 14px", gap: "6px" }}
+                  style={{
+                    fontSize: "0.78rem",
+                    padding: "6px 14px",
+                    gap: "6px",
+                  }}
                 >
                   <RotateCcw size={13} />
                   <span>إعادة تعيين الفلاتر</span>
@@ -2494,7 +2577,11 @@ export default function TeacherDashboardPage() {
                 color: "var(--text-muted)",
               }}
             >
-              <RefreshCw size={24} className="animate-spin" style={{ margin: "0 auto 10px", color: "var(--emerald)" }} />
+              <RefreshCw
+                size={24}
+                className="animate-spin"
+                style={{ margin: "0 auto 10px", color: "var(--emerald)" }}
+              />
               <p>جاري تحميل الاشتراكات المعتمدة...</p>
             </div>
           ) : filteredApproved.length === 0 ? (
@@ -2504,7 +2591,8 @@ export default function TeacherDashboardPage() {
                 maxWidth: "100%",
                 textAlign: "center",
                 padding: "3.5rem 1rem",
-                background: "linear-gradient(145deg, rgba(15, 23, 42, 0.9), rgba(10, 15, 28, 0.95))",
+                background:
+                  "linear-gradient(145deg, rgba(15, 23, 42, 0.9), rgba(10, 15, 28, 0.95))",
                 border: "1px solid rgba(148, 163, 184, 0.14)",
                 borderRadius: "18px",
               }}
@@ -2526,24 +2614,43 @@ export default function TeacherDashboardPage() {
                   >
                     <CheckCircle2 size={30} />
                   </div>
-                  <h4 style={{ color: "#fff", fontSize: "1.05rem", fontWeight: 900, marginBottom: "6px" }}>
+                  <h4
+                    style={{
+                      color: "#fff",
+                      fontSize: "1.05rem",
+                      fontWeight: 900,
+                      marginBottom: "6px",
+                    }}
+                  >
                     لا توجد اشتراكات معطلة حالياً ✨
                   </h4>
-                  <p style={{ color: "var(--text-muted)", fontSize: "0.84rem", margin: "0 0 1rem" }}>
+                  <p
+                    style={{
+                      color: "var(--text-muted)",
+                      fontSize: "0.84rem",
+                      margin: "0 0 1rem",
+                    }}
+                  >
                     جميع الاشتراكات المعتمدة في هذا القسم نشطة وسارية الصلاحية
                   </p>
                   <button
                     type="button"
                     onClick={() => setApprovedStatus("all")}
                     className="btn-secondary"
-                    style={{ fontSize: "0.8rem", padding: "7px 16px", margin: "0 auto" }}
+                    style={{
+                      fontSize: "0.8rem",
+                      padding: "7px 16px",
+                      margin: "0 auto",
+                    }}
                   >
                     عرض جميع الاشتراكات
                   </button>
                 </>
               ) : (
                 <>
-                  <p style={{ color: "var(--text-muted)", marginBottom: "1rem" }}>
+                  <p
+                    style={{ color: "var(--text-muted)", marginBottom: "1rem" }}
+                  >
                     لا توجد اشتراكات مطابقة لمعايير البحث والتصفية المحددة
                   </p>
                   <button
@@ -2554,7 +2661,11 @@ export default function TeacherDashboardPage() {
                       setApprovedStatus("all");
                     }}
                     className="btn-secondary"
-                    style={{ fontSize: "0.8rem", padding: "7px 16px", margin: "0 auto" }}
+                    style={{
+                      fontSize: "0.8rem",
+                      padding: "7px 16px",
+                      margin: "0 auto",
+                    }}
                   >
                     إعادة ضبط الفلاتر
                   </button>
@@ -2570,12 +2681,22 @@ export default function TeacherDashboardPage() {
                     <thead>
                       <tr>
                         <th style={{ width: "22%" }}>اسم الطالب</th>
-                        <th style={{ width: "13%", textAlign: "center" }}>الصف الدراسي</th>
-                        <th style={{ width: "18%", textAlign: "center" }}>كود الاشتراك</th>
-                        <th style={{ width: "13%", textAlign: "center" }}>حالة الاشتراك</th>
-                        <th style={{ width: "12%", textAlign: "center" }}>تاريخ البداية</th>
+                        <th style={{ width: "13%", textAlign: "center" }}>
+                          الصف الدراسي
+                        </th>
+                        <th style={{ width: "18%", textAlign: "center" }}>
+                          كود الاشتراك
+                        </th>
+                        <th style={{ width: "13%", textAlign: "center" }}>
+                          حالة الاشتراك
+                        </th>
+                        <th style={{ width: "12%", textAlign: "center" }}>
+                          تاريخ البداية
+                        </th>
                         <th style={{ width: "12%" }}>الهاتف</th>
-                        <th style={{ width: "14%", textAlign: "center" }}>الإجراءات</th>
+                        <th style={{ width: "14%", textAlign: "center" }}>
+                          الإجراءات
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
@@ -2587,8 +2708,10 @@ export default function TeacherDashboardPage() {
                           item.subscriptions?.[0] ||
                           item;
 
-                        const firstName = item.first_name || studentObj.first_name || "";
-                        const lastName = item.last_name || studentObj.last_name || "";
+                        const firstName =
+                          item.first_name || studentObj.first_name || "";
+                        const lastName =
+                          item.last_name || studentObj.last_name || "";
                         const studentName =
                           `${firstName} ${lastName}`.trim() ||
                           item.name ||
@@ -2617,7 +2740,8 @@ export default function TeacherDashboardPage() {
                           ) || "—";
 
                         const statusVal =
-                          getSubscriptionStatus(subObj, item, studentObj) || "active";
+                          getSubscriptionStatus(subObj, item, studentObj) ||
+                          "active";
                         const isDeactivated =
                           isDeactivatedStatus(statusVal) ||
                           subObj.is_active === false ||
@@ -2631,15 +2755,25 @@ export default function TeacherDashboardPage() {
                           subObj.subscription?.start_date ||
                           item.subscription?.start_date ||
                           "";
-                        const subscriptionStartDate =
-                          formatSubscriptionExpiry(subscriptionStartDateRaw);
+                        const subscriptionStartDate = formatSubscriptionExpiry(
+                          subscriptionStartDateRaw,
+                        );
                         const phone = studentObj.phone || item.phone || "—";
                         const isCopied = copiedCode === subscriptionCode;
 
                         return (
-                          <tr key={item.id} className={!isActive ? "row-deactivated" : ""}>
+                          <tr
+                            key={item.id}
+                            className={!isActive ? "row-deactivated" : ""}
+                          >
                             <td>
-                              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                              <div
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: "10px",
+                                }}
+                              >
                                 <div
                                   style={{
                                     width: "36px",
@@ -2676,8 +2810,16 @@ export default function TeacherDashboardPage() {
                                   >
                                     {studentName}
                                   </div>
-                                  <span style={{ fontSize: "0.7rem", color: "var(--text-dim)" }}>
-                                    ID: {item.student_id || studentObj.id || item.id}
+                                  <span
+                                    style={{
+                                      fontSize: "0.7rem",
+                                      color: "var(--text-dim)",
+                                    }}
+                                  >
+                                    ID:{" "}
+                                    {item.student_id ||
+                                      studentObj.id ||
+                                      item.id}
                                   </span>
                                 </div>
                               </div>
@@ -2712,18 +2854,26 @@ export default function TeacherDashboardPage() {
                                 {subscriptionCode !== "—" && (
                                   <button
                                     type="button"
-                                    onClick={() => handleCopyCode(subscriptionCode)}
+                                    onClick={() =>
+                                      handleCopyCode(subscriptionCode)
+                                    }
                                     style={{
                                       background: "none",
                                       border: "none",
-                                      color: isCopied ? "var(--emerald)" : "var(--text-muted)",
+                                      color: isCopied
+                                        ? "var(--emerald)"
+                                        : "var(--text-muted)",
                                       cursor: "pointer",
                                       padding: "2px",
                                       display: "flex",
                                     }}
                                     title="نسخ الكود"
                                   >
-                                    {isCopied ? <Check size={14} /> : <Copy size={14} />}
+                                    {isCopied ? (
+                                      <Check size={14} />
+                                    ) : (
+                                      <Copy size={14} />
+                                    )}
                                   </button>
                                 )}
                               </div>
@@ -2741,7 +2891,9 @@ export default function TeacherDashboardPage() {
                                   background: isActive
                                     ? "rgba(16, 185, 129, 0.14)"
                                     : "rgba(244, 63, 94, 0.14)",
-                                  color: isActive ? "var(--emerald)" : "#fda4af",
+                                  color: isActive
+                                    ? "var(--emerald)"
+                                    : "#fda4af",
                                   border: `1px solid ${isActive ? "rgba(16, 185, 129, 0.3)" : "rgba(244, 63, 94, 0.3)"}`,
                                   whiteSpace: "nowrap",
                                 }}
@@ -2751,10 +2903,14 @@ export default function TeacherDashboardPage() {
                                     width: "6px",
                                     height: "6px",
                                     borderRadius: "50%",
-                                    background: isActive ? "var(--emerald)" : "var(--rose)",
+                                    background: isActive
+                                      ? "var(--emerald)"
+                                      : "var(--rose)",
                                   }}
                                 />
-                                <span>{isActive ? "نشط ومفعل" : "معطل / محظور"}</span>
+                                <span>
+                                  {isActive ? "نشط ومفعل" : "معطل / محظور"}
+                                </span>
                               </span>
                             </td>
                             <td
@@ -2799,13 +2955,17 @@ export default function TeacherDashboardPage() {
                                           subscriptionId:
                                             item.subscription_id ||
                                             subObj.subscription_id ||
-                                            (subObj !== item ? subObj.id : null) ||
+                                            (subObj !== item
+                                              ? subObj.id
+                                              : null) ||
                                             item.active_subscription?.id ||
                                             item.subscriptions?.[0]?.id ||
                                             item.id,
                                           studentName,
                                           subscriptionCode:
-                                            subscriptionCode === "—" ? "" : subscriptionCode,
+                                            subscriptionCode === "—"
+                                              ? ""
+                                              : subscriptionCode,
                                         })
                                       }
                                       disabled={isProcessingAction}
@@ -2822,13 +2982,19 @@ export default function TeacherDashboardPage() {
                                       <PowerOff size={13} />
                                       <span>تعطيل</span>
                                     </button>
-                                    {hasActiveTrustedDevice(item, studentObj, subObj) && (
+                                    {hasActiveTrustedDevice(
+                                      item,
+                                      studentObj,
+                                      subObj,
+                                    ) && (
                                       <button
                                         onClick={() =>
                                           handleResetDevice(
                                             item.subscription_id ||
                                               subObj.subscription_id ||
-                                              (subObj !== item ? subObj.id : null) ||
+                                              (subObj !== item
+                                                ? subObj.id
+                                                : null) ||
                                               item.active_subscription?.id ||
                                               item.subscriptions?.[0]?.id ||
                                               item.id,
@@ -2840,7 +3006,8 @@ export default function TeacherDashboardPage() {
                                           padding: "5px 10px",
                                           fontSize: "0.75rem",
                                           color: "var(--amber)",
-                                          borderColor: "rgba(245, 158, 11, 0.3)",
+                                          borderColor:
+                                            "rgba(245, 158, 11, 0.3)",
                                           gap: "4px",
                                         }}
                                         title="إعادة ضبط الجهاز الموثوق ليتمكن الطالب من التسجيل بجهاز جديد"
@@ -2854,7 +3021,9 @@ export default function TeacherDashboardPage() {
                                   <button
                                     type="button"
                                     onClick={() =>
-                                      openStudentDeactivationConfirmation(studentObj || item)
+                                      openStudentDeactivationConfirmation(
+                                        studentObj || item,
+                                      )
                                     }
                                     disabled={isProcessingAction}
                                     className="btn-secondary"
@@ -2891,7 +3060,8 @@ export default function TeacherDashboardPage() {
                     item.subscriptions?.[0] ||
                     item;
 
-                  const firstName = item.first_name || studentObj.first_name || "";
+                  const firstName =
+                    item.first_name || studentObj.first_name || "";
                   const lastName = item.last_name || studentObj.last_name || "";
                   const studentName =
                     `${firstName} ${lastName}`.trim() ||
@@ -2935,8 +3105,9 @@ export default function TeacherDashboardPage() {
                     subObj.subscription?.start_date ||
                     item.subscription?.start_date ||
                     "";
-                  const subscriptionStartDate =
-                    formatSubscriptionExpiry(subscriptionStartDateRaw);
+                  const subscriptionStartDate = formatSubscriptionExpiry(
+                    subscriptionStartDateRaw,
+                  );
                   const phone = studentObj.phone || item.phone || "—";
                   const isCopied = copiedCode === subscriptionCode;
 
@@ -2954,11 +3125,14 @@ export default function TeacherDashboardPage() {
                             {studentName.charAt(0)}
                           </div>
                           <div>
-                            <div className="student-card-name">{studentName}</div>
+                            <div className="student-card-name">
+                              {studentName}
+                            </div>
                             <div className="student-card-meta">
                               <span className="badge-tag">{gradeName}</span>
                               <span className="student-card-id">
-                                ID: {item.student_id || studentObj.id || item.id}
+                                ID:{" "}
+                                {item.student_id || studentObj.id || item.id}
                               </span>
                             </div>
                           </div>
@@ -2977,7 +3151,9 @@ export default function TeacherDashboardPage() {
                         <div className="card-code-row">
                           <span className="card-label">كود الاشتراك:</span>
                           <div className="card-code-pill">
-                            <span className="card-code-text">{subscriptionCode}</span>
+                            <span className="card-code-text">
+                              {subscriptionCode}
+                            </span>
                             {subscriptionCode !== "—" && (
                               <button
                                 type="button"
@@ -2986,7 +3162,10 @@ export default function TeacherDashboardPage() {
                                 title="نسخ كود الاشتراك"
                               >
                                 {isCopied ? (
-                                  <Check size={14} style={{ color: "var(--emerald)" }} />
+                                  <Check
+                                    size={14}
+                                    style={{ color: "var(--emerald)" }}
+                                  />
                                 ) : (
                                   <Copy size={14} />
                                 )}
@@ -2999,11 +3178,15 @@ export default function TeacherDashboardPage() {
                         <div className="card-info-grid">
                           <div className="card-info-col">
                             <span className="card-label">رقم الهاتف:</span>
-                            <span className="card-value font-mono ltr">{phone}</span>
+                            <span className="card-value font-mono ltr">
+                              {phone}
+                            </span>
                           </div>
                           <div className="card-info-col">
                             <span className="card-label">تاريخ التفعيل:</span>
-                            <span className="card-value">{subscriptionStartDate}</span>
+                            <span className="card-value">
+                              {subscriptionStartDate}
+                            </span>
                           </div>
                         </div>
                       </div>
@@ -3025,7 +3208,9 @@ export default function TeacherDashboardPage() {
                                     item.id,
                                   studentName,
                                   subscriptionCode:
-                                    subscriptionCode === "—" ? "" : subscriptionCode,
+                                    subscriptionCode === "—"
+                                      ? ""
+                                      : subscriptionCode,
                                 })
                               }
                               disabled={isProcessingAction}
@@ -3035,7 +3220,11 @@ export default function TeacherDashboardPage() {
                               <span>تعطيل الاشتراك</span>
                             </button>
 
-                            {hasActiveTrustedDevice(item, studentObj, subObj) && (
+                            {hasActiveTrustedDevice(
+                              item,
+                              studentObj,
+                              subObj,
+                            ) && (
                               <button
                                 onClick={() =>
                                   handleResetDevice(
@@ -3059,7 +3248,9 @@ export default function TeacherDashboardPage() {
                           <button
                             type="button"
                             onClick={() =>
-                              openStudentDeactivationConfirmation(studentObj || item)
+                              openStudentDeactivationConfirmation(
+                                studentObj || item,
+                              )
                             }
                             disabled={isProcessingAction}
                             className="btn-card-action btn-danger-action"
@@ -3075,11 +3266,22 @@ export default function TeacherDashboardPage() {
               </div>
               <div className="modern-table-footer">
                 <span>
-                  عرض <strong>{filteredApproved.length}</strong> من إجمالي <strong>{approvedStats.total}</strong> اشتراك معتمد
+                  عرض <strong>{filteredApproved.length}</strong> من إجمالي{" "}
+                  <strong>{approvedStats.total}</strong> اشتراك معتمد
                 </span>
-                <span style={{ display: "inline-flex", gap: "12px", alignItems: "center" }}>
-                  <span style={{ color: "var(--emerald)" }}>● نشط: {approvedStats.active}</span>
-                  <span style={{ color: "var(--rose)" }}>● معطل: {approvedStats.deactivated}</span>
+                <span
+                  style={{
+                    display: "inline-flex",
+                    gap: "12px",
+                    alignItems: "center",
+                  }}
+                >
+                  <span style={{ color: "var(--emerald)" }}>
+                    ● نشط: {approvedStats.active}
+                  </span>
+                  <span style={{ color: "var(--rose)" }}>
+                    ● معطل: {approvedStats.deactivated}
+                  </span>
                 </span>
               </div>
             </div>
@@ -3137,7 +3339,8 @@ export default function TeacherDashboardPage() {
                   marginTop: "4px",
                 }}
               >
-                إدارة ملفات الطلاب الأكاديمية، متابعة حالة التفعيل، نسخ أكواد الدخول، وتصفية الطلاب المعطلين
+                إدارة ملفات الطلاب الأكاديمية، متابعة حالة التفعيل، نسخ أكواد
+                الدخول، وتصفية الطلاب المعطلين
               </p>
             </div>
           </div>
@@ -3154,7 +3357,9 @@ export default function TeacherDashboardPage() {
                   type="text"
                   placeholder="بحث بالاسم أو الهاتف أو الكود..."
                   value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value, { replace: true })}
+                  onChange={(e) =>
+                    setSearchQuery(e.target.value, { replace: true })
+                  }
                   className="modern-search-input"
                 />
                 {searchQuery && (
@@ -3171,14 +3376,20 @@ export default function TeacherDashboardPage() {
 
               {/* Status Segmented Filter */}
               <div className="status-filter-wrapper">
-                <div className="status-filter-group" role="group" aria-label="تصفية حالة الطلاب">
+                <div
+                  className="status-filter-group"
+                  role="group"
+                  aria-label="تصفية حالة الطلاب"
+                >
                   <button
                     type="button"
                     onClick={() => setStudentsStatus("all")}
                     className={`status-filter-btn ${studentsStatus === "all" ? "is-active" : ""}`}
                   >
                     <span>الكل</span>
-                    <span className="status-filter-count">{studentsStats.total}</span>
+                    <span className="status-filter-count">
+                      {studentsStats.total}
+                    </span>
                   </button>
 
                   <button
@@ -3186,9 +3397,18 @@ export default function TeacherDashboardPage() {
                     onClick={() => setStudentsStatus("active")}
                     className={`status-filter-btn ${studentsStatus === "active" ? "is-active" : ""}`}
                   >
-                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--emerald)" }} />
+                    <span
+                      style={{
+                        width: 6,
+                        height: 6,
+                        borderRadius: "50%",
+                        background: "var(--emerald)",
+                      }}
+                    />
                     <span>النشطين</span>
-                    <span className="status-filter-count">{studentsStats.active}</span>
+                    <span className="status-filter-count">
+                      {studentsStats.active}
+                    </span>
                   </button>
 
                   <button
@@ -3196,16 +3416,31 @@ export default function TeacherDashboardPage() {
                     onClick={() => setStudentsStatus("deactivated")}
                     className={`status-filter-btn is-deactivated ${studentsStatus === "deactivated" ? "is-active" : ""}`}
                   >
-                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--rose)" }} />
+                    <span
+                      style={{
+                        width: 6,
+                        height: 6,
+                        borderRadius: "50%",
+                        background: "var(--rose)",
+                      }}
+                    />
                     <span>المعطلين</span>
-                    <span className="status-filter-count">{studentsStats.deactivated}</span>
+                    <span className="status-filter-count">
+                      {studentsStats.deactivated}
+                    </span>
                   </button>
                 </div>
               </div>
             </div>
 
             {/* Row 2: Grade Pills & Reset Action */}
-            <div className="modern-filter-row" style={{ paddingTop: "0.25rem", borderTop: "1px solid rgba(148, 163, 184, 0.08)" }}>
+            <div
+              className="modern-filter-row"
+              style={{
+                paddingTop: "0.25rem",
+                borderTop: "1px solid rgba(148, 163, 184, 0.08)",
+              }}
+            >
               <GradeFilter
                 value={gradeFilter}
                 onChange={setGradeFilter}
@@ -3213,7 +3448,9 @@ export default function TeacherDashboardPage() {
                 showLabel={true}
               />
 
-              {(searchQuery || gradeFilter !== BRANCHES[0] || studentsStatus !== "all") && (
+              {(searchQuery ||
+                gradeFilter !== BRANCHES[0] ||
+                studentsStatus !== "all") && (
                 <button
                   type="button"
                   onClick={() => {
@@ -3222,7 +3459,11 @@ export default function TeacherDashboardPage() {
                     setStudentsStatus("all");
                   }}
                   className="btn-secondary"
-                  style={{ fontSize: "0.78rem", padding: "6px 14px", gap: "6px" }}
+                  style={{
+                    fontSize: "0.78rem",
+                    padding: "6px 14px",
+                    gap: "6px",
+                  }}
                 >
                   <RotateCcw size={13} />
                   <span>إعادة تعيين الفلاتر</span>
@@ -3236,627 +3477,870 @@ export default function TeacherDashboardPage() {
             {/* Desktop Table View */}
             <div className="modern-table-desktop-view">
               <div className="modern-table-scroll">
-              <table className="modern-table">
-                <thead>
-                  <tr>
-                    <th style={{ width: "50px", textAlign: "center" }}>#</th>
-                    <th style={{ width: "24%" }}>اسم الطالب</th>
-                    <th style={{ width: "14%", textAlign: "center" }}>الصف الدراسي</th>
-                    <th style={{ width: "13%" }}>هاتف الطالب</th>
-                    <th style={{ width: "13%" }}>هاتف ولي الأمر</th>
-                    <th style={{ width: "14%", textAlign: "center" }}>كود الدخول</th>
-                    <th style={{ width: "10%", textAlign: "center" }}>الحالة</th>
-                    <th style={{ width: "16%", textAlign: "center" }}>الإجراءات</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {isLoadingStudents ? (
+                <table className="modern-table">
+                  <thead>
                     <tr>
-                      <td colSpan={8} style={{ padding: "4rem 1rem", textAlign: "center", color: "var(--text-muted)" }}>
-                        <RefreshCw size={24} className="animate-spin" style={{ margin: "0 auto 10px", color: "var(--cyan)" }} />
-                        <p>جاري تحميل سجل الطلاب من الخادم...</p>
-                      </td>
+                      <th style={{ width: "36px", textAlign: "center", padding: "11px 4px" }}>#</th>
+                      <th style={{ width: "22%" }}>اسم الطالب</th>
+                      <th style={{ width: "13%", textAlign: "center" }}>
+                        الصف الدراسي
+                      </th>
+                      <th style={{ width: "11%" }}>هاتف الطالب</th>
+                      <th style={{ width: "11%" }}>هاتف ولي الأمر</th>
+                      <th style={{ width: "13%", textAlign: "center" }}>
+                        كود الدخول
+                      </th>
+                      <th style={{ width: "8%", textAlign: "center" }}>
+                        الحالة
+                      </th>
+                      <th style={{ width: "18%", textAlign: "center" }}>
+                        الإجراءات
+                      </th>
                     </tr>
-                  ) : filteredStudents.length === 0 ? (
-                    <tr>
-                      <td colSpan={8} style={{ padding: "4rem 1rem", textAlign: "center" }}>
-                        {studentsStatus === "deactivated" ? (
-                          <div style={{ maxWidth: 440, margin: "0 auto" }}>
-                            <div
-                              style={{
-                                width: "54px",
-                                height: "54px",
-                                borderRadius: "50%",
-                                background: "rgba(16, 185, 129, 0.12)",
-                                color: "var(--emerald)",
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                margin: "0 auto 12px",
-                              }}
-                            >
-                              <CheckCircle2 size={28} />
-                            </div>
-                            <h4 style={{ color: "#fff", fontSize: "1.05rem", fontWeight: 800, marginBottom: "6px" }}>
-                              لا يوجد طلاب معطلين حالياً 🎉
-                            </h4>
-                            <p style={{ color: "var(--text-muted)", fontSize: "0.84rem", marginBottom: "1rem" }}>
-                              جميع حسابات الطلاب في هذه الصفحة نشطة ومفعلة للدخول إلى المنصة
-                            </p>
-                            <button
-                              type="button"
-                              onClick={() => setStudentsStatus("all")}
-                              className="btn-secondary"
-                              style={{ fontSize: "0.8rem", padding: "6px 16px", margin: "0 auto" }}
-                            >
-                              عرض جميع الطلاب
-                            </button>
-                          </div>
-                        ) : (
-                          <div>
-                            <p style={{ color: "var(--text-muted)", marginBottom: "1rem", fontSize: "0.9rem" }}>
-                              لا يوجد طلاب يطابقون خيارات البحث أو التصفية المحددة
-                            </p>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setSearchQuery("");
-                                setGradeFilter(BRANCHES[0]);
-                                setStudentsStatus("all");
-                              }}
-                              className="btn-secondary"
-                              style={{ fontSize: "0.8rem", padding: "6px 14px", margin: "0 auto" }}
-                            >
-                              إعادة ضبط الفلاتر
-                            </button>
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredStudents.map((std, index) => {
-                      const studentSubscription = approvedSubscriptions.find(
-                        (item) => {
-                          const itemStudentId =
-                            item.student?.id ||
-                            item.user?.id ||
-                            item.student_id ||
-                            item.user_id;
-                          return (
-                            (itemStudentId != null &&
-                              String(itemStudentId) ===
-                                String(std.student_id || std.id)) ||
-                            String(
-                              item.subscription_id ||
-                                item.subscription?.id ||
-                                item.active_subscription?.id ||
-                                item.subscriptions?.[0]?.id ||
-                                item.id ||
-                                "",
-                            ) ===
-                              String(
-                                std.subscription_id ||
-                                  std.subscription?.id ||
-                                  std.active_subscription?.id ||
-                                  "__no_subscription_id__",
-                              )
-                          );
-                        },
-                      );
-                      const studentCode = getSubscriptionCode(
-                        std.subscription_code,
-                        std.code,
-                        std.subscriptions?.[0],
-                        std.active_subscription,
-                        studentSubscription?.subscription_code,
-                        studentSubscription?.code,
-                        studentSubscription?.subscription,
-                        studentSubscription?.active_subscription,
-                        studentSubscription?.subscriptions?.[0],
-                      );
-                      const isStudentActive = isStudentRecordActive(
-                        std,
-                        studentSubscription,
-                      );
-                      const isCopied = copiedCode === studentCode;
-
-                      return (
-                        <tr
-                          key={std.id}
-                          className={!isStudentActive ? "row-deactivated" : ""}
+                  </thead>
+                  <tbody>
+                    {isLoadingStudents ? (
+                      <tr>
+                        <td
+                          colSpan={8}
+                          style={{
+                            padding: "4rem 1rem",
+                            textAlign: "center",
+                            color: "var(--text-muted)",
+                          }}
                         >
-                          {/* Index */}
-                          <td style={{ textAlign: "center", color: "var(--text-dim)", fontWeight: 700, fontSize: "0.78rem" }}>
-                            {index + 1}
-                          </td>
-
-                          {/* Student Name & Avatar */}
-                          <td>
-                            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                          <RefreshCw
+                            size={24}
+                            className="animate-spin"
+                            style={{
+                              margin: "0 auto 10px",
+                              color: "var(--cyan)",
+                            }}
+                          />
+                          <p>جاري تحميل سجل الطلاب من الخادم...</p>
+                        </td>
+                      </tr>
+                    ) : filteredStudents.length === 0 ? (
+                      <tr>
+                        <td
+                          colSpan={8}
+                          style={{ padding: "4rem 1rem", textAlign: "center" }}
+                        >
+                          {studentsStatus === "deactivated" ? (
+                            <div style={{ maxWidth: 440, margin: "0 auto" }}>
                               <div
                                 style={{
-                                  width: "36px",
-                                  height: "36px",
-                                  borderRadius: "11px",
-                                  background: isStudentActive
-                                    ? "linear-gradient(135deg, #4f46e5 0%, #06b6d4 100%)"
-                                    : "linear-gradient(135deg, #e11d48 0%, #9f1239 100%)",
-                                  color: "#fff",
+                                  width: "54px",
+                                  height: "54px",
+                                  borderRadius: "50%",
+                                  background: "rgba(16, 185, 129, 0.12)",
+                                  color: "var(--emerald)",
                                   display: "flex",
                                   alignItems: "center",
                                   justifyContent: "center",
-                                  fontWeight: 900,
-                                  fontSize: "0.85rem",
-                                  flexShrink: 0,
-                                  boxShadow: isStudentActive
-                                    ? "0 3px 10px rgba(6, 182, 212, 0.25)"
-                                    : "0 3px 10px rgba(225, 29, 72, 0.25)",
+                                  margin: "0 auto 12px",
                                 }}
                               >
-                                {(std.first_name || std.name || "ط").trim().charAt(0)}
+                                <CheckCircle2 size={28} />
                               </div>
-                              <div style={{ minWidth: 0 }}>
-                                <div
-                                  title={`${std.first_name || ""} ${std.last_name || ""}`.trim() || std.name}
-                                  style={{
-                                    fontWeight: 800,
-                                    color: "#ffffff",
-                                    fontSize: "0.88rem",
-                                    whiteSpace: "nowrap",
-                                    overflow: "hidden",
-                                    textOverflow: "ellipsis",
-                                  }}
-                                >
-                                  {`${std.first_name || ""} ${std.last_name || ""}`.trim() ||
-                                    std.name ||
-                                    "طالب"}
-                                </div>
-                                <div style={{ fontSize: "0.72rem", color: "var(--text-dim)", marginTop: "1px" }}>
-                                  {std.governorate ? `${std.governorate} • ` : ""}ID: {std.id}
-                                </div>
-                              </div>
-                            </div>
-                          </td>
-
-                          {/* Grade */}
-                          <td style={{ textAlign: "center" }}>
-                            <span className="badge-tag">
-                              {getArabicGradeName(std.grade, std.grade_id)}
-                            </span>
-                          </td>
-
-                          {/* Phone */}
-                          <td>
-                            <div
-                              style={{
-                                direction: "ltr",
-                                textAlign: "right",
-                                display: "inline-flex",
-                                alignItems: "center",
-                                gap: "5px",
-                                color: "var(--text-main)",
-                                fontFamily: "monospace",
-                                fontSize: "0.85rem",
-                              }}
-                            >
-                              <Phone size={12} style={{ color: "var(--text-dim)" }} />
-                              <span>{std.phone || "—"}</span>
-                            </div>
-                          </td>
-
-                          {/* Parent Phone */}
-                          <td>
-                            <div
-                              style={{
-                                direction: "ltr",
-                                textAlign: "right",
-                                display: "inline-flex",
-                                alignItems: "center",
-                                gap: "5px",
-                                color: "var(--text-muted)",
-                                fontFamily: "monospace",
-                                fontSize: "0.85rem",
-                              }}
-                            >
-                              <Phone size={12} style={{ color: "var(--text-dim)" }} />
-                              <span>{std.parentPhone || std.parent_phone || "—"}</span>
-                            </div>
-                          </td>
-
-                          {/* Code with Copy Button */}
-                          <td style={{ textAlign: "center" }}>
-                            <div
-                              style={{
-                                display: "inline-flex",
-                                alignItems: "center",
-                                gap: "6px",
-                                background: "rgba(6, 182, 212, 0.08)",
-                                border: "1px solid rgba(6, 182, 212, 0.22)",
-                                padding: "4px 9px",
-                                borderRadius: "8px",
-                              }}
-                            >
-                              <span
+                              <h4
                                 style={{
-                                  fontFamily: "monospace",
-                                  color: "var(--cyan)",
+                                  color: "#fff",
+                                  fontSize: "1.05rem",
                                   fontWeight: 800,
-                                  fontSize: "0.82rem",
-                                  letterSpacing: "0.6px",
-                                  direction: "ltr",
+                                  marginBottom: "6px",
                                 }}
                               >
-                                {studentCode || "قيد الاعتماد"}
-                              </span>
-                              {studentCode && (
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleCopyCode(studentCode);
-                                  }}
-                                  style={{
-                                    background: "none",
-                                    border: "none",
-                                    color: isCopied ? "var(--emerald)" : "var(--text-dim)",
-                                    cursor: "pointer",
-                                    padding: "2px",
-                                    display: "flex",
-                                  }}
-                                  title="نسخ كود الطالب"
-                                >
-                                  {isCopied ? <Check size={13} /> : <Copy size={13} />}
-                                </button>
-                              )}
+                                لا يوجد طلاب معطلين حالياً 🎉
+                              </h4>
+                              <p
+                                style={{
+                                  color: "var(--text-muted)",
+                                  fontSize: "0.84rem",
+                                  marginBottom: "1rem",
+                                }}
+                              >
+                                جميع حسابات الطلاب في هذه الصفحة نشطة ومفعلة
+                                للدخول إلى المنصة
+                              </p>
+                              <button
+                                type="button"
+                                onClick={() => setStudentsStatus("all")}
+                                className="btn-secondary"
+                                style={{
+                                  fontSize: "0.8rem",
+                                  padding: "6px 16px",
+                                  margin: "0 auto",
+                                }}
+                              >
+                                عرض جميع الطلاب
+                              </button>
                             </div>
-                          </td>
+                          ) : (
+                            <div>
+                              <p
+                                style={{
+                                  color: "var(--text-muted)",
+                                  marginBottom: "1rem",
+                                  fontSize: "0.9rem",
+                                }}
+                              >
+                                لا يوجد طلاب يطابقون خيارات البحث أو التصفية
+                                المحددة
+                              </p>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSearchQuery("");
+                                  setGradeFilter(BRANCHES[0]);
+                                  setStudentsStatus("all");
+                                }}
+                                className="btn-secondary"
+                                style={{
+                                  fontSize: "0.8rem",
+                                  padding: "6px 14px",
+                                  margin: "0 auto",
+                                }}
+                              >
+                                إعادة ضبط الفلاتر
+                              </button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredStudents.map((std, index) => {
+                        const studentSubscription = approvedSubscriptions.find(
+                          (item) => {
+                            const itemStudentId =
+                              item.student?.id ||
+                              item.user?.id ||
+                              item.student_id ||
+                              item.user_id;
+                            return (
+                              (itemStudentId != null &&
+                                String(itemStudentId) ===
+                                  String(std.student_id || std.id)) ||
+                              String(
+                                item.subscription_id ||
+                                  item.subscription?.id ||
+                                  item.active_subscription?.id ||
+                                  item.subscriptions?.[0]?.id ||
+                                  item.id ||
+                                  "",
+                              ) ===
+                                String(
+                                  std.subscription_id ||
+                                    std.subscription?.id ||
+                                    std.active_subscription?.id ||
+                                    "__no_subscription_id__",
+                                )
+                            );
+                          },
+                        );
+                        const studentCode = getSubscriptionCode(
+                          std.subscription_code,
+                          std.code,
+                          std.subscriptions?.[0],
+                          std.active_subscription,
+                          studentSubscription?.subscription_code,
+                          studentSubscription?.code,
+                          studentSubscription?.subscription,
+                          studentSubscription?.active_subscription,
+                          studentSubscription?.subscriptions?.[0],
+                        );
+                        const isStudentActive = isStudentRecordActive(
+                          std,
+                          studentSubscription,
+                        );
+                        const isCopied = copiedCode === studentCode;
 
-                          {/* Status Badge */}
-                          <td style={{ textAlign: "center" }}>
-                            <span
+                        return (
+                          <tr
+                            key={std.id}
+                            className={
+                              !isStudentActive ? "row-deactivated" : ""
+                            }
+                          >
+                            {/* Index */}
+                            <td
                               style={{
-                                display: "inline-flex",
-                                alignItems: "center",
-                                gap: "5px",
-                                fontSize: "0.74rem",
-                                fontWeight: 800,
-                                padding: "3px 9px",
-                                borderRadius: "999px",
-                                background: isStudentActive
-                                  ? "rgba(16, 185, 129, 0.14)"
-                                  : "rgba(244, 63, 94, 0.14)",
-                                color: isStudentActive ? "var(--emerald)" : "var(--rose)",
-                                border: `1px solid ${isStudentActive ? "rgba(16, 185, 129, 0.3)" : "rgba(244, 63, 94, 0.3)"}`,
-                                whiteSpace: "nowrap",
+                                textAlign: "center",
+                                color: "var(--text-dim)",
+                                fontWeight: 700,
+                                fontSize: "0.76rem",
+                                padding: "10px 4px",
                               }}
                             >
+                              {index + 1}
+                            </td>
+
+                            {/* Student Name & Avatar */}
+                            <td>
+                              <div
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: "8px",
+                                }}
+                              >
+                                <div
+                                  style={{
+                                    width: "34px",
+                                    height: "34px",
+                                    borderRadius: "10px",
+                                    background: isStudentActive
+                                      ? "linear-gradient(135deg, #4f46e5 0%, #06b6d4 100%)"
+                                      : "linear-gradient(135deg, #e11d48 0%, #9f1239 100%)",
+                                    color: "#fff",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    fontWeight: 900,
+                                    fontSize: "0.82rem",
+                                    flexShrink: 0,
+                                    boxShadow: isStudentActive
+                                      ? "0 3px 10px rgba(6, 182, 212, 0.25)"
+                                      : "0 3px 10px rgba(225, 29, 72, 0.25)",
+                                  }}
+                                >
+                                  {(std.first_name || std.name || "ط")
+                                    .trim()
+                                    .charAt(0)}
+                                </div>
+                                <div style={{ minWidth: 0 }}>
+                                  <div
+                                    title={
+                                      `${std.first_name || ""} ${std.last_name || ""}`.trim() ||
+                                      std.name
+                                    }
+                                    style={{
+                                      fontWeight: 800,
+                                      color: "#ffffff",
+                                      fontSize: "0.88rem",
+                                      whiteSpace: "nowrap",
+                                      overflow: "hidden",
+                                      textOverflow: "ellipsis",
+                                    }}
+                                  >
+                                    {`${std.first_name || ""} ${std.last_name || ""}`.trim() ||
+                                      std.name ||
+                                      "طالب"}
+                                  </div>
+                                  <div
+                                    style={{
+                                      fontSize: "0.72rem",
+                                      color: "var(--text-dim)",
+                                      marginTop: "1px",
+                                    }}
+                                  >
+                                    {std.governorate
+                                      ? `${std.governorate} • `
+                                      : ""}
+                                    ID: {std.id}
+                                  </div>
+                                </div>
+                              </div>
+                            </td>
+
+                            {/* Grade */}
+                            <td style={{ textAlign: "center" }}>
+                              <span className="badge-tag">
+                                {getArabicGradeName(std.grade, std.grade_id)}
+                              </span>
+                            </td>
+
+                            {/* Phone */}
+                            <td>
+                              <div
+                                style={{
+                                  direction: "ltr",
+                                  textAlign: "right",
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "5px",
+                                  color: "var(--text-main)",
+                                  fontFamily: "monospace",
+                                  fontSize: "0.85rem",
+                                }}
+                              >
+                                <Phone
+                                  size={12}
+                                  style={{ color: "var(--text-dim)" }}
+                                />
+                                <span>{std.phone || "—"}</span>
+                              </div>
+                            </td>
+
+                            {/* Parent Phone */}
+                            <td>
+                              <div
+                                style={{
+                                  direction: "ltr",
+                                  textAlign: "right",
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "5px",
+                                  color: "var(--text-muted)",
+                                  fontFamily: "monospace",
+                                  fontSize: "0.85rem",
+                                }}
+                              >
+                                <Phone
+                                  size={12}
+                                  style={{ color: "var(--text-dim)" }}
+                                />
+                                <span>
+                                  {std.parentPhone || std.parent_phone || "—"}
+                                </span>
+                              </div>
+                            </td>
+
+                            {/* Code with Copy Button */}
+                            <td style={{ textAlign: "center" }}>
+                              <div
+                                style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "6px",
+                                  background: "rgba(6, 182, 212, 0.08)",
+                                  border: "1px solid rgba(6, 182, 212, 0.22)",
+                                  padding: "4px 9px",
+                                  borderRadius: "8px",
+                                }}
+                              >
+                                <span
+                                  style={{
+                                    fontFamily: "monospace",
+                                    color: "var(--cyan)",
+                                    fontWeight: 800,
+                                    fontSize: "0.82rem",
+                                    letterSpacing: "0.6px",
+                                    direction: "ltr",
+                                  }}
+                                >
+                                  {studentCode || "قيد الاعتماد"}
+                                </span>
+                                {studentCode && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleCopyCode(studentCode);
+                                    }}
+                                    style={{
+                                      background: "none",
+                                      border: "none",
+                                      color: isCopied
+                                        ? "var(--emerald)"
+                                        : "var(--text-dim)",
+                                      cursor: "pointer",
+                                      padding: "2px",
+                                      display: "flex",
+                                    }}
+                                    title="نسخ كود الطالب"
+                                  >
+                                    {isCopied ? (
+                                      <Check size={13} />
+                                    ) : (
+                                      <Copy size={13} />
+                                    )}
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+
+                            {/* Status Badge */}
+                            <td style={{ textAlign: "center" }}>
                               <span
                                 style={{
-                                  width: "6px",
-                                  height: "6px",
-                                  borderRadius: "50%",
-                                  background: isStudentActive ? "var(--emerald)" : "var(--rose)",
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "5px",
+                                  fontSize: "0.74rem",
+                                  fontWeight: 800,
+                                  padding: "3px 9px",
+                                  borderRadius: "999px",
+                                  background: isStudentActive
+                                    ? "rgba(16, 185, 129, 0.14)"
+                                    : "rgba(244, 63, 94, 0.14)",
+                                  color: isStudentActive
+                                    ? "var(--emerald)"
+                                    : "var(--rose)",
+                                  border: `1px solid ${isStudentActive ? "rgba(16, 185, 129, 0.3)" : "rgba(244, 63, 94, 0.3)"}`,
+                                  whiteSpace: "nowrap",
                                 }}
-                              />
-                              <span>{isStudentActive ? "مفعل" : "معطل"}</span>
-                            </span>
-                          </td>
-
-                          {/* Action Buttons */}
-                          <td style={{ textAlign: "center" }}>
-                            <div
-                              style={{
-                                display: "inline-flex",
-                                alignItems: "center",
-                                gap: "6px",
-                                justifyContent: "center",
-                              }}
-                            >
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleOpenStudentDetails({
-                                    ...std,
-                                    code: studentCode || std.code || std.subscription_code,
-                                    subscription_code: studentCode || std.subscription_code || std.code,
-                                    studentSubscription,
-                                    grade: getArabicGradeName(std.grade, std.grade_id),
-                                    grade_name: getArabicGradeName(std.grade, std.grade_id),
-                                  });
-                                }}
-                                className="btn-secondary"
-                                style={{ padding: "5px 9px", fontSize: "0.75rem", gap: "4px" }}
-                                title="عرض التفاصيل الكاملة"
                               >
-                                <Eye size={13} style={{ color: "var(--cyan)" }} />
-                                <span>تفاصيل</span>
-                              </button>
+                                <span
+                                  style={{
+                                    width: "6px",
+                                    height: "6px",
+                                    borderRadius: "50%",
+                                    background: isStudentActive
+                                      ? "var(--emerald)"
+                                      : "var(--rose)",
+                                  }}
+                                />
+                                <span>{isStudentActive ? "مفعل" : "معطل"}</span>
+                              </span>
+                            </td>
 
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setEditingStudent(std);
-                                }}
-                                className="btn-secondary"
-                                style={{ padding: "5px 9px", fontSize: "0.75rem", color: "var(--amber)", gap: "4px" }}
-                                title="تعديل بيانات الطالب"
-                              >
-                                <Edit3 size={13} />
-                                <span>تعديل</span>
-                              </button>
+                            {/* Action Buttons */}
+                            <td style={{ textAlign: "center" }}>
+                              {!isStudentActive ? (
+                                <span
+                                  className="badge-tag"
+                                  style={{
+                                    color: "var(--rose)",
+                                    background: "rgba(244, 63, 94, 0.12)",
+                                    borderColor: "rgba(244, 63, 94, 0.3)",
+                                  }}
+                                >
+                                  غير نشط
+                                </span>
+                              ) : (
+                                <div
+                                  style={{
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    gap: "4px",
+                                    justifyContent: "center",
+                                    whiteSpace: "nowrap",
+                                  }}
+                                >
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleOpenStudentDetails({
+                                        ...std,
+                                        code:
+                                          studentCode ||
+                                          std.code ||
+                                          std.subscription_code,
+                                        subscription_code:
+                                          studentCode ||
+                                          std.subscription_code ||
+                                          std.code,
+                                        studentSubscription,
+                                        grade: getArabicGradeName(
+                                          std.grade,
+                                          std.grade_id,
+                                        ),
+                                        grade_name: getArabicGradeName(
+                                          std.grade,
+                                          std.grade_id,
+                                        ),
+                                      });
+                                    }}
+                                    className="btn-secondary"
+                                    style={{
+                                      padding: "4px 7px",
+                                      fontSize: "0.74rem",
+                                      gap: "3px",
+                                    }}
+                                    title="عرض التفاصيل الكاملة"
+                                  >
+                                    <Eye
+                                      size={12}
+                                      style={{ color: "var(--cyan)" }}
+                                    />
+                                    <span>تفاصيل</span>
+                                  </button>
 
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  openStudentDeactivationConfirmation(std);
-                                }}
-                                className="btn-secondary"
-                                style={{
-                                  padding: "5px 8px",
-                                  fontSize: "0.75rem",
-                                  color: "var(--rose)",
-                                  borderColor: "rgba(244, 63, 94, 0.3)",
-                                }}
-                                title={isStudentActive ? "تعطيل حساب الطالب" : "حذف حساب الطالب المعطل نهائياً"}
-                              >
-                                {isStudentActive ? <PowerOff size={13} /> : <Trash2 size={13} />}
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setEditingStudent(std);
+                                    }}
+                                    className="btn-secondary"
+                                    style={{
+                                      padding: "4px 7px",
+                                      fontSize: "0.74rem",
+                                      color: "var(--amber)",
+                                      gap: "3px",
+                                    }}
+                                    title="تعديل بيانات الطالب"
+                                  >
+                                    <Edit3 size={12} />
+                                    <span>تعديل</span>
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      openStudentDeactivationConfirmation(std);
+                                    }}
+                                    className="btn-secondary"
+                                    style={{
+                                      padding: "4px 6px",
+                                      fontSize: "0.74rem",
+                                      color: "var(--rose)",
+                                      borderColor: "rgba(244, 63, 94, 0.3)",
+                                    }}
+                                    title="تعطيل حساب الطالب"
+                                  >
+                                    <PowerOff size={12} />
+                                  </button>
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
-          </div>
 
-          {/* Mobile Cards View */}
-          <div className="modern-cards-mobile-view">
-            {isLoadingStudents ? (
-              <div style={{ padding: "3rem 1rem", textAlign: "center", color: "var(--text-muted)" }}>
-                <RefreshCw size={24} className="animate-spin" style={{ margin: "0 auto 10px", color: "var(--cyan)" }} />
-                <p>جاري تحميل سجل الطلاب...</p>
-              </div>
-            ) : filteredStudents.length === 0 ? (
-              <div style={{ padding: "2.5rem 1rem", textAlign: "center" }}>
-                {studentsStatus === "deactivated" ? (
-                  <div style={{ maxWidth: 360, margin: "0 auto" }}>
-                    <div
-                      style={{
-                        width: "50px",
-                        height: "50px",
-                        borderRadius: "50%",
-                        background: "rgba(16, 185, 129, 0.12)",
-                        color: "var(--emerald)",
-                        display: "grid",
-                        placeItems: "center",
-                        margin: "0 auto 12px",
-                      }}
-                    >
-                      <CheckCircle2 size={26} />
+            {/* Mobile Cards View */}
+            <div className="modern-cards-mobile-view">
+              {isLoadingStudents ? (
+                <div
+                  style={{
+                    padding: "3rem 1rem",
+                    textAlign: "center",
+                    color: "var(--text-muted)",
+                  }}
+                >
+                  <RefreshCw
+                    size={24}
+                    className="animate-spin"
+                    style={{ margin: "0 auto 10px", color: "var(--cyan)" }}
+                  />
+                  <p>جاري تحميل سجل الطلاب...</p>
+                </div>
+              ) : filteredStudents.length === 0 ? (
+                <div style={{ padding: "2.5rem 1rem", textAlign: "center" }}>
+                  {studentsStatus === "deactivated" ? (
+                    <div style={{ maxWidth: 360, margin: "0 auto" }}>
+                      <div
+                        style={{
+                          width: "50px",
+                          height: "50px",
+                          borderRadius: "50%",
+                          background: "rgba(16, 185, 129, 0.12)",
+                          color: "var(--emerald)",
+                          display: "grid",
+                          placeItems: "center",
+                          margin: "0 auto 12px",
+                        }}
+                      >
+                        <CheckCircle2 size={26} />
+                      </div>
+                      <h4
+                        style={{
+                          color: "#fff",
+                          fontSize: "1rem",
+                          fontWeight: 800,
+                          marginBottom: "6px",
+                        }}
+                      >
+                        لا يوجد طلاب معطلين حالياً 🎉
+                      </h4>
+                      <p
+                        style={{
+                          color: "var(--text-muted)",
+                          fontSize: "0.82rem",
+                          marginBottom: "1rem",
+                        }}
+                      >
+                        جميع حسابات الطلاب نشطة ومفعلة للدخول
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setStudentsStatus("all")}
+                        className="btn-secondary"
+                        style={{
+                          fontSize: "0.8rem",
+                          padding: "6px 16px",
+                          margin: "0 auto",
+                        }}
+                      >
+                        عرض جميع الطلاب
+                      </button>
                     </div>
-                    <h4 style={{ color: "#fff", fontSize: "1rem", fontWeight: 800, marginBottom: "6px" }}>
-                      لا يوجد طلاب معطلين حالياً 🎉
-                    </h4>
-                    <p style={{ color: "var(--text-muted)", fontSize: "0.82rem", marginBottom: "1rem" }}>
-                      جميع حسابات الطلاب نشطة ومفعلة للدخول
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => setStudentsStatus("all")}
-                      className="btn-secondary"
-                      style={{ fontSize: "0.8rem", padding: "6px 16px", margin: "0 auto" }}
-                    >
-                      عرض جميع الطلاب
-                    </button>
-                  </div>
-                ) : (
-                  <div>
-                    <p style={{ color: "var(--text-muted)", marginBottom: "1rem", fontSize: "0.88rem" }}>
-                      لا يوجد طلاب يطابقون خيارات البحث أو التصفية المحددة
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSearchQuery("");
-                        setGradeFilter(BRANCHES[0]);
-                        setStudentsStatus("all");
-                      }}
-                      className="btn-secondary"
-                      style={{ fontSize: "0.8rem", padding: "6px 14px", margin: "0 auto" }}
-                    >
-                      إعادة ضبط الفلاتر
-                    </button>
-                  </div>
-                )}
-              </div>
-            ) : (
-              filteredStudents.map((std, index) => {
-                const studentSubscription = approvedSubscriptions.find(
-                  (item) => {
-                    const itemStudentId =
-                      item.student?.id ||
-                      item.user?.id ||
-                      item.student_id ||
-                      item.user_id;
-                    return (
-                      (itemStudentId != null &&
-                        String(itemStudentId) ===
-                          String(std.student_id || std.id)) ||
-                      String(
-                        item.subscription_id ||
-                          item.subscription?.id ||
-                          item.active_subscription?.id ||
-                          item.subscriptions?.[0]?.id ||
-                          item.id ||
-                          "",
-                      ) ===
+                  ) : (
+                    <div>
+                      <p
+                        style={{
+                          color: "var(--text-muted)",
+                          marginBottom: "1rem",
+                          fontSize: "0.88rem",
+                        }}
+                      >
+                        لا يوجد طلاب يطابقون خيارات البحث أو التصفية المحددة
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSearchQuery("");
+                          setGradeFilter(BRANCHES[0]);
+                          setStudentsStatus("all");
+                        }}
+                        className="btn-secondary"
+                        style={{
+                          fontSize: "0.8rem",
+                          padding: "6px 14px",
+                          margin: "0 auto",
+                        }}
+                      >
+                        إعادة ضبط الفلاتر
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                filteredStudents.map((std, index) => {
+                  const studentSubscription = approvedSubscriptions.find(
+                    (item) => {
+                      const itemStudentId =
+                        item.student?.id ||
+                        item.user?.id ||
+                        item.student_id ||
+                        item.user_id;
+                      return (
+                        (itemStudentId != null &&
+                          String(itemStudentId) ===
+                            String(std.student_id || std.id)) ||
                         String(
-                          std.subscription_id ||
-                            std.subscription?.id ||
-                            std.active_subscription?.id ||
-                            "__no_subscription_id__",
-                        )
-                    );
-                  },
-                );
-                const studentCode = getSubscriptionCode(
-                  std.subscription_code,
-                  std.code,
-                  studentSubscription?.subscription_code,
-                  std.active_subscription?.code,
-                  std.subscriptions?.[0]?.code,
-                  studentSubscription?.code,
-                  std.active_subscription?.subscription_code,
-                  std.subscriptions?.[0]?.subscription_code,
-                  studentSubscription?.subscription?.code,
-                  studentSubscription?.subscription?.subscription_code,
-                );
-                const isStudentActive =
-                  std.is_active !== false &&
-                  std.status !== "inactive" &&
-                  std.status !== "deactivated";
-                const isCopied = copiedCode === studentCode;
-                const studentName = std.name || `${std.first_name || ""} ${std.last_name || ""}`.trim() || "طالب بدون اسم";
-                const gradeName = getArabicGradeName(std.grade, std.grade_id);
-                const phone = std.phone || "—";
-                const parentPhone = std.parentPhone || std.parent_phone || "—";
+                          item.subscription_id ||
+                            item.subscription?.id ||
+                            item.active_subscription?.id ||
+                            item.subscriptions?.[0]?.id ||
+                            item.id ||
+                            "",
+                        ) ===
+                          String(
+                            std.subscription_id ||
+                              std.subscription?.id ||
+                              std.active_subscription?.id ||
+                              "__no_subscription_id__",
+                          )
+                      );
+                    },
+                  );
+                  const studentCode = getSubscriptionCode(
+                    std.subscription_code,
+                    std.code,
+                    studentSubscription?.subscription_code,
+                    std.active_subscription?.code,
+                    std.subscriptions?.[0]?.code,
+                    studentSubscription?.code,
+                    std.active_subscription?.subscription_code,
+                    std.subscriptions?.[0]?.subscription_code,
+                    studentSubscription?.subscription?.code,
+                    studentSubscription?.subscription?.subscription_code,
+                  );
+                  const isStudentActive = isStudentRecordActive(
+                    std,
+                    studentSubscription,
+                  );
+                  const isCopied = copiedCode === studentCode;
+                  const studentName =
+                    std.name ||
+                    `${std.first_name || ""} ${std.last_name || ""}`.trim() ||
+                    "طالب بدون اسم";
+                  const gradeName = getArabicGradeName(std.grade, std.grade_id);
+                  const phone = std.phone || "—";
+                  const parentPhone =
+                    std.parentPhone || std.parent_phone || "—";
 
-                return (
-                  <div
-                    key={std.id || index}
-                    className={`student-mobile-card ${!isStudentActive ? "is-deactivated" : ""}`}
-                  >
-                    {/* Header */}
-                    <div className="student-mobile-card-header">
-                      <div className="student-card-info">
-                        <div
-                          className={`student-card-avatar ${isStudentActive ? "is-student" : "is-deactivated"}`}
-                        >
-                          {studentName.charAt(0)}
+                  return (
+                    <div
+                      key={std.id || index}
+                      className={`student-mobile-card ${!isStudentActive ? "is-deactivated" : ""}`}
+                    >
+                      {/* Header */}
+                      <div className="student-mobile-card-header">
+                        <div className="student-card-info">
+                          <div
+                            className={`student-card-avatar ${isStudentActive ? "is-student" : "is-deactivated"}`}
+                          >
+                            {studentName.charAt(0)}
+                          </div>
+                          <div>
+                            <div className="student-card-name">
+                              {studentName}
+                            </div>
+                            <div className="student-card-meta">
+                              <span className="badge-tag">{gradeName}</span>
+                              <span className="student-card-id">
+                                ID: {std.student_id || std.id}
+                              </span>
+                            </div>
+                          </div>
                         </div>
-                        <div>
-                          <div className="student-card-name">{studentName}</div>
-                          <div className="student-card-meta">
-                            <span className="badge-tag">{gradeName}</span>
-                            <span className="student-card-id">
-                              ID: {std.student_id || std.id}
+
+                        <span
+                          className={`status-badge-pill ${isStudentActive ? "active-pill" : "deactivated-pill"}`}
+                        >
+                          <span className="status-dot" />
+                          <span>{isStudentActive ? "مفعل" : "معطل"}</span>
+                        </span>
+                      </div>
+
+                      {/* Body */}
+                      <div className="student-mobile-card-body">
+                        <div className="card-code-row">
+                          <span className="card-label">كود الدخول:</span>
+                          <div className="card-code-pill">
+                            <span className="card-code-text">
+                              {studentCode || "قيد الاعتماد"}
                             </span>
+                            {studentCode && (
+                              <button
+                                type="button"
+                                onClick={() => handleCopyCode(studentCode)}
+                                className="card-code-copy-btn"
+                                title="نسخ كود الطالب"
+                              >
+                                {isCopied ? (
+                                  <Check
+                                    size={14}
+                                    style={{ color: "var(--emerald)" }}
+                                  />
+                                ) : (
+                                  <Copy size={14} />
+                                )}
+                                <span>{isCopied ? "تم النسخ" : "نسخ"}</span>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="card-info-grid">
+                          <div className="card-info-col">
+                            <span className="card-label">هاتف الطالب:</span>
+                            {phone !== "—" ? (
+                              <a
+                                href={`tel:${phone}`}
+                                className="card-value font-mono ltr"
+                                style={{
+                                  color: "var(--cyan)",
+                                  textDecoration: "none",
+                                }}
+                              >
+                                {phone}
+                              </a>
+                            ) : (
+                              <span className="card-value font-mono ltr">
+                                —
+                              </span>
+                            )}
+                          </div>
+                          <div className="card-info-col">
+                            <span className="card-label">هاتف ولي الأمر:</span>
+                            {parentPhone !== "—" ? (
+                              <a
+                                href={`tel:${parentPhone}`}
+                                className="card-value font-mono ltr"
+                                style={{
+                                  color: "var(--text-muted)",
+                                  textDecoration: "none",
+                                }}
+                              >
+                                {parentPhone}
+                              </a>
+                            ) : (
+                              <span className="card-value font-mono ltr">
+                                —
+                              </span>
+                            )}
                           </div>
                         </div>
                       </div>
 
-                      <span
-                        className={`status-badge-pill ${isStudentActive ? "active-pill" : "deactivated-pill"}`}
-                      >
-                        <span className="status-dot" />
-                        <span>{isStudentActive ? "مفعل" : "معطل"}</span>
-                      </span>
-                    </div>
-
-                    {/* Body */}
-                    <div className="student-mobile-card-body">
-                      <div className="card-code-row">
-                        <span className="card-label">كود الدخول:</span>
-                        <div className="card-code-pill">
-                          <span className="card-code-text">{studentCode || "قيد الاعتماد"}</span>
-                          {studentCode && (
+                      {/* Footer Actions */}
+                      <div className="student-mobile-card-footer">
+                        {!isStudentActive ? (
+                          <span
+                            className="status-badge-pill deactivated-pill"
+                            style={{ margin: "0 auto" }}
+                          >
+                            <span className="status-dot" />
+                            <span>غير نشط</span>
+                          </span>
+                        ) : (
+                          <>
                             <button
                               type="button"
-                              onClick={() => handleCopyCode(studentCode)}
-                              className="card-code-copy-btn"
-                              title="نسخ كود الطالب"
+                              onClick={() => {
+                                handleOpenStudentDetails({
+                                  ...std,
+                                  code:
+                                    studentCode ||
+                                    std.code ||
+                                    std.subscription_code,
+                                  subscription_code:
+                                    studentCode ||
+                                    std.subscription_code ||
+                                    std.code,
+                                  studentSubscription,
+                                  grade: getArabicGradeName(
+                                    std.grade,
+                                    std.grade_id,
+                                  ),
+                                  grade_name: getArabicGradeName(
+                                    std.grade,
+                                    std.grade_id,
+                                  ),
+                                });
+                              }}
+                              className="btn-card-action btn-info-action"
                             >
-                              {isCopied ? (
-                                <Check size={14} style={{ color: "var(--emerald)" }} />
-                              ) : (
-                                <Copy size={14} />
-                              )}
-                              <span>{isCopied ? "تم النسخ" : "نسخ"}</span>
+                              <Eye size={14} />
+                              <span>التفاصيل</span>
                             </button>
-                          )}
-                        </div>
-                      </div>
 
-                      <div className="card-info-grid">
-                        <div className="card-info-col">
-                          <span className="card-label">هاتف الطالب:</span>
-                          {phone !== "—" ? (
-                            <a href={`tel:${phone}`} className="card-value font-mono ltr" style={{ color: "var(--cyan)", textDecoration: "none" }}>
-                              {phone}
-                            </a>
-                          ) : (
-                            <span className="card-value font-mono ltr">—</span>
-                          )}
-                        </div>
-                        <div className="card-info-col">
-                          <span className="card-label">هاتف ولي الأمر:</span>
-                          {parentPhone !== "—" ? (
-                            <a href={`tel:${parentPhone}`} className="card-value font-mono ltr" style={{ color: "var(--text-muted)", textDecoration: "none" }}>
-                              {parentPhone}
-                            </a>
-                          ) : (
-                            <span className="card-value font-mono ltr">—</span>
-                          )}
-                        </div>
+                            <button
+                              type="button"
+                              onClick={() => setEditingStudent(std)}
+                              className="btn-card-action btn-warning-action"
+                            >
+                              <Edit3 size={14} />
+                              <span>تعديل</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() =>
+                                openStudentDeactivationConfirmation(std)
+                              }
+                              className="btn-card-action btn-danger-action"
+                            >
+                              <PowerOff size={14} />
+                              <span>تعطيل</span>
+                            </button>
+                          </>
+                        )}
                       </div>
                     </div>
-
-                    {/* Footer Actions */}
-                    <div className="student-mobile-card-footer">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          handleOpenStudentDetails({
-                            ...std,
-                            code: studentCode || std.code || std.subscription_code,
-                            subscription_code: studentCode || std.subscription_code || std.code,
-                            studentSubscription,
-                            grade: getArabicGradeName(std.grade, std.grade_id),
-                            grade_name: getArabicGradeName(std.grade, std.grade_id),
-                          });
-                        }}
-                        className="btn-card-action btn-info-action"
-                      >
-                        <Eye size={14} />
-                        <span>التفاصيل</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => setEditingStudent(std)}
-                        className="btn-card-action btn-warning-action"
-                      >
-                        <Edit3 size={14} />
-                        <span>تعديل</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => openStudentDeactivationConfirmation(std)}
-                        className="btn-card-action btn-danger-action"
-                      >
-                        {isStudentActive ? <PowerOff size={14} /> : <Trash2 size={14} />}
-                        <span>{isStudentActive ? "تعطيل" : "حذف"}</span>
-                      </button>
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
+                  );
+                })
+              )}
+            </div>
             <div className="modern-table-footer">
               <span>
-                عرض <strong>{filteredStudents.length}</strong> طالب في هذه الصفحة • إجمالي المسجلين: <strong>{studentsTotalCount}</strong>
+                عرض <strong>{filteredStudents.length}</strong> طالب في هذه
+                الصفحة • إجمالي المسجلين: <strong>{studentsTotalCount}</strong>
               </span>
-              <span style={{ display: "inline-flex", gap: "12px", alignItems: "center" }}>
-                <span style={{ color: "var(--emerald)" }}>● نشط: {studentsStats.active}</span>
-                <span style={{ color: "var(--rose)" }}>● معطل: {studentsStats.deactivated}</span>
+              <span
+                style={{
+                  display: "inline-flex",
+                  gap: "12px",
+                  alignItems: "center",
+                }}
+              >
+                <span style={{ color: "var(--emerald)" }}>
+                  ● نشط: {studentsStats.active}
+                </span>
+                <span style={{ color: "var(--rose)" }}>
+                  ● معطل: {studentsStats.deactivated}
+                </span>
               </span>
             </div>
           </div>
@@ -3875,833 +4359,44 @@ export default function TeacherDashboardPage() {
               <button
                 type="button"
                 className="btn-secondary"
-                disabled={isLoadingStudents || studentsPagination.current_page <= 1}
-                onClick={() => setUrlState({ page: String(currentStudentsPage - 1) })}
+                disabled={
+                  isLoadingStudents || studentsPagination.current_page <= 1
+                }
+                onClick={() =>
+                  setUrlState({ page: String(currentStudentsPage - 1) })
+                }
                 style={{ fontSize: "0.82rem", padding: "8px 16px" }}
               >
                 السابق
               </button>
-              <span style={{ color: "var(--text-muted)", fontSize: "0.85rem", fontWeight: 700 }}>
-                صفحة <strong style={{ color: "var(--cyan)" }}>{studentsPagination.current_page}</strong> من <strong>{studentsPagination.last_page}</strong>
+              <span
+                style={{
+                  color: "var(--text-muted)",
+                  fontSize: "0.85rem",
+                  fontWeight: 700,
+                }}
+              >
+                صفحة{" "}
+                <strong style={{ color: "var(--cyan)" }}>
+                  {studentsPagination.current_page}
+                </strong>{" "}
+                من <strong>{studentsPagination.last_page}</strong>
               </span>
               <button
                 type="button"
                 className="btn-secondary"
-                disabled={isLoadingStudents || studentsPagination.current_page >= studentsPagination.last_page}
-                onClick={() => setUrlState({ page: String(currentStudentsPage + 1) })}
+                disabled={
+                  isLoadingStudents ||
+                  studentsPagination.current_page >=
+                    studentsPagination.last_page
+                }
+                onClick={() =>
+                  setUrlState({ page: String(currentStudentsPage + 1) })
+                }
                 style={{ fontSize: "0.82rem", padding: "8px 16px" }}
               >
                 التالي
               </button>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ==================================================================== */}
-      {/* TAB 4: LESSONS & VIDEOS MANAGEMENT                                   */}
-      {/* ==================================================================== */}
-      {activeTab === "lessons" && (
-        <div>
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              flexWrap: "wrap",
-              gap: "1rem",
-              marginBottom: "1.25rem",
-            }}
-          >
-            <h3 style={{ fontSize: "1.1rem", fontWeight: 800, color: "#fff" }}>{"\u0645\u0643\u062a\u0628\u0629 \u0627\u0644\u0645\u062d\u0627\u0636\u0631\u0627\u062a"}</h3>
-
-          </div>
-
-{isLoadingLessons && (
-            <div
-              role="status"
-              style={{ color: "var(--text-muted)", marginBottom: "1rem" }}
-            >
-              جاري تحميل الدروس من الخادم...
-            </div>
-          )}
-
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns:
-                "repeat(auto-fit, minmax(min(100%, 340px), 1fr))",
-              gap: "1rem",
-              alignItems: "stretch",
-            }}
-          >
-            {lessonsList.map((lesson) => (
-              <div
-                key={lesson.id}
-                className="feature-card"
-                style={{
-                  width: "100%",
-                  maxWidth: "560px",
-                  padding: "1.25rem",
-                  border: "1px solid rgba(148, 163, 184, 0.14)",
-                  transition:
-                    "transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease",
-                  display: "flex",
-                  flexDirection: "column",
-                  justifyContent: "space-between",
-                }}
-                onMouseEnter={(event) => {
-                  event.currentTarget.style.transform = "translateY(-3px)";
-                  event.currentTarget.style.borderColor =
-                    "rgba(6, 182, 212, 0.4)";
-                  event.currentTarget.style.boxShadow =
-                    "0 14px 32px rgba(0, 0, 0, 0.22)";
-                }}
-                onMouseLeave={(event) => {
-                  event.currentTarget.style.transform = "translateY(0)";
-                  event.currentTarget.style.borderColor =
-                    "rgba(148, 163, 184, 0.14)";
-                  event.currentTarget.style.boxShadow = "none";
-                }}
-              >
-                <div>
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      flexWrap: "wrap",
-                      gap: "8px",
-                      marginBottom: "12px",
-                    }}
-                  >
-                    <span className="badge-tag">{lesson.grade}</span>
-                    <span
-                      style={{
-                        fontSize: "0.75rem",
-                        color: "var(--cyan)",
-                        fontWeight: 700,
-                        maxWidth: "65%",
-                        textAlign: "left",
-                      }}
-                    >
-                      {lesson.branch}
-                    </span>
-                  </div>
-                  <h4
-                    style={{
-                      fontSize: "1.05rem",
-                      fontWeight: 800,
-                      color: "#fff",
-                      marginBottom: "8px",
-                    }}
-                  >
-                    {lesson.title}
-                  </h4>
-                  <p
-                    style={{
-                      fontSize: "0.78rem",
-                      color: "var(--text-muted)",
-                      marginBottom: "16px",
-                      lineHeight: 1.8,
-                      minHeight: "2.8em",
-                    }}
-                  >
-                    {lesson.description || "شرح متكامل وتمارين بنك الأسئلة"}
-                  </p>
-                </div>
-
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "flex-start",
-                    paddingTop: "10px",
-                    borderTop: "1px solid rgba(255,255,255,0.06)",
-                    flexWrap: "wrap",
-                    gap: "8px",
-                  }}
-                >
-                  <div
-                    style={{
-                      display: "flex",
-                      gap: "8px",
-                      flex: 1,
-                      flexWrap: "wrap",
-                    }}
-                  >
-                    <a
-                      href={`/watch/${lesson.id}`}
-                      className="btn-secondary"
-                      style={{
-                        color: "var(--cyan)",
-                        padding: "5px 10px",
-                        fontSize: "0.75rem",
-                        textDecoration: "none",
-                      }}
-                      title="معاينة مشغل الفيديو التفاعلي"
-                    >
-                      <Video size={13} />
-                      <span>معاينة الفيديو</span>
-                    </a>
-                    <a
-                      href={`/quiz/${lesson.id}`}
-                      className="btn-secondary"
-                      style={{
-                        color: "var(--amber)",
-                        padding: "5px 10px",
-                        fontSize: "0.75rem",
-                        textDecoration: "none",
-                      }}
-                      title="معاينة امتحان الدرس"
-                    >
-                      <FileQuestion size={13} />
-                      <span>امتحان الدرس</span>
-                    </a>
-                  </div>
-
-                  <button
-                    onClick={() => deleteLesson(lesson.id)}
-                    className="btn-secondary"
-                    style={{
-                      color: "var(--rose)",
-                      padding: "5px 10px",
-                      fontSize: "0.75rem",
-                    }}
-                  >
-                    <Trash2 size={13} />
-                    <span>حذف المحاضرة</span>
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* ==================================================================== */}
-      {/* TAB 5: ADMIN EXAMS & QUESTIONS (OpenAPI 3.0.0 Admin Exams)             */}
-      {/* ==================================================================== */}
-      {activeTab === "quizzes" && (
-        <div>
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              flexWrap: "wrap",
-              gap: "1rem",
-              marginBottom: "1.25rem",
-            }}
-          >
-            <div>
-              <h3
-                style={{ fontSize: "1.1rem", fontWeight: 800, color: "#fff" }}
-              >
-                إدارة الاختبارات وبنك الأسئلة التفاعلي:
-              </h3>
-              <p
-                style={{
-                  fontSize: "0.8rem",
-                  color: "var(--text-muted)",
-                  marginTop: "4px",
-                }}
-              >
-                إنشاء اختبارات مربوطة بالدروس، ضبط وقت ونسبة النجاح، وإدارة
-                الأسئلة وخيارات الإجابة
-              </p>
-            </div>
-            <div style={{ display: "flex", gap: "8px" }}>
-              <button
-                onClick={() => fetchAdminExams()}
-                className="btn-secondary"
-                style={{ fontSize: "0.85rem" }}
-                disabled={isLoadingExams}
-              >
-                <RefreshCw
-                  size={15}
-                  className={isLoadingExams ? "animate-spin" : ""}
-                />
-                <span>تحديث الاختبارات</span>
-              </button>
-              <button
-                onClick={() => {
-                  if (lessonsList.length === 0) {
-                    showToast("يُرجى إضافة محاضرة أولًا لربط الامتحان بها.", "error");
-                    return;
-                  }
-                  setEditingExam(null);
-                  setNewExamData({
-                    lesson_id: lessonsList[0].id,
-                    title: "",
-                    description: "",
-                    duration_minutes: 20,
-                    passing_percentage: 60,
-                  });
-                  setIsAddExamOpen(true);
-                }}
-                className="btn-primary"
-                style={{ fontSize: "0.85rem" }}
-              >
-                <Plus size={16} />
-                <span>إنشاء اختبار جديد</span>
-              </button>
-            </div>
-          </div>
-
-          {isLoadingExams ? (
-            <div
-              style={{
-                textAlign: "center",
-                padding: "3rem",
-                color: "var(--cyan)",
-              }}
-            >
-              <RefreshCw
-                size={24}
-                className="animate-spin"
-                style={{ margin: "0 auto 8px" }}
-              />
-              <p>جاري تحميل الاختبارات...</p>
-            </div>
-          ) : adminExamsList.length === 0 ? (
-            <div
-              className="feature-card"
-              style={{ padding: "3rem", textAlign: "center" }}
-            >
-              <FileQuestion
-                size={48}
-                style={{ color: "var(--text-muted)", margin: "0 auto 1rem" }}
-              />
-              <h4
-                style={{ color: "#fff", fontSize: "1.1rem", fontWeight: 800 }}
-              >
-                لا توجد اختبارات مسجلة حالياً
-              </h4>
-              <p
-                style={{
-                  color: "var(--text-muted)",
-                  fontSize: "0.85rem",
-                  marginTop: "6px",
-                }}
-              >
-                اضغط على "إنشاء اختبار جديد" لإضافة أول اختبار وتعيين أسئلته
-              </p>
-            </div>
-          ) : (
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: "1.25rem",
-              }}
-            >
-              {adminExamsList.map((exam) => {
-                const isExpanded = expandedExamId === exam.id;
-                const questions = exam.questions || [];
-                const linkedLesson = lessonsList.find(
-                  (lesson) => String(lesson.id) === String(exam.lesson_id),
-                );
-
-                return (
-                  <div
-                    key={exam.id}
-                    className="feature-card"
-                    style={{
-                      padding: "1.25rem",
-                      border: isExpanded ? "1px solid var(--cyan)" : undefined,
-                      transition: "all 0.2s ease",
-                    }}
-                  >
-                    {/* Exam Header */}
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "flex-start",
-                        flexWrap: "wrap",
-                        gap: "1rem",
-                        paddingBottom: isExpanded ? "12px" : "0",
-                        borderBottom: isExpanded
-                          ? "1px solid rgba(255,255,255,0.08)"
-                          : "none",
-                      }}
-                    >
-                      <div style={{ flex: 1 }}>
-                        <div
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: "8px",
-                            flexWrap: "wrap",
-                          }}
-                        >
-                          <span
-                            className="badge-tag"
-                            style={{
-                              background:
-                                exam.is_active !== false
-                                  ? "rgba(16, 185, 129, 0.15)"
-                                  : "rgba(244, 63, 94, 0.15)",
-                              color:
-                                exam.is_active !== false
-                                  ? "var(--emerald)"
-                                  : "var(--rose)",
-                              borderColor:
-                                exam.is_active !== false
-                                  ? "rgba(16, 185, 129, 0.3)"
-                                  : "rgba(244, 63, 94, 0.3)",
-                            }}
-                          >
-                            {exam.is_active !== false
-                              ? "نشط ومتاح للطلاب"
-                              : "معطل"}
-                          </span>
-                          <span
-                            className="badge-tag"
-                            style={{ color: "var(--cyan)" }}
-                          >
-                            {linkedLesson?.title || `الدرس #${exam.lesson_id}`}
-                          </span>
-                          <span
-                            style={{
-                              fontSize: "0.8rem",
-                              color: "var(--amber)",
-                              display: "inline-flex",
-                              alignItems: "center",
-                              gap: "4px",
-                            }}
-                          >
-                            <Clock size={13} />
-                            {exam.duration_minutes || 20} دقيقة
-                          </span>
-                          <span
-                            style={{
-                              fontSize: "0.8rem",
-                              color: "var(--emerald)",
-                              display: "inline-flex",
-                              alignItems: "center",
-                              gap: "4px",
-                            }}
-                          >
-                            <CheckCircle2 size={13} />
-                            نسبة النجاح: {exam.passing_percentage || 60}%
-                          </span>
-                        </div>
-
-                        <h4
-                          style={{
-                            fontSize: "1.1rem",
-                            fontWeight: 800,
-                            color: "#fff",
-                            marginTop: "8px",
-                          }}
-                        >
-                          {exam.title}
-                        </h4>
-                        {exam.description && (
-                          <p
-                            style={{
-                              fontSize: "0.85rem",
-                              color: "var(--text-muted)",
-                              marginTop: "4px",
-                            }}
-                          >
-                            {exam.description}
-                          </p>
-                        )}
-                      </div>
-
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: "8px",
-                        }}
-                      >
-                        <button
-                          onClick={() =>
-                            setExpandedExamId(isExpanded ? null : exam.id)
-                          }
-                          className="btn-secondary"
-                          style={{ fontSize: "0.8rem", padding: "6px 12px" }}
-                        >
-                          <FileQuestion size={14} />
-                          <span>
-                            {isExpanded
-                              ? "إخفاء الأسئلة"
-                              : `الأسئلة (${questions.length})`}
-                          </span>
-                        </button>
-                        <button
-                          onClick={() => {
-                            setEditingExam(exam);
-                            setNewExamData({
-                              lesson_id: exam.lesson_id || 1,
-                              title: exam.title || "",
-                              description: exam.description || "",
-                              duration_minutes: exam.duration_minutes || 20,
-                              passing_percentage: exam.passing_percentage || 60,
-                              is_active: exam.is_active !== false,
-                            });
-                            setIsAddExamOpen(true);
-                          }}
-                          className="btn-secondary"
-                          style={{ fontSize: "0.8rem", padding: "6px 10px" }}
-                          title="تعديل الاختبار"
-                        >
-                          <Edit3 size={14} />
-                        </button>
-                        <button
-                          onClick={async () => {
-                            if (
-                              window.confirm(
-                                `هل أنت متأكد من حذف اختبار "${exam.title}"؟`,
-                              )
-                            ) {
-                              await deleteAdminExam(exam.id);
-                            }
-                          }}
-                          className="btn-secondary"
-                          style={{
-                            fontSize: "0.8rem",
-                            padding: "6px 10px",
-                            color: "var(--rose)",
-                          }}
-                          title="حذف الاختبار"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Expanded Questions & Options Section */}
-                    {isExpanded && (
-                      <div style={{ marginTop: "1rem" }}>
-                        <div
-                          style={{
-                            display: "flex",
-                            justifyContent: "space-between",
-                            alignItems: "center",
-                            marginBottom: "12px",
-                          }}
-                        >
-                          <h5
-                            style={{
-                              fontSize: "0.95rem",
-                              fontWeight: 700,
-                              color: "var(--cyan)",
-                            }}
-                          >
-                            أسئلة الاختبار ({questions.length} سؤال):
-                          </h5>
-                          <button
-                            onClick={() =>
-                              setQuestionModal({
-                                isOpen: true,
-                                isEdit: false,
-                                examId: exam.id,
-                                questionId: null,
-                                question_text: "",
-                                points: 1,
-                              })
-                            }
-                            className="btn-primary"
-                            style={{ fontSize: "0.75rem", padding: "5px 12px" }}
-                          >
-                            <Plus size={14} />
-                            <span>إضافة سؤال جديد</span>
-                          </button>
-                        </div>
-
-                        {questions.length === 0 ? (
-                          <div
-                            style={{
-                              background: "#050914",
-                              padding: "1.5rem",
-                              borderRadius: "8px",
-                              textAlign: "center",
-                              color: "var(--text-muted)",
-                              fontSize: "0.85rem",
-                            }}
-                          >
-                            لا توجد أسئلة مضافة لهذا الاختبار حتى الآن. انقر
-                            "إضافة سؤال جديد" لإضافة أسئلة وخياراتها.
-                          </div>
-                        ) : (
-                          <div
-                            style={{
-                              display: "flex",
-                              flexDirection: "column",
-                              gap: "12px",
-                            }}
-                          >
-                            {questions.map((q, qIdx) => (
-                              <div
-                                key={q.id || qIdx}
-                                style={{
-                                  background: "#050914",
-                                  border: "1px solid rgba(255,255,255,0.08)",
-                                  borderRadius: "10px",
-                                  padding: "12px 14px",
-                                }}
-                              >
-                                <div
-                                  style={{
-                                    display: "flex",
-                                    justifyContent: "space-between",
-                                    alignItems: "flex-start",
-                                    gap: "8px",
-                                    marginBottom: "10px",
-                                  }}
-                                >
-                                  <div>
-                                    <span
-                                      style={{
-                                        display: "inline-block",
-                                        background: "rgba(6, 182, 212, 0.15)",
-                                        color: "var(--cyan)",
-                                        fontWeight: 800,
-                                        fontSize: "0.75rem",
-                                        padding: "2px 8px",
-                                        borderRadius: "4px",
-                                        marginLeft: "8px",
-                                      }}
-                                    >
-                                      سؤال {qIdx + 1} ({q.points || 1} نقطة)
-                                    </span>
-                                    <span
-                                      style={{
-                                        fontSize: "0.9rem",
-                                        color: "#fff",
-                                        fontWeight: 700,
-                                      }}
-                                    >
-                                      {q.question_text || q.question}
-                                    </span>
-                                  </div>
-                                  <div style={{ display: "flex", gap: "4px" }}>
-                                    <button
-                                      onClick={() =>
-                                        setQuestionModal({
-                                          isOpen: true,
-                                          isEdit: true,
-                                          examId: exam.id,
-                                          questionId: q.id,
-                                          question_text:
-                                            q.question_text || q.question || "",
-                                          points: q.points || 1,
-                                        })
-                                      }
-                                      style={{
-                                        background: "none",
-                                        border: "none",
-                                        color: "var(--cyan)",
-                                        cursor: "pointer",
-                                        padding: "4px",
-                                      }}
-                                      title="تعديل السؤال"
-                                    >
-                                      <Edit3 size={14} />
-                                    </button>
-                                    <button
-                                      onClick={async () => {
-                                        if (
-                                          window.confirm(
-                                            "هل تريد حذف هذا السؤال؟",
-                                          )
-                                        ) {
-                                          await deleteAdminQuestion(q.id);
-                                        }
-                                      }}
-                                      style={{
-                                        background: "none",
-                                        border: "none",
-                                        color: "var(--rose)",
-                                        cursor: "pointer",
-                                        padding: "4px",
-                                      }}
-                                      title="حذف السؤال"
-                                    >
-                                      <Trash2 size={14} />
-                                    </button>
-                                  </div>
-                                </div>
-
-                                {/* Options List */}
-                                <div style={{ marginRight: "1rem" }}>
-                                  <div
-                                    style={{
-                                      display: "flex",
-                                      justifyContent: "space-between",
-                                      alignItems: "center",
-                                      marginBottom: "6px",
-                                    }}
-                                  >
-                                    <span
-                                      style={{
-                                        fontSize: "0.75rem",
-                                        color: "var(--text-muted)",
-                                      }}
-                                    >
-                                      خيارات الإجابة:
-                                    </span>
-                                    <button
-                                      onClick={() =>
-                                        setOptionModal({
-                                          isOpen: true,
-                                          isEdit: false,
-                                          questionId: q.id,
-                                          optionId: null,
-                                          option_text: "",
-                                          is_correct: false,
-                                        })
-                                      }
-                                      style={{
-                                        background: "none",
-                                        border: "none",
-                                        color: "var(--amber)",
-                                        cursor: "pointer",
-                                        fontSize: "0.75rem",
-                                        display: "inline-flex",
-                                        alignItems: "center",
-                                        gap: "4px",
-                                      }}
-                                    >
-                                      <Plus size={12} />
-                                      <span>إضافة خيار</span>
-                                    </button>
-                                  </div>
-
-                                  <div
-                                    style={{
-                                      display: "grid",
-                                      gridTemplateColumns:
-                                        "repeat(auto-fill, minmax(220px, 1fr))",
-                                      gap: "6px",
-                                    }}
-                                  >
-                                    {(q.options || []).map((opt) => (
-                                      <div
-                                        key={opt.id}
-                                        style={{
-                                          background: opt.is_correct
-                                            ? "rgba(16, 185, 129, 0.1)"
-                                            : "rgba(255, 255, 255, 0.03)",
-                                          border: `1px solid ${opt.is_correct ? "rgba(16, 185, 129, 0.3)" : "rgba(255, 255, 255, 0.05)"}`,
-                                          borderRadius: "6px",
-                                          padding: "6px 10px",
-                                          display: "flex",
-                                          alignItems: "center",
-                                          justifyContent: "space-between",
-                                        }}
-                                      >
-                                        <div
-                                          style={{
-                                            display: "flex",
-                                            alignItems: "center",
-                                            gap: "6px",
-                                            overflow: "hidden",
-                                          }}
-                                        >
-                                          {opt.is_correct ? (
-                                            <CheckCircle2
-                                              size={13}
-                                              style={{
-                                                color: "var(--emerald)",
-                                                flexShrink: 0,
-                                              }}
-                                            />
-                                          ) : (
-                                            <span
-                                              style={{
-                                                width: "6px",
-                                                height: "6px",
-                                                borderRadius: "50%",
-                                                background: "var(--text-muted)",
-                                                flexShrink: 0,
-                                              }}
-                                            />
-                                          )}
-                                          <span
-                                            style={{
-                                              fontSize: "0.8rem",
-                                              color: opt.is_correct
-                                                ? "var(--emerald)"
-                                                : "#cbd5e1",
-                                              overflow: "hidden",
-                                              textOverflow: "ellipsis",
-                                              whiteSpace: "nowrap",
-                                            }}
-                                          >
-                                            {opt.option_text}
-                                          </span>
-                                        </div>
-                                        <div
-                                          style={{
-                                            display: "flex",
-                                            gap: "2px",
-                                          }}
-                                        >
-                                          <button
-                                            onClick={() =>
-                                              setOptionModal({
-                                                isOpen: true,
-                                                isEdit: true,
-                                                questionId: q.id,
-                                                optionId: opt.id,
-                                                option_text: opt.option_text,
-                                                is_correct: Boolean(
-                                                  opt.is_correct,
-                                                ),
-                                              })
-                                            }
-                                            style={{
-                                              background: "none",
-                                              border: "none",
-                                              color: "var(--cyan)",
-                                              cursor: "pointer",
-                                              padding: "2px",
-                                            }}
-                                            title="تعديل الخيار"
-                                          >
-                                            <Edit3 size={12} />
-                                          </button>
-                                          <button
-                                            onClick={async () => {
-                                              if (
-                                                window.confirm(
-                                                  "هل تريد حذف هذا الخيار؟",
-                                                )
-                                              ) {
-                                                await deleteAdminOption(opt.id);
-                                              }
-                                            }}
-                                            style={{
-                                              background: "none",
-                                              border: "none",
-                                              color: "var(--rose)",
-                                              cursor: "pointer",
-                                              padding: "2px",
-                                            }}
-                                            title="حذف الخيار"
-                                          >
-                                            <Trash2 size={12} />
-                                          </button>
-                                        </div>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
             </div>
           )}
         </div>
@@ -4725,7 +4420,14 @@ export default function TeacherDashboardPage() {
           >
             <div>
               <h3
-                style={{ fontSize: "1.1rem", fontWeight: 800, color: "#fff", display: "flex", alignItems: "center", gap: "8px" }}
+                style={{
+                  fontSize: "1.1rem",
+                  fontWeight: 800,
+                  color: "#fff",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                }}
               >
                 <span>أكواد اشتراكات الطلاب المعتمدة حسب الصف</span>
                 <span
@@ -4748,7 +4450,8 @@ export default function TeacherDashboardPage() {
                   marginTop: "4px",
                 }}
               >
-                استعراض وتصدير جميع أكواد الطلاب لكل مرحلة دراسية، مع تصفية فورية للأكواد النشطة والمعطلة
+                استعراض وتصدير جميع أكواد الطلاب لكل مرحلة دراسية، مع تصفية
+                فورية للأكواد النشطة والمعطلة
               </p>
             </div>
 
@@ -4814,7 +4517,9 @@ export default function TeacherDashboardPage() {
                   type="text"
                   placeholder="بحث باسم الطالب أو كود الاشتراك..."
                   value={codesSearchQuery}
-                  onChange={(e) => setCodesSearchQuery(e.target.value, { replace: true })}
+                  onChange={(e) =>
+                    setCodesSearchQuery(e.target.value, { replace: true })
+                  }
                   className="modern-search-input"
                 />
                 {codesSearchQuery && (
@@ -4830,15 +4535,28 @@ export default function TeacherDashboardPage() {
               </div>
 
               {/* Status Segmented Filter */}
-              <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-                <div className="status-filter-group" role="group" aria-label="تصفية حالة الأكواد">
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  flexWrap: "wrap",
+                }}
+              >
+                <div
+                  className="status-filter-group"
+                  role="group"
+                  aria-label="تصفية حالة الأكواد"
+                >
                   <button
                     type="button"
                     onClick={() => setCodesStatus("all")}
                     className={`status-filter-btn ${codesStatus === "all" ? "is-active" : ""}`}
                   >
                     <span>الكل</span>
-                    <span className="status-filter-count">{codesStats.total}</span>
+                    <span className="status-filter-count">
+                      {codesStats.total}
+                    </span>
                   </button>
 
                   <button
@@ -4846,9 +4564,18 @@ export default function TeacherDashboardPage() {
                     onClick={() => setCodesStatus("active")}
                     className={`status-filter-btn ${codesStatus === "active" ? "is-active" : ""}`}
                   >
-                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--emerald)" }} />
+                    <span
+                      style={{
+                        width: 6,
+                        height: 6,
+                        borderRadius: "50%",
+                        background: "var(--emerald)",
+                      }}
+                    />
                     <span>النشطة</span>
-                    <span className="status-filter-count">{codesStats.active}</span>
+                    <span className="status-filter-count">
+                      {codesStats.active}
+                    </span>
                   </button>
 
                   <button
@@ -4856,18 +4583,46 @@ export default function TeacherDashboardPage() {
                     onClick={() => setCodesStatus("deactivated")}
                     className={`status-filter-btn is-deactivated ${codesStatus === "deactivated" ? "is-active" : ""}`}
                   >
-                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--rose)" }} />
+                    <span
+                      style={{
+                        width: 6,
+                        height: 6,
+                        borderRadius: "50%",
+                        background: "var(--rose)",
+                      }}
+                    />
                     <span>المعطلة</span>
-                    <span className="status-filter-count">{codesStats.deactivated}</span>
+                    <span className="status-filter-count">
+                      {codesStats.deactivated}
+                    </span>
                   </button>
                 </div>
               </div>
             </div>
 
             {/* Row 2: Grade Selection & Reset Actions */}
-            <div className="modern-filter-row" style={{ paddingTop: "0.25rem", borderTop: "1px solid rgba(148, 163, 184, 0.08)" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-                <span style={{ fontSize: "0.8rem", color: "var(--text-muted)", fontWeight: 700 }}>
+            <div
+              className="modern-filter-row"
+              style={{
+                paddingTop: "0.25rem",
+                borderTop: "1px solid rgba(148, 163, 184, 0.08)",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  flexWrap: "wrap",
+                }}
+              >
+                <span
+                  style={{
+                    fontSize: "0.8rem",
+                    color: "var(--text-muted)",
+                    fontWeight: 700,
+                  }}
+                >
                   المرحلة الدراسية:
                 </span>
                 <GradeFilter
@@ -4916,7 +4671,9 @@ export default function TeacherDashboardPage() {
                 className="animate-spin"
                 style={{ margin: "0 auto 10px" }}
               />
-              <p style={{ fontWeight: 700 }}>جاري تحميل وتحديث أكواد الاشتراك...</p>
+              <p style={{ fontWeight: 700 }}>
+                جاري تحميل وتحديث أكواد الاشتراك...
+              </p>
             </div>
           ) : filteredCodes.length === 0 ? (
             <div
@@ -4945,47 +4702,93 @@ export default function TeacherDashboardPage() {
                   >
                     <CheckCircle2 size={28} />
                   </div>
-                  <h4 style={{ color: "#fff", fontSize: "1rem", fontWeight: 800 }}>
+                  <h4
+                    style={{ color: "#fff", fontSize: "1rem", fontWeight: 800 }}
+                  >
                     لا توجد أكواد معطلة لهذا الصف حالياً ✨
                   </h4>
-                  <p style={{ color: "var(--text-muted)", fontSize: "0.82rem", marginTop: "6px" }}>
-                    جميع أكواد الطلاب في {getGradeNameById(selectedCodesGrade)} نشطة وتعمل بشكل طبيعي.
+                  <p
+                    style={{
+                      color: "var(--text-muted)",
+                      fontSize: "0.82rem",
+                      marginTop: "6px",
+                    }}
+                  >
+                    جميع أكواد الطلاب في {getGradeNameById(selectedCodesGrade)}{" "}
+                    نشطة وتعمل بشكل طبيعي.
                   </p>
                   <button
                     type="button"
                     onClick={() => setCodesStatus("all")}
                     className="btn-secondary"
-                    style={{ marginTop: "1rem", fontSize: "0.82rem", padding: "6px 14px" }}
+                    style={{
+                      marginTop: "1rem",
+                      fontSize: "0.82rem",
+                      padding: "6px 14px",
+                    }}
                   >
                     عرض جميع الأكواد
                   </button>
                 </>
               ) : codesSearchQuery ? (
                 <>
-                  <Search size={36} style={{ color: "var(--text-muted)", margin: "0 auto 1rem" }} />
-                  <h4 style={{ color: "#fff", fontSize: "1rem", fontWeight: 800 }}>
+                  <Search
+                    size={36}
+                    style={{
+                      color: "var(--text-muted)",
+                      margin: "0 auto 1rem",
+                    }}
+                  />
+                  <h4
+                    style={{ color: "#fff", fontSize: "1rem", fontWeight: 800 }}
+                  >
                     لا توجد أكواد مطابقة لبحثك: "{codesSearchQuery}"
                   </h4>
-                  <p style={{ color: "var(--text-muted)", fontSize: "0.82rem", marginTop: "6px" }}>
+                  <p
+                    style={{
+                      color: "var(--text-muted)",
+                      fontSize: "0.82rem",
+                      marginTop: "6px",
+                    }}
+                  >
                     جرّب البحث باسم طالب آخر أو إلغاء كلمة البحث الحالية.
                   </p>
                   <button
                     type="button"
                     onClick={() => setCodesSearchQuery("")}
                     className="btn-secondary"
-                    style={{ marginTop: "1rem", fontSize: "0.82rem", padding: "6px 14px" }}
+                    style={{
+                      marginTop: "1rem",
+                      fontSize: "0.82rem",
+                      padding: "6px 14px",
+                    }}
                   >
                     مسح البحث
                   </button>
                 </>
               ) : (
                 <>
-                  <Key size={40} style={{ color: "var(--text-muted)", margin: "0 auto 1rem" }} />
-                  <h4 style={{ color: "#fff", fontSize: "1rem", fontWeight: 800 }}>
+                  <Key
+                    size={40}
+                    style={{
+                      color: "var(--text-muted)",
+                      margin: "0 auto 1rem",
+                    }}
+                  />
+                  <h4
+                    style={{ color: "#fff", fontSize: "1rem", fontWeight: 800 }}
+                  >
                     لا توجد أكواد اشتراك معتمدة لهذا الصف حالياً
                   </h4>
-                  <p style={{ color: "var(--text-muted)", fontSize: "0.82rem", marginTop: "6px" }}>
-                    يمكنك قبول طلبات الطلاب أو إضافة طالب وتفعيل اشتراكه من تبويب "طلبات التفعيل" أو "سجل الطلاب"
+                  <p
+                    style={{
+                      color: "var(--text-muted)",
+                      fontSize: "0.82rem",
+                      marginTop: "6px",
+                    }}
+                  >
+                    يمكنك قبول طلبات الطلاب أو إضافة طالب وتفعيل اشتراكه من
+                    تبويب "طلبات التفعيل" أو "سجل الطلاب"
                   </p>
                 </>
               )}
@@ -4996,311 +4799,404 @@ export default function TeacherDashboardPage() {
               <div className="modern-table-desktop-view">
                 <div className="modern-table-scroll">
                   <table className="modern-table">
-                  <thead>
-                    <tr>
-                      <th style={{ width: "6%", textAlign: "center" }}>#</th>
-                      <th style={{ width: "26%" }}>اسم الطالب</th>
-                      <th style={{ width: "22%", textAlign: "center" }}>كود الدخول (كود الاشتراك)</th>
-                      <th style={{ width: "18%", textAlign: "center" }}>المرحلة الدراسية</th>
-                      <th style={{ width: "14%", textAlign: "center" }}>حالة الكود</th>
-                      <th style={{ width: "14%", textAlign: "center" }}>إجراءات</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredCodes.map((item, idx) => {
-                      const subscriptionCode = getSubscriptionCode(
-                        item.subscription_code,
-                        item.subscription,
-                        item,
-                      );
-                      const isSubscriptionInactive = getCodeItemInactiveState(item);
-                      const isCopied = copiedCode === subscriptionCode;
+                    <thead>
+                      <tr>
+                        <th style={{ width: "6%", textAlign: "center" }}>#</th>
+                        <th style={{ width: "26%" }}>اسم الطالب</th>
+                        <th style={{ width: "22%", textAlign: "center" }}>
+                          كود الدخول (كود الاشتراك)
+                        </th>
+                        <th style={{ width: "18%", textAlign: "center" }}>
+                          المرحلة الدراسية
+                        </th>
+                        <th style={{ width: "14%", textAlign: "center" }}>
+                          حالة الكود
+                        </th>
+                        <th style={{ width: "14%", textAlign: "center" }}>
+                          إجراءات
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredCodes.map((item, idx) => {
+                        const subscriptionCode = getSubscriptionCode(
+                          item.subscription_code,
+                          item.subscription,
+                          item,
+                        );
+                        const isSubscriptionInactive =
+                          getCodeItemInactiveState(item);
+                        const isCopied = copiedCode === subscriptionCode;
 
-                      return (
-                        <tr
-                          key={subscriptionCode || item.id || idx}
-                          className={isSubscriptionInactive ? "row-deactivated" : ""}
-                        >
-                          {/* Row Index */}
-                          <td style={{ textAlign: "center" }}>
-                            <span
-                              style={{
-                                display: "inline-grid",
-                                placeItems: "center",
-                                width: "24px",
-                                height: "24px",
-                                borderRadius: "6px",
-                                color: "#94a3b8",
-                                background: "rgba(148, 163, 184, 0.08)",
-                                fontSize: "0.75rem",
-                                fontWeight: 800,
-                              }}
-                            >
-                              {idx + 1}
-                            </span>
-                          </td>
-
-                          {/* Student Info */}
-                          <td>
-                            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                        return (
+                          <tr
+                            key={subscriptionCode || item.id || idx}
+                            className={
+                              isSubscriptionInactive ? "row-deactivated" : ""
+                            }
+                          >
+                            {/* Row Index */}
+                            <td style={{ textAlign: "center" }}>
                               <span
                                 style={{
-                                  width: "34px",
-                                  height: "34px",
-                                  display: "grid",
+                                  display: "inline-grid",
                                   placeItems: "center",
-                                  flexShrink: 0,
-                                  borderRadius: "10px",
-                                  color: isSubscriptionInactive ? "var(--rose)" : "var(--purple)",
-                                  background: isSubscriptionInactive
-                                    ? "rgba(244, 63, 94, 0.12)"
-                                    : "rgba(168, 85, 247, 0.12)",
-                                  border: `1px solid ${isSubscriptionInactive ? "rgba(244, 63, 94, 0.25)" : "rgba(168, 85, 247, 0.25)"}`,
+                                  width: "24px",
+                                  height: "24px",
+                                  borderRadius: "6px",
+                                  color: "#94a3b8",
+                                  background: "rgba(148, 163, 184, 0.08)",
+                                  fontSize: "0.75rem",
                                   fontWeight: 800,
-                                  fontSize: "0.85rem",
                                 }}
                               >
-                                {(item.student_name || "ط").trim().charAt(0)}
+                                {idx + 1}
                               </span>
-                              <div>
-                                <span style={{ fontWeight: 800, color: "#f8fafc", display: "block" }}>
-                                  {item.student_name || "طالب المنصة"}
+                            </td>
+
+                            {/* Student Info */}
+                            <td>
+                              <div
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: "10px",
+                                }}
+                              >
+                                <span
+                                  style={{
+                                    width: "34px",
+                                    height: "34px",
+                                    display: "grid",
+                                    placeItems: "center",
+                                    flexShrink: 0,
+                                    borderRadius: "10px",
+                                    color: isSubscriptionInactive
+                                      ? "var(--rose)"
+                                      : "var(--purple)",
+                                    background: isSubscriptionInactive
+                                      ? "rgba(244, 63, 94, 0.12)"
+                                      : "rgba(168, 85, 247, 0.12)",
+                                    border: `1px solid ${isSubscriptionInactive ? "rgba(244, 63, 94, 0.25)" : "rgba(168, 85, 247, 0.25)"}`,
+                                    fontWeight: 800,
+                                    fontSize: "0.85rem",
+                                  }}
+                                >
+                                  {(item.student_name || "ط").trim().charAt(0)}
                                 </span>
-                                {item.phone && (
-                                  <span style={{ fontSize: "0.72rem", color: "var(--text-muted)", direction: "ltr" }}>
-                                    {item.phone}
+                                <div>
+                                  <span
+                                    style={{
+                                      fontWeight: 800,
+                                      color: "#f8fafc",
+                                      display: "block",
+                                    }}
+                                  >
+                                    {item.student_name || "طالب المنصة"}
                                   </span>
-                                )}
+                                  {item.phone && (
+                                    <span
+                                      style={{
+                                        fontSize: "0.72rem",
+                                        color: "var(--text-muted)",
+                                        direction: "ltr",
+                                      }}
+                                    >
+                                      {item.phone}
+                                    </span>
+                                  )}
+                                </div>
                               </div>
-                            </div>
-                          </td>
+                            </td>
 
-                          {/* Subscription Code */}
-                          <td style={{ textAlign: "center" }}>
-                            <span
-                              style={{
-                                display: "inline-flex",
-                                alignItems: "center",
-                                gap: "6px",
-                                fontFamily: "monospace",
-                                fontSize: "0.85rem",
-                                fontWeight: 800,
-                                color: isSubscriptionInactive ? "#fda4af" : "#67e8f9",
-                                background: isSubscriptionInactive ? "rgba(244, 63, 94, 0.1)" : "rgba(6, 182, 212, 0.1)",
-                                padding: "6px 10px",
-                                borderRadius: "8px",
-                                border: `1px solid ${isSubscriptionInactive ? "rgba(244, 63, 94, 0.25)" : "rgba(6, 182, 212, 0.25)"}`,
-                                letterSpacing: "0.6px",
-                                direction: "ltr",
-                              }}
-                            >
-                              <Key size={13} />
-                              {subscriptionCode || "—"}
-                            </span>
-                          </td>
-
-                          {/* Grade */}
-                          <td style={{ textAlign: "center" }}>
-                            <span
-                              style={{
-                                display: "inline-flex",
-                                alignItems: "center",
-                                padding: "4px 8px",
-                                borderRadius: "6px",
-                                border: "1px solid rgba(168, 85, 247, 0.2)",
-                                background: "rgba(168, 85, 247, 0.08)",
-                                color: "#d8b4fe",
-                                fontSize: "0.74rem",
-                                fontWeight: 700,
-                                whiteSpace: "nowrap",
-                              }}
-                            >
-                              {getGradeNameById(selectedCodesGrade)}
-                            </span>
-                          </td>
-
-                          {/* Code Status */}
-                          <td style={{ textAlign: "center" }}>
-                            <span
-                              className="badge-tag"
-                              style={{
-                                display: "inline-flex",
-                                alignItems: "center",
-                                gap: "6px",
-                                background: isSubscriptionInactive
-                                  ? "rgba(244, 63, 94, 0.12)"
-                                  : "rgba(16, 185, 129, 0.12)",
-                                color: isSubscriptionInactive ? "var(--rose)" : "var(--emerald)",
-                                borderColor: isSubscriptionInactive
-                                  ? "rgba(244, 63, 94, 0.28)"
-                                  : "rgba(16, 185, 129, 0.28)",
-                                whiteSpace: "nowrap",
-                              }}
-                            >
+                            {/* Subscription Code */}
+                            <td style={{ textAlign: "center" }}>
                               <span
                                 style={{
-                                  width: "6px",
-                                  height: "6px",
-                                  borderRadius: "50%",
-                                  background: isSubscriptionInactive ? "var(--rose)" : "var(--emerald)",
-                                  boxShadow: isSubscriptionInactive ? "0 0 6px rgba(244, 63, 94, 0.6)" : "0 0 6px rgba(16, 185, 129, 0.6)",
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "6px",
+                                  fontFamily: "monospace",
+                                  fontSize: "0.85rem",
+                                  fontWeight: 800,
+                                  color: isSubscriptionInactive
+                                    ? "#fda4af"
+                                    : "#67e8f9",
+                                  background: isSubscriptionInactive
+                                    ? "rgba(244, 63, 94, 0.1)"
+                                    : "rgba(6, 182, 212, 0.1)",
+                                  padding: "6px 10px",
+                                  borderRadius: "8px",
+                                  border: `1px solid ${isSubscriptionInactive ? "rgba(244, 63, 94, 0.25)" : "rgba(6, 182, 212, 0.25)"}`,
+                                  letterSpacing: "0.6px",
+                                  direction: "ltr",
                                 }}
-                              />
-                              {isSubscriptionInactive ? "معطل" : "نشط"}
-                            </span>
-                          </td>
+                              >
+                                <Key size={13} />
+                                {subscriptionCode || "—"}
+                              </span>
+                            </td>
 
-                          {/* Actions */}
-                          <td style={{ textAlign: "center" }}>
-                            <button
-                              type="button"
-                              onClick={() => handleCopyCode(subscriptionCode)}
-                              className="btn-secondary"
-                              style={{
-                                fontSize: "0.75rem",
-                                padding: "6px 12px",
-                                display: "inline-flex",
-                                alignItems: "center",
-                                gap: "6px",
-                                borderRadius: "8px",
-                                borderColor: isCopied
-                                  ? "rgba(16, 185, 129, 0.4)"
-                                  : "rgba(148, 163, 184, 0.2)",
-                                color: isCopied ? "var(--emerald)" : "#cbd5e1",
-                              }}
-                              title="نسخ كود الاشتراك للحافظة"
-                            >
-                              {isCopied ? (
-                                <Check size={13} style={{ color: "var(--emerald)" }} />
-                              ) : (
-                                <Copy size={13} />
-                              )}
-                              <span>{isCopied ? "تم النسخ" : "نسخ الكود"}</span>
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                            {/* Grade */}
+                            <td style={{ textAlign: "center" }}>
+                              <span
+                                style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  padding: "4px 8px",
+                                  borderRadius: "6px",
+                                  border: "1px solid rgba(168, 85, 247, 0.2)",
+                                  background: "rgba(168, 85, 247, 0.08)",
+                                  color: "#d8b4fe",
+                                  fontSize: "0.74rem",
+                                  fontWeight: 700,
+                                  whiteSpace: "nowrap",
+                                }}
+                              >
+                                {getGradeNameById(selectedCodesGrade)}
+                              </span>
+                            </td>
+
+                            {/* Code Status */}
+                            <td style={{ textAlign: "center" }}>
+                              <span
+                                className="badge-tag"
+                                style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "6px",
+                                  background: isSubscriptionInactive
+                                    ? "rgba(244, 63, 94, 0.12)"
+                                    : "rgba(16, 185, 129, 0.12)",
+                                  color: isSubscriptionInactive
+                                    ? "var(--rose)"
+                                    : "var(--emerald)",
+                                  borderColor: isSubscriptionInactive
+                                    ? "rgba(244, 63, 94, 0.28)"
+                                    : "rgba(16, 185, 129, 0.28)",
+                                  whiteSpace: "nowrap",
+                                }}
+                              >
+                                <span
+                                  style={{
+                                    width: "6px",
+                                    height: "6px",
+                                    borderRadius: "50%",
+                                    background: isSubscriptionInactive
+                                      ? "var(--rose)"
+                                      : "var(--emerald)",
+                                    boxShadow: isSubscriptionInactive
+                                      ? "0 0 6px rgba(244, 63, 94, 0.6)"
+                                      : "0 0 6px rgba(16, 185, 129, 0.6)",
+                                  }}
+                                />
+                                {isSubscriptionInactive ? "معطل" : "نشط"}
+                              </span>
+                            </td>
+
+                            {/* Actions */}
+                            <td style={{ textAlign: "center" }}>
+                              <button
+                                type="button"
+                                onClick={() => handleCopyCode(subscriptionCode)}
+                                className="btn-secondary"
+                                style={{
+                                  fontSize: "0.75rem",
+                                  padding: "6px 12px",
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "6px",
+                                  borderRadius: "8px",
+                                  borderColor: isCopied
+                                    ? "rgba(16, 185, 129, 0.4)"
+                                    : "rgba(148, 163, 184, 0.2)",
+                                  color: isCopied
+                                    ? "var(--emerald)"
+                                    : "#cbd5e1",
+                                }}
+                                title="نسخ كود الاشتراك للحافظة"
+                              >
+                                {isCopied ? (
+                                  <Check
+                                    size={13}
+                                    style={{ color: "var(--emerald)" }}
+                                  />
+                                ) : (
+                                  <Copy size={13} />
+                                )}
+                                <span>
+                                  {isCopied ? "تم النسخ" : "نسخ الكود"}
+                                </span>
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-            </div>
 
-            {/* Mobile Cards View */}
-            <div className="modern-cards-mobile-view">
-              {filteredCodes.map((item, idx) => {
-                const subscriptionCode = getSubscriptionCode(
-                  item.subscription_code,
-                  item.subscription,
-                  item,
-                );
-                const isSubscriptionInactive = getCodeItemInactiveState(item);
-                const isCopied = copiedCode === subscriptionCode;
-                const studentName = item.student_name || "طالب المنصة";
-                const phone = item.phone || "—";
-                const gradeName = getGradeNameById(selectedCodesGrade);
+              {/* Mobile Cards View */}
+              <div className="modern-cards-mobile-view">
+                {filteredCodes.map((item, idx) => {
+                  const subscriptionCode = getSubscriptionCode(
+                    item.subscription_code,
+                    item.subscription,
+                    item,
+                  );
+                  const isSubscriptionInactive = getCodeItemInactiveState(item);
+                  const isCopied = copiedCode === subscriptionCode;
+                  const studentName = item.student_name || "طالب المنصة";
+                  const phone = item.phone || "—";
+                  const gradeName = getGradeNameById(selectedCodesGrade);
 
-                return (
-                  <div
-                    key={subscriptionCode || item.id || idx}
-                    className={`student-mobile-card ${isSubscriptionInactive ? "is-deactivated" : ""}`}
-                  >
-                    {/* Header */}
-                    <div className="student-mobile-card-header">
-                      <div className="student-card-info">
-                        <div
-                          className={`student-card-avatar ${!isSubscriptionInactive ? "is-student" : "is-deactivated"}`}
-                          style={{
-                            background: !isSubscriptionInactive
-                              ? "linear-gradient(135deg, #a855f7, #6366f1)"
-                              : undefined,
-                          }}
+                  return (
+                    <div
+                      key={subscriptionCode || item.id || idx}
+                      className={`student-mobile-card ${isSubscriptionInactive ? "is-deactivated" : ""}`}
+                    >
+                      {/* Header */}
+                      <div className="student-mobile-card-header">
+                        <div className="student-card-info">
+                          <div
+                            className={`student-card-avatar ${!isSubscriptionInactive ? "is-student" : "is-deactivated"}`}
+                            style={{
+                              background: !isSubscriptionInactive
+                                ? "linear-gradient(135deg, #a855f7, #6366f1)"
+                                : undefined,
+                            }}
+                          >
+                            {studentName.trim().charAt(0)}
+                          </div>
+                          <div>
+                            <div className="student-card-name">
+                              {studentName}
+                            </div>
+                            <div className="student-card-meta">
+                              <span className="badge-tag">{gradeName}</span>
+                              <span className="student-card-id">
+                                #{idx + 1}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <span
+                          className={`status-badge-pill ${!isSubscriptionInactive ? "active-pill" : "deactivated-pill"}`}
                         >
-                          {studentName.trim().charAt(0)}
-                        </div>
-                        <div>
-                          <div className="student-card-name">{studentName}</div>
-                          <div className="student-card-meta">
-                            <span className="badge-tag">{gradeName}</span>
-                            <span className="student-card-id">#{idx + 1}</span>
-                          </div>
-                        </div>
+                          <span className="status-dot" />
+                          <span>
+                            {!isSubscriptionInactive ? "كود نشط" : "معطل"}
+                          </span>
+                        </span>
                       </div>
 
-                      <span
-                        className={`status-badge-pill ${!isSubscriptionInactive ? "active-pill" : "deactivated-pill"}`}
-                      >
-                        <span className="status-dot" />
-                        <span>{!isSubscriptionInactive ? "كود نشط" : "معطل"}</span>
-                      </span>
-                    </div>
-
-                    {/* Body */}
-                    <div className="student-mobile-card-body">
-                      <div className="card-code-row">
-                        <span className="card-label">كود الاشتراك:</span>
-                        <div className="card-code-pill">
-                          <span className="card-code-text">{subscriptionCode || "—"}</span>
-                          {subscriptionCode && (
-                            <button
-                              type="button"
-                              onClick={() => handleCopyCode(subscriptionCode)}
-                              className="card-code-copy-btn"
-                              title="نسخ كود الاشتراك"
-                            >
-                              {isCopied ? (
-                                <Check size={14} style={{ color: "var(--emerald)" }} />
-                              ) : (
-                                <Copy size={14} />
-                              )}
-                              <span>{isCopied ? "تم النسخ" : "نسخ"}</span>
-                            </button>
-                          )}
-                        </div>
-                      </div>
-
-                      {phone !== "—" && (
-                        <div className="card-info-grid" style={{ gridTemplateColumns: "1fr" }}>
-                          <div className="card-info-col">
-                            <span className="card-label">رقم الهاتف:</span>
-                            <a href={`tel:${phone}`} className="card-value font-mono ltr" style={{ color: "var(--cyan)", textDecoration: "none" }}>
-                              {phone}
-                            </a>
+                      {/* Body */}
+                      <div className="student-mobile-card-body">
+                        <div className="card-code-row">
+                          <span className="card-label">كود الاشتراك:</span>
+                          <div className="card-code-pill">
+                            <span className="card-code-text">
+                              {subscriptionCode || "—"}
+                            </span>
+                            {subscriptionCode && (
+                              <button
+                                type="button"
+                                onClick={() => handleCopyCode(subscriptionCode)}
+                                className="card-code-copy-btn"
+                                title="نسخ كود الاشتراك"
+                              >
+                                {isCopied ? (
+                                  <Check
+                                    size={14}
+                                    style={{ color: "var(--emerald)" }}
+                                  />
+                                ) : (
+                                  <Copy size={14} />
+                                )}
+                                <span>{isCopied ? "تم النسخ" : "نسخ"}</span>
+                              </button>
+                            )}
                           </div>
                         </div>
-                      )}
-                    </div>
 
-                    {/* Footer Actions */}
-                    <div className="student-mobile-card-footer">
-                      <button
-                        type="button"
-                        onClick={() => handleCopyCode(subscriptionCode)}
-                        className="btn-card-action btn-info-action"
-                      >
-                        {isCopied ? <Check size={14} /> : <Copy size={14} />}
-                        <span>{isCopied ? "تم نسخ كود الدخول" : "نسخ كود الاشتراك"}</span>
-                      </button>
+                        {phone !== "—" && (
+                          <div
+                            className="card-info-grid"
+                            style={{ gridTemplateColumns: "1fr" }}
+                          >
+                            <div className="card-info-col">
+                              <span className="card-label">رقم الهاتف:</span>
+                              <a
+                                href={`tel:${phone}`}
+                                className="card-value font-mono ltr"
+                                style={{
+                                  color: "var(--cyan)",
+                                  textDecoration: "none",
+                                }}
+                              >
+                                {phone}
+                              </a>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Footer Actions */}
+                      <div className="student-mobile-card-footer">
+                        <button
+                          type="button"
+                          onClick={() => handleCopyCode(subscriptionCode)}
+                          className="btn-card-action btn-info-action"
+                        >
+                          {isCopied ? <Check size={14} /> : <Copy size={14} />}
+                          <span>
+                            {isCopied
+                              ? "تم نسخ كود الدخول"
+                              : "نسخ كود الاشتراك"}
+                          </span>
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
 
               {/* Table Footer Summary */}
               <div className="modern-table-footer">
-                <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "10px",
+                    flexWrap: "wrap",
+                  }}
+                >
                   <span>
-                    عرض <strong style={{ color: "#fff" }}>{filteredCodes.length}</strong> من أصل{" "}
-                    <strong style={{ color: "#fff" }}>{subscriptionCodesList.length}</strong> كود
+                    عرض{" "}
+                    <strong style={{ color: "#fff" }}>
+                      {filteredCodes.length}
+                    </strong>{" "}
+                    من أصل{" "}
+                    <strong style={{ color: "#fff" }}>
+                      {subscriptionCodesList.length}
+                    </strong>{" "}
+                    كود
                   </span>
                   <span style={{ color: "rgba(148, 163, 184, 0.4)" }}>•</span>
-                  <span style={{ color: "var(--emerald)" }}>النشطة: {codesStats.active}</span>
+                  <span style={{ color: "var(--emerald)" }}>
+                    النشطة: {codesStats.active}
+                  </span>
                   <span style={{ color: "rgba(148, 163, 184, 0.4)" }}>•</span>
-                  <span style={{ color: "var(--rose)" }}>المعطلة: {codesStats.deactivated}</span>
+                  <span style={{ color: "var(--rose)" }}>
+                    المعطلة: {codesStats.deactivated}
+                  </span>
                 </div>
 
-                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <div
+                  style={{ display: "flex", alignItems: "center", gap: "8px" }}
+                >
                   <span
                     style={{
                       fontSize: "0.73rem",
@@ -5317,98 +5213,6 @@ export default function TeacherDashboardPage() {
               </div>
             </div>
           )}
-        </div>
-      )}
-
-      {/* ==================================================================== */}
-      {/* TAB 6: MEMOS MANAGEMENT                                             */}
-      {/* ==================================================================== */}
-      {activeTab === "memos" && (
-        <div>
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              flexWrap: "wrap",
-              gap: "1rem",
-              marginBottom: "1.25rem",
-            }}
-          >
-            <h3 style={{ fontSize: "1.1rem", fontWeight: 800, color: "#fff" }}>
-              مذكرات وملخصات العميد PDF:
-            </h3>
-            <button
-              onClick={() => setIsAddMemoOpen(true)}
-              className="btn-primary"
-              style={{ fontSize: "0.85rem" }}
-            >
-              <Plus size={16} />
-              <span>رفع مذكرة جديدة</span>
-            </button>
-          </div>
-
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
-              gap: "1.25rem",
-            }}
-          >
-            {memosList.map((memo) => (
-              <div
-                key={memo.id}
-                className="feature-card"
-                style={{ padding: "1.25rem" }}
-              >
-                <div>
-                  <span
-                    className="badge-tag"
-                    style={{ marginBottom: "6px", display: "inline-block" }}
-                  >
-                    {memo.grade}
-                  </span>
-                  <h4
-                    style={{
-                      fontSize: "0.95rem",
-                      fontWeight: 800,
-                      color: "#fff",
-                      marginBottom: "6px",
-                    }}
-                  >
-                    {memo.title}
-                  </h4>
-                  <div
-                    style={{
-                      fontSize: "0.75rem",
-                      color: "var(--text-muted)",
-                      display: "flex",
-                      gap: "8px",
-                      marginBottom: "1rem",
-                    }}
-                  >
-                    <span>{memo.pages} صفحة</span>
-                    <span>• {memo.fileSize}</span>
-                    <span>• {memo.year}</span>
-                  </div>
-                </div>
-
-                <button
-                  onClick={() => deleteMemo(memo.id)}
-                  className="btn-secondary"
-                  style={{
-                    color: "var(--rose)",
-                    width: "100%",
-                    fontSize: "0.8rem",
-                    padding: "6px",
-                  }}
-                >
-                  <Trash2 size={14} />
-                  <span>حذف المذكرة</span>
-                </button>
-              </div>
-            ))}
-          </div>
         </div>
       )}
 
@@ -5607,7 +5411,7 @@ export default function TeacherDashboardPage() {
         </div>
       )}
 
-            {/* ==================================================================== */}
+      {/* ==================================================================== */}
       {/* MODAL: VIEW STUDENT DETAILS & EXAM HISTORY BREAKDOWN                 */}
       {/* ==================================================================== */}
       <StudentExamHistoryModal
@@ -5629,7 +5433,7 @@ export default function TeacherDashboardPage() {
         isProcessingAction={isProcessingAction}
       />
 
-{/* ==================================================================== */}
+      {/* ==================================================================== */}
       {/* MODAL: EDIT STUDENT (PUT /api/v1/admin/students/{id})                  */}
       {/* ==================================================================== */}
       {editingStudent && (
@@ -5780,1167 +5584,6 @@ export default function TeacherDashboardPage() {
           </div>
         </div>
       )}
-
-      {/* MODAL: ADD LESSON */}
-      {isAddLessonOpen && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,0.8)",
-            backdropFilter: "blur(8px)",
-            zIndex: 1000,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: "1rem",
-          }}
-        >
-          <div
-            className="form-card"
-            style={{ width: "100%", maxWidth: "600px", position: "relative" }}
-          >
-            <button
-              onClick={() => setIsAddLessonOpen(false)}
-              style={{
-                position: "absolute",
-                top: "16px",
-                left: "16px",
-                color: "var(--text-muted)",
-              }}
-            >
-              <X size={20} />
-            </button>
-            <h2
-              style={{
-                fontSize: "1.3rem",
-                fontWeight: 900,
-                color: "#fff",
-                marginBottom: "1.25rem",
-                textAlign: "center",
-              }}
-            >
-              🎬 نشر ورفع محاضرة فيديو جديدة
-            </h2>
-            <form onSubmit={handleSaveLesson}>
-              <div className="form-group" style={{ marginBottom: "1rem" }}>
-                <label className="form-label">عنوان الدرس / المحاضرة</label>
-                <input
-                  type="text"
-                  required
-                  value={newLessonData.title}
-                  onChange={(e) =>
-                    setNewLessonData({
-                      ...newLessonData,
-                      title: e.target.value,
-                    })
-                  }
-                  placeholder="مثال: نظرية ذات الحدين وتطبيقاتها..."
-                  className="form-input"
-                />
-              </div>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
-                  gap: "0.75rem",
-                  marginBottom: "1rem",
-                }}
-              >
-                <div>
-                  <label className="form-label">الصف الدراسي</label>
-                  <select
-                    value={newLessonData.grade}
-                    onChange={(e) =>
-                      setNewLessonData({
-                        ...newLessonData,
-                        grade: e.target.value,
-                      })
-                    }
-                    className="form-input"
-                    style={{ background: "#0b1120", color: "#fff" }}
-                  >
-                    {GRADES.map((g) => (
-                      <option key={g.id} value={g.name}>
-                        {g.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="form-label">الفرع</label>
-                  <select
-                    value={newLessonData.branch}
-                    onChange={(e) =>
-                      setNewLessonData({
-                        ...newLessonData,
-                        branch: e.target.value,
-                      })
-                    }
-                    className="form-input"
-                    style={{ background: "#0b1120", color: "#fff" }}
-                  >
-                    {BRANCHES.filter((b) => b !== "الكل").map((b) => (
-                      <option key={b} value={b}>
-                        {b}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-              <div className="form-group" style={{ marginBottom: "1rem" }}>
-                <label className="form-label">
-                  رابط الفيديو (YouTube / MP4) *
-                </label>
-                <input
-                  type="url"
-                  required
-                  value={newLessonData.videoUrl}
-                  onChange={(e) => {
-                    setNewLessonData({
-                      ...newLessonData,
-                      videoUrl: e.target.value,
-                      duration: "",
-                    });
-                    setLessonDurationStatus("");
-                  }}
-                  className="form-input"
-                  dir="ltr"
-                />
-                <div
-                  role="status"
-                  style={{
-                    marginTop: "0.5rem",
-                    color: newLessonData.duration ? "var(--emerald)" : "var(--text-muted)",
-                    fontSize: "0.8rem",
-                  }}
-                >
-                  {lessonDurationStatus ||
-                    (newLessonData.videoUrl
-                      ? "جارٍ تحديد مدة الشرح من الرابط..."
-                      : "مدة الشرح ستُحسب تلقائيًا من رابط الفيديو")}
-                  {newLessonData.duration ? ` — ${newLessonData.duration}` : ""}
-                </div>
-              </div>
-              <section
-                style={{
-                  padding: "1rem",
-                  marginTop: "1rem",
-                  border: "1px solid var(--border-color, #334155)",
-                  borderRadius: "12px",
-                  background: "rgba(15, 23, 42, 0.55)",
-                }}
-              >
-                <h3 style={{ color: "#fff", fontWeight: 800, marginBottom: "0.75rem" }}>
-                  سؤال المحاضرة والاختيارات
-                </h3>
-                <div className="form-group" style={{ marginBottom: "0.75rem" }}>
-                  <label className="form-label" htmlFor="lesson-quiz-question">السؤال *</label>
-                  <textarea
-                    id="lesson-quiz-question"
-                    required
-                    className="form-input"
-                    rows={3}
-                    value={newLessonData.quizQuestion}
-                    onChange={(e) => setNewLessonData({ ...newLessonData, quizQuestion: e.target.value })}
-                    placeholder="اكتبي سؤالًا على محتوى المحاضرة"
-                  />
-                </div>
-                {[1, 2, 3, 4].map((number) => (
-                  <div key={number} style={{ display: "flex", gap: "0.6rem", alignItems: "center", marginBottom: "0.6rem" }}>
-                    <input
-                      type="radio"
-                      name="lesson-quiz-correct-option"
-                      aria-label={`تحديد الاختيار ${number} كإجابة صحيحة`}
-                      checked={newLessonData.quizCorrectOption === number}
-                      onChange={() => setNewLessonData({ ...newLessonData, quizCorrectOption: number })}
-                    />
-                    <input
-                      type="text"
-                      required
-                      className="form-input"
-                      aria-label={`الاختيار ${number}`}
-                      value={newLessonData[`quizOption${number}`]}
-                      onChange={(e) => setNewLessonData({ ...newLessonData, [`quizOption${number}`]: e.target.value })}
-                      placeholder={`الاختيار ${number}${newLessonData.quizCorrectOption === number ? " (الإجابة الصحيحة)" : ""}`}
-                    />
-                  </div>
-                ))}
-                <small style={{ color: "var(--text-muted)" }}>حددي الدائرة بجانب الإجابة الصحيحة.</small>
-              </section>
-              <div
-                style={{
-                  display: "flex",
-                  gap: "0.75rem",
-                  marginTop: "1.25rem",
-                }}
-              >
-                <button
-                  type="submit"
-                  className="btn-primary"
-                  disabled={isProcessingAction}
-                  style={{ flex: 1 }}
-                >
-                  <span>نشر المحاضرة</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsAddLessonOpen(false)}
-                  className="btn-secondary"
-                >
-                  <span>إلغاء</span>
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL: ADD QUESTION */}
-      {isAddQuestionOpen && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,0.8)",
-            backdropFilter: "blur(8px)",
-            zIndex: 1000,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: "1rem",
-          }}
-        >
-          <div
-            className="form-card"
-            style={{ width: "100%", maxWidth: "600px", position: "relative" }}
-          >
-            <button
-              onClick={() => setIsAddQuestionOpen(false)}
-              style={{
-                position: "absolute",
-                top: "16px",
-                left: "16px",
-                color: "var(--text-muted)",
-              }}
-            >
-              <X size={20} />
-            </button>
-            <h2
-              style={{
-                fontSize: "1.3rem",
-                fontWeight: 900,
-                color: "#fff",
-                marginBottom: "1.25rem",
-                textAlign: "center",
-              }}
-            >
-              📝 إضافة سؤال إلى بنك الامتحانات
-            </h2>
-            <form onSubmit={handleSaveQuestion}>
-              <div className="form-group" style={{ marginBottom: "1rem" }}>
-                <label className="form-label">المحاضرة المرتبطة بالسؤال</label>
-                <select
-                  value={selectedLessonForQuiz}
-                  onChange={(e) => setSelectedLessonForQuiz(e.target.value)}
-                  className="form-input"
-                  style={{ background: "#0b1120", color: "#fff" }}
-                >
-                  {lessonsList.map((l) => (
-                    <option key={l.id} value={l.id}>
-                      {l.title} ({l.grade})
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="form-group" style={{ marginBottom: "1rem" }}>
-                <label className="form-label">نص مسألة الامتحان</label>
-                <input
-                  type="text"
-                  required
-                  value={newQuestionData.question}
-                  onChange={(e) =>
-                    setNewQuestionData({
-                      ...newQuestionData,
-                      question: e.target.value,
-                    })
-                  }
-                  placeholder="اكتب نص المسألة..."
-                  className="form-input"
-                />
-              </div>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
-                  gap: "0.75rem",
-                  marginBottom: "1rem",
-                }}
-              >
-                <div>
-                  <label className="form-label">الخيار (أ)</label>
-                  <input
-                    type="text"
-                    required
-                    value={newQuestionData.opt1}
-                    onChange={(e) =>
-                      setNewQuestionData({
-                        ...newQuestionData,
-                        opt1: e.target.value,
-                      })
-                    }
-                    className="form-input"
-                  />
-                </div>
-                <div>
-                  <label className="form-label">الخيار (ب)</label>
-                  <input
-                    type="text"
-                    required
-                    value={newQuestionData.opt2}
-                    onChange={(e) =>
-                      setNewQuestionData({
-                        ...newQuestionData,
-                        opt2: e.target.value,
-                      })
-                    }
-                    className="form-input"
-                  />
-                </div>
-                <div>
-                  <label className="form-label">الخيار (جـ)</label>
-                  <input
-                    type="text"
-                    required
-                    value={newQuestionData.opt3}
-                    onChange={(e) =>
-                      setNewQuestionData({
-                        ...newQuestionData,
-                        opt3: e.target.value,
-                      })
-                    }
-                    className="form-input"
-                  />
-                </div>
-                <div>
-                  <label className="form-label">الخيار (د)</label>
-                  <input
-                    type="text"
-                    required
-                    value={newQuestionData.opt4}
-                    onChange={(e) =>
-                      setNewQuestionData({
-                        ...newQuestionData,
-                        opt4: e.target.value,
-                      })
-                    }
-                    className="form-input"
-                  />
-                </div>
-              </div>
-              <div
-                style={{
-                  display: "flex",
-                  gap: "0.75rem",
-                  marginTop: "1.25rem",
-                }}
-              >
-                <button
-                  type="submit"
-                  className="btn-primary"
-                  style={{ flex: 1 }}
-                >
-                  <span>حفظ السؤال</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsAddQuestionOpen(false)}
-                  className="btn-secondary"
-                >
-                  <span>إلغاء</span>
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {isAddExamOpen && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 1100,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: "1rem",
-            background: "rgba(0,0,0,0.8)",
-          }}
-        >
-          <div
-            className="form-card"
-            role="dialog"
-            aria-modal="true"
-            style={{ width: "100%", maxWidth: "560px" }}
-          >
-            <h2 style={{ color: "#fff", marginBottom: "1rem" }}>
-              {editingExam ? "تعديل الاختبار" : "إنشاء اختبار جديد"}
-            </h2>
-            <form onSubmit={handleSaveExam}>
-              <div className="form-group">
-                <label className="form-label" htmlFor="exam-lesson">
-                  الدرس
-                </label>
-                <select
-                  id="exam-lesson"
-                  required
-                  className="form-input"
-                  value={newExamData.lesson_id}
-                  onChange={(e) =>
-                    setNewExamData({
-                      ...newExamData,
-                      lesson_id: Number(e.target.value),
-                    })
-                  }
-                >
-                  {lessonsList.map((lesson) => (
-                    <option key={lesson.id} value={lesson.id}>
-                      {lesson.title}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="form-group">
-                <label className="form-label" htmlFor="exam-title">
-                  عنوان الاختبار
-                </label>
-                <input
-                  id="exam-title"
-                  required
-                  className="form-input"
-                  value={newExamData.title}
-                  onChange={(e) =>
-                    setNewExamData({ ...newExamData, title: e.target.value })
-                  }
-                />
-              </div>
-              <div className="form-group">
-                <label className="form-label" htmlFor="exam-description">
-                  الوصف
-                </label>
-                <textarea
-                  id="exam-description"
-                  className="form-input"
-                  value={newExamData.description}
-                  onChange={(e) =>
-                    setNewExamData({
-                      ...newExamData,
-                      description: e.target.value,
-                    })
-                  }
-                />
-              </div>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
-                  gap: "0.75rem",
-                }}
-              >
-                <div className="form-group">
-                  <label className="form-label" htmlFor="exam-duration">
-                    المدة بالدقائق
-                  </label>
-                  <input
-                    id="exam-duration"
-                    type="number"
-                    min="1"
-                    required
-                    className="form-input"
-                    value={newExamData.duration_minutes}
-                    onChange={(e) =>
-                      setNewExamData({
-                        ...newExamData,
-                        duration_minutes: Number(e.target.value),
-                      })
-                    }
-                  />
-                </div>
-                <div className="form-group">
-                  <label className="form-label" htmlFor="exam-passing">
-                    نسبة النجاح
-                  </label>
-                  <input
-                    id="exam-passing"
-                    type="number"
-                    min="1"
-                    max="100"
-                    required
-                    className="form-input"
-                    value={newExamData.passing_percentage}
-                    onChange={(e) =>
-                      setNewExamData({
-                        ...newExamData,
-                        passing_percentage: Number(e.target.value),
-                      })
-                    }
-                  />
-                </div>
-              </div>
-              {editingExam && (
-                <label
-                  className="form-label"
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "8px",
-                    marginTop: "0.75rem",
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={newExamData.is_active !== false}
-                    onChange={(e) =>
-                      setNewExamData({
-                        ...newExamData,
-                        is_active: e.target.checked,
-                      })
-                    }
-                  />
-                  الاختبار متاح للطلاب
-                </label>
-              )}
-              <div
-                style={{
-                  display: "flex",
-                  gap: "0.75rem",
-                  marginTop: "1.25rem",
-                }}
-              >
-                <button
-                  type="submit"
-                  className="btn-primary"
-                  disabled={isProcessingAction}
-                  style={{ flex: 1 }}
-                >
-                  حفظ
-                </button>
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  onClick={() => {
-                    setIsAddExamOpen(false);
-                    setEditingExam(null);
-                  }}
-                >
-                  إلغاء
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {questionModal.isOpen && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 1100,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: "1rem",
-            background: "rgba(0,0,0,0.8)",
-          }}
-        >
-          <div
-            className="form-card"
-            role="dialog"
-            aria-modal="true"
-            style={{ width: "100%", maxWidth: "520px" }}
-          >
-            <h2 style={{ color: "#fff", marginBottom: "1rem" }}>
-              {questionModal.isEdit ? "تعديل السؤال" : "إضافة سؤال"}
-            </h2>
-            <form onSubmit={handleSaveExamQuestion}>
-              <div className="form-group">
-                <label className="form-label" htmlFor="exam-question">
-                  نص السؤال
-                </label>
-                <textarea
-                  id="exam-question"
-                  required
-                  className="form-input"
-                  value={questionModal.question_text}
-                  onChange={(e) =>
-                    setQuestionModal({
-                      ...questionModal,
-                      question_text: e.target.value,
-                    })
-                  }
-                />
-              </div>
-              <div className="form-group">
-                <label className="form-label" htmlFor="exam-question-points">
-                  النقاط / الدرجة
-                </label>
-                <input
-                  id="exam-question-points"
-                  type="number"
-                  min="1"
-                  required
-                  className="form-input"
-                  value={questionModal.points}
-                  onChange={(e) =>
-                    setQuestionModal({
-                      ...questionModal,
-                      points: Number(e.target.value),
-                    })
-                  }
-                />
-              </div>
-
-              {/* Multiple Choice Options */}
-              {!questionModal.isEdit && (
-                <div
-                  style={{
-                    marginTop: "1rem",
-                    borderTop: "1px solid rgba(255,255,255,0.08)",
-                    paddingTop: "1rem",
-                  }}
-                >
-                  <label
-                    className="form-label"
-                    style={{
-                      marginBottom: "10px",
-                      color: "var(--cyan)",
-                      fontWeight: 800,
-                      display: "block",
-                    }}
-                  >
-                    خيارات الإجابة (اختر الإجابة الصحيحة بالضغط على الدائرة 🔘):
-                  </label>
-
-                  {[
-                    { key: "opt1", num: 1, label: "أ" },
-                    { key: "opt2", num: 2, label: "ب" },
-                    { key: "opt3", num: 3, label: "جـ" },
-                    { key: "opt4", num: 4, label: "د" },
-                  ].map((item) => (
-                    <div
-                      key={item.key}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "10px",
-                        marginBottom: "10px",
-                        background:
-                          questionModal.correctOption === item.num
-                            ? "rgba(16, 185, 129, 0.12)"
-                            : "#050914",
-                        border: `1px solid ${
-                          questionModal.correctOption === item.num
-                            ? "var(--emerald)"
-                            : "rgba(255,255,255,0.08)"
-                        }`,
-                        padding: "8px 12px",
-                        borderRadius: "10px",
-                        transition: "all 0.15s ease",
-                      }}
-                    >
-                      <input
-                        type="radio"
-                        name="correct-option"
-                        id={`opt-radio-${item.num}`}
-                        checked={questionModal.correctOption === item.num}
-                        onChange={() =>
-                          setQuestionModal({
-                            ...questionModal,
-                            correctOption: item.num,
-                          })
-                        }
-                        style={{
-                          accentColor: "var(--emerald)",
-                          cursor: "pointer",
-                          width: "18px",
-                          height: "18px",
-                        }}
-                        title="تحديد هذا الخيار كإجابة صحيحة"
-                      />
-                      <label
-                        htmlFor={`opt-radio-${item.num}`}
-                        style={{
-                          color:
-                            questionModal.correctOption === item.num
-                              ? "var(--emerald)"
-                              : "var(--text-muted)",
-                          fontSize: "0.88rem",
-                          fontWeight: 800,
-                          cursor: "pointer",
-                          width: "28px",
-                        }}
-                      >
-                        ({item.label})
-                      </label>
-                      <input
-                        type="text"
-                        placeholder={`اكتب نص الخيار (${item.label})...`}
-                        required={item.num <= 2}
-                        value={questionModal[item.key]}
-                        onChange={(e) =>
-                          setQuestionModal({
-                            ...questionModal,
-                            [item.key]: e.target.value,
-                          })
-                        }
-                        className="form-input"
-                        style={{
-                          padding: "8px 12px",
-                          fontSize: "0.85rem",
-                          flex: 1,
-                        }}
-                      />
-                      {questionModal.correctOption === item.num && (
-                        <span
-                          style={{
-                            fontSize: "0.72rem",
-                            color: "var(--emerald)",
-                            fontWeight: 800,
-                            whiteSpace: "nowrap",
-                            background: "rgba(16, 185, 129, 0.2)",
-                            padding: "2px 6px",
-                            borderRadius: "4px",
-                          }}
-                        >
-                          الإجابة الصحيحة ✓
-                        </span>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              <div
-                style={{
-                  display: "flex",
-                  gap: "0.75rem",
-                  marginTop: "1.25rem",
-                }}
-              >
-                <button
-                  type="submit"
-                  className="btn-primary"
-                  disabled={isProcessingAction}
-                  style={{ flex: 1 }}
-                >
-                  {questionModal.isEdit
-                    ? "حفظ تعديل السؤال"
-                    : "حفظ السؤال وخياراته بالكامل"}
-                </button>
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  onClick={() =>
-                    setQuestionModal({ ...questionModal, isOpen: false })
-                  }
-                >
-                  إلغاء
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {optionModal.isOpen && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 1100,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: "1rem",
-            background: "rgba(0,0,0,0.8)",
-          }}
-        >
-          <div
-            className="form-card"
-            role="dialog"
-            aria-modal="true"
-            style={{ width: "100%", maxWidth: "480px" }}
-          >
-            <h2 style={{ color: "#fff", marginBottom: "1rem" }}>
-              {optionModal.isEdit ? "تعديل الخيار" : "إضافة خيار إجابة"}
-            </h2>
-            <form onSubmit={handleSaveExamOption}>
-              <div className="form-group">
-                <label className="form-label" htmlFor="exam-option">
-                  نص الخيار
-                </label>
-                <input
-                  id="exam-option"
-                  required
-                  className="form-input"
-                  value={optionModal.option_text}
-                  onChange={(e) =>
-                    setOptionModal({
-                      ...optionModal,
-                      option_text: e.target.value,
-                    })
-                  }
-                />
-              </div>
-              <label
-                className="form-label"
-                style={{ display: "flex", alignItems: "center", gap: "8px" }}
-              >
-                <input
-                  type="checkbox"
-                  checked={optionModal.is_correct}
-                  onChange={(e) =>
-                    setOptionModal({
-                      ...optionModal,
-                      is_correct: e.target.checked,
-                    })
-                  }
-                />
-                إجابة صحيحة
-              </label>
-              <div
-                style={{
-                  display: "flex",
-                  gap: "0.75rem",
-                  marginTop: "1.25rem",
-                }}
-              >
-                <button
-                  type="submit"
-                  className="btn-primary"
-                  disabled={isProcessingAction}
-                  style={{ flex: 1 }}
-                >
-                  حفظ الخيار
-                </button>
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  onClick={() =>
-                    setOptionModal({ ...optionModal, isOpen: false })
-                  }
-                >
-                  إلغاء
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL: ADD MEMO */}
-      {isAddMemoOpen && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,0.8)",
-            backdropFilter: "blur(8px)",
-            zIndex: 1000,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: "1rem",
-          }}
-        >
-          <div
-            className="form-card"
-            style={{ width: "100%", maxWidth: "580px", position: "relative" }}
-          >
-            <button
-              onClick={() => setIsAddMemoOpen(false)}
-              style={{
-                position: "absolute",
-                top: "16px",
-                left: "16px",
-                color: "var(--text-muted)",
-              }}
-            >
-              <X size={20} />
-            </button>
-            <h2
-              style={{
-                fontSize: "1.3rem",
-                fontWeight: 900,
-                color: "#fff",
-                marginBottom: "1.25rem",
-                textAlign: "center",
-              }}
-            >
-              📚 رفع وإضافة مذكرة PDF جديدة
-            </h2>
-            <form onSubmit={handleSaveMemo}>
-              {/* File Upload Box */}
-              <div className="form-group" style={{ marginBottom: "1.25rem" }}>
-                <label
-                  className="form-label"
-                  style={{
-                    fontSize: "0.82rem",
-                    fontWeight: 700,
-                    marginBottom: "6px",
-                  }}
-                >
-                  ملف المذكرة (PDF) *
-                </label>
-
-                <input
-                  type="file"
-                  id="memo-pdf-upload"
-                  accept=".pdf,application/pdf"
-                  style={{ display: "none" }}
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file) {
-                      const sizeInMB =
-                        (file.size / (1024 * 1024)).toFixed(1) + " MB";
-                      setNewMemoData((prev) => ({
-                        ...prev,
-                        fileName: file.name,
-                        fileSize: sizeInMB,
-                        fileUrl: URL.createObjectURL(file),
-                        title: prev.title.trim()
-                          ? prev.title
-                          : file.name
-                              .replace(/\.[^/.]+$/, "")
-                              .replace(/_/g, " "),
-                      }));
-                    }
-                  }}
-                />
-
-                {newMemoData.fileName ? (
-                  <div
-                    style={{
-                      border: "1px solid rgba(6, 182, 212, 0.4)",
-                      background: "rgba(6, 182, 212, 0.08)",
-                      borderRadius: "12px",
-                      padding: "12px 16px",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      gap: "12px",
-                    }}
-                  >
-                    <div
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "10px",
-                        minWidth: 0,
-                      }}
-                    >
-                      <div
-                        style={{
-                          width: "40px",
-                          height: "40px",
-                          borderRadius: "10px",
-                          background: "rgba(239, 68, 68, 0.15)",
-                          border: "1px solid rgba(239, 68, 68, 0.3)",
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          color: "var(--rose)",
-                          flexShrink: 0,
-                        }}
-                      >
-                        <FileText size={22} />
-                      </div>
-                      <div style={{ minWidth: 0 }}>
-                        <div
-                          style={{
-                            color: "#fff",
-                            fontWeight: 700,
-                            fontSize: "0.85rem",
-                            whiteSpace: "nowrap",
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                          }}
-                        >
-                          {newMemoData.fileName}
-                        </div>
-                        <div
-                          style={{
-                            fontSize: "0.72rem",
-                            color: "var(--cyan)",
-                            marginTop: "2px",
-                          }}
-                        >
-                          حجم الملف: {newMemoData.fileSize} • جاهز للرفع
-                        </div>
-                      </div>
-                    </div>
-
-                    <label
-                      htmlFor="memo-pdf-upload"
-                      className="btn-secondary"
-                      style={{
-                        padding: "6px 12px",
-                        fontSize: "0.75rem",
-                        cursor: "pointer",
-                        flexShrink: 0,
-                      }}
-                    >
-                      <span>تغيير الملف</span>
-                    </label>
-                  </div>
-                ) : (
-                  <label
-                    htmlFor="memo-pdf-upload"
-                    style={{
-                      border: "2px dashed rgba(255, 255, 255, 0.18)",
-                      borderRadius: "12px",
-                      padding: "24px 16px",
-                      textAlign: "center",
-                      display: "flex",
-                      flexDirection: "column",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      cursor: "pointer",
-                      background: "rgba(15, 23, 42, 0.5)",
-                      transition: "all 0.2s ease",
-                      gap: "8px",
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.borderColor = "var(--cyan)";
-                      e.currentTarget.style.background =
-                        "rgba(6, 182, 212, 0.06)";
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.borderColor =
-                        "rgba(255, 255, 255, 0.18)";
-                      e.currentTarget.style.background =
-                        "rgba(15, 23, 42, 0.5)";
-                    }}
-                  >
-                    <div
-                      style={{
-                        width: "48px",
-                        height: "48px",
-                        borderRadius: "12px",
-                        background: "rgba(6, 182, 212, 0.12)",
-                        color: "var(--cyan)",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                      }}
-                    >
-                      <UploadCloud size={24} />
-                    </div>
-                    <div>
-                      <div
-                        style={{
-                          fontSize: "0.88rem",
-                          fontWeight: 800,
-                          color: "#ffffff",
-                        }}
-                      >
-                        انقر لاختيار وتحديد ملف المذكرة (PDF)
-                      </div>
-                      <div
-                        style={{
-                          fontSize: "0.75rem",
-                          color: "var(--text-muted)",
-                          marginTop: "4px",
-                        }}
-                      >
-                        يدعم ملفات PDF والشروحات والخرائط الذهنية حتى 100
-                        ميجابايت
-                      </div>
-                    </div>
-                  </label>
-                )}
-              </div>
-
-              <div className="form-group" style={{ marginBottom: "1rem" }}>
-                <label className="form-label">عنوان المذكرة *</label>
-                <input
-                  type="text"
-                  required
-                  value={newMemoData.title}
-                  onChange={(e) =>
-                    setNewMemoData({ ...newMemoData, title: e.target.value })
-                  }
-                  placeholder="مذكرة التفاضل والتكامل..."
-                  className="form-input"
-                />
-              </div>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
-                  gap: "0.75rem",
-                  marginBottom: "1rem",
-                }}
-              >
-                <div>
-                  <label className="form-label">الصف الدراسي</label>
-                  <select
-                    value={newMemoData.grade}
-                    onChange={(e) =>
-                      setNewMemoData({ ...newMemoData, grade: e.target.value })
-                    }
-                    className="form-input"
-                    style={{ background: "#0b1120", color: "#fff" }}
-                  >
-                    {GRADES.map((g) => (
-                      <option key={g.id} value={g.name}>
-                        {g.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="form-label">عدد الصفحات</label>
-                  <input
-                    type="number"
-                    value={newMemoData.pages}
-                    onChange={(e) =>
-                      setNewMemoData({ ...newMemoData, pages: e.target.value })
-                    }
-                    className="form-input"
-                  />
-                </div>
-              </div>
-              <div
-                style={{
-                  display: "flex",
-                  gap: "0.75rem",
-                  marginTop: "1.25rem",
-                }}
-              >
-                <button
-                  type="submit"
-                  className="btn-primary"
-                  style={{ flex: 1 }}
-                >
-                  <span>رفع المذكرة</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsAddMemoOpen(false)}
-                  className="btn-secondary"
-                >
-                  <span>إلغاء</span>
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-
     </div>
   );
 }
